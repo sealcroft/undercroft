@@ -2469,13 +2469,33 @@ impl VaultManager {
     /// `rotation_candidate`, and unlocks read-only whatever a caller asks:
     /// a posture decided one call later was already too late for a key file
     /// and a staging manifest (O175's ruling, applied to the manager).
+    ///
+    /// A passphrase is derived afresh on every call. A process that opens the
+    /// manager more than once holds a [`keys::KeyCache`] and calls
+    /// [`open_cached`](Self::open_cached) (ROADMAP O211).
     pub fn open_as(
         root: &Path,
         passphrase: Option<&str>,
         access: Access,
     ) -> Result<Self, VaultError> {
+        Self::open_cached(root, passphrase, access, &keys::KeyCache::new())
+    }
+
+    /// [`open_as`](Self::open_as), deriving a passphrase's key through a cache
+    /// the caller holds for the life of its process (ROADMAP O211).
+    ///
+    /// Every call still surveys and classifies the installation and reads the
+    /// declared source's file, so a key source the installation contradicts is
+    /// refused on the open that meets it, cached or not; only Argon2id is
+    /// skipped, and only for the passphrase and salt the held key came from.
+    pub fn open_cached(
+        root: &Path,
+        passphrase: Option<&str>,
+        access: Access,
+        cache: &keys::KeyCache,
+    ) -> Result<Self, VaultError> {
         let declared = keys::KeySource::declared(passphrase);
-        let resolved = keys::master_key(root, passphrase, access)?;
+        let resolved = keys::master_key_cached(root, passphrase, access, cache)?;
         if resolved.both_present {
             undercroft_obs::diag_warn!("{}", keys::both_present_warning(declared));
         }
@@ -4732,6 +4752,56 @@ mod tests {
             .unwrap()
             .unlock("default")
             .is_ok());
+    }
+
+    /// ROADMAP O211's gate, at the manager: the opens `vault list` makes over
+    /// three vaults (one for the list, one per vault) and the two a
+    /// `serve-http` start makes, through one cache, run Argon2id ONCE, and
+    /// every vault still unlocks — on both postures, the manager's posture
+    /// untouched by the shared key. Before O211 each of those opens derived.
+    #[test]
+    fn one_cache_serves_every_manager_open_a_command_makes() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let cache = keys::KeyCache::new();
+        let pw = Some("correct horse");
+        let mgr = VaultManager::open_cached(root, pw, Access::ReadWrite, &cache).unwrap();
+        for id in ["default", "b", "c"] {
+            mgr.create(id, SecurityLevel::Sealed).unwrap();
+        }
+        drop(mgr);
+        assert_eq!(cache.derivations(), 1, "premise: init derived once");
+
+        // `vault list`: the list's own open, then one per vault.
+        let lister = VaultManager::open_cached(root, pw, Access::ReadWrite, &cache).unwrap();
+        let ids = lister.list().unwrap();
+        assert_eq!(ids, ["b", "c", "default"]);
+        for id in &ids {
+            for access in [Access::ReadWrite, Access::ReadOnly] {
+                let m = VaultManager::open_cached(root, pw, access, &cache).unwrap();
+                assert_eq!(m.access(), access);
+                m.unlock_as(id, access).unwrap();
+            }
+        }
+        // `serve-http`: the `/mcp` store's open and `Tenancy`'s manager.
+        for _ in 0..2 {
+            VaultManager::open_cached(root, pw, Access::ReadOnly, &cache)
+                .unwrap()
+                .unlock_as("default", Access::ReadOnly)
+                .unwrap();
+        }
+        assert_eq!(cache.derivations(), 1, "nine opens, one Argon2id run");
+
+        // A wrong passphrase never meets the held key: it derives its own,
+        // and the manifest MAC refuses it, as it always did.
+        let wrong =
+            VaultManager::open_cached(root, Some("wrong staple"), Access::ReadWrite, &cache)
+                .unwrap();
+        assert!(matches!(
+            wrong.unlock("default"),
+            Err(VaultError::ManifestTampered)
+        ));
+        assert_eq!(cache.derivations(), 2);
     }
 
     /// **ROADMAP O266's source gate: one manifest rule, four readers, and

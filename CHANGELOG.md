@@ -1757,6 +1757,50 @@ PATCH inside the unreleased 1.7.0, by the 2026-09-08 versioning ruling: the defe
 undefined panic status, and the new class reports a condition that was undefined; 0, 1 and 2 keep
 their meanings. `UPGRADING.md` carries the entry; `config check` cannot detect it.
 
+### A process derives a passphrase's key once, not once per open (O211)
+
+Under `UNDERCROFT_PASSPHRASE` every manager open ran Argon2id — 64 MiB, three passes — and nothing
+kept its output, so `vault list` derived the same key once for the list and once per vault it
+described, and `vault rotate` and a `serve-http` start derived it twice. Counted from outside the
+process (each Argon2id run faults its 64 MiB afresh, 16,384 pages, over a key-file baseline of
+about 480): `vault list` over four vaults ran it 5 times, `vault rotate` and a `serve-http` start 2.
+
+Now a process derives it once. `KeyCache` in `undercroft-vault` holds the derived key against the
+passphrase and the salt bytes that produced it, compared in constant time, and the CLI holds one in
+a `static` that every manager open goes through — the binary has one, `manager_at`. **Only the
+derivation is cached, never the decision**: each open still surveys and classifies the data
+directory (O204) and reads `kdf.salt` before the cache is asked, so a deleted salt is still refused,
+a planted key file still contradicts, a replaced salt derives again, and a wrong passphrase derives
+its own key and meets the manifest MAC as before. The held key is a `SecretKey`, zeroized when it is
+replaced and when a command ends, never written anywhere, and `Debug` prints only the count. The
+multi-tenant server's `/v1` opens already shared the one manager it holds, and still derive nothing
+per request; the control plane derives nothing at all. `VaultManager::open_as` keeps deriving per
+call for library callers.
+
+Measured on the LoCoMo feed mined into four sealed vaults of a passphrase installation (680
+drawers), three rounds, before (`5f5fe2f`) → after: `vault list` 1.30–2.20 s → 0.34–0.45 s, 5
+derivations → 1; `vault rotate` 0.80–0.90 s → 0.41–0.49 s, 2 → 1; a `serve-http` start to its first
+`/healthz` 0.45–1.12 s → 0.31–0.42 s, 2 → 1; `search` (one open) 1 → 1, unchanged. Peak RSS barely
+moves — the derivations ran one at a time, so the peak was one derivation's either way (`vault list`
+74,640–75,276 KiB → 71,040 KiB) — and what goes is the 64 MiB touched again per extra open. Eight
+`/v1` requests across the four vaults derived nothing before or after (2,523–2,617 faults between
+them, 1.4–53 ms each).
+
+Gates: at the manager, nine opens (the list's, one per vault on each posture for three vaults,
+and a server start's two) run Argon2id once and a wrong passphrase still meets `ManifestTampered`; at the key,
+the held key never answers for another passphrase or salt, every open still refuses a deleted salt
+and a planted key file while a key is held, the key-file source never reaches the cache, racing
+opens on a cold cache derive once, and Argon2id has one caller; at the binary, a source gate counts
+its one manager open through the process cache, no uncached open, and a control plane that opens
+no manager. `tests/cli.rs` and four e2e checks drive the multi-open commands and a `/v1` server
+under a passphrase. Counterfactuals on a copy of the fixed tree: the held key never answering
+fails four gates, a cache keyed on the salt alone or the passphrase alone fails the
+other-input arm, a held key answering before the survey fails the classification gate (and the
+replaced-salt arm), and the binary's opener put back to `open_as` fails the source gate.
+
+PATCH inside the unreleased 1.7.0: a cost goes, no documented contract moves, and nothing can stop a
+deployment, so `UPGRADING.md` owes nothing.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

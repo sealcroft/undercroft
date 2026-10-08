@@ -2158,6 +2158,76 @@ fn o204_a_wrong_passphrase_is_still_exit_2() {
     assert!(!home.path().join("master.key").exists());
 }
 
+/// ROADMAP O211 — the commands that open the manager more than once, under a
+/// passphrase, through the real binary. Each open used to run Argon2id; one
+/// process now derives once (the count is gated at the manager and on this
+/// binary's source, since no surface reports it). What the binary must keep
+/// is every answer: `vault list` over three vaults lists all three on both
+/// postures, a rotation (two opens) completes and its vault still reads, the
+/// installation stays keyed by the passphrase alone, and a wrong passphrase is
+/// still the tamper verdict on every vault the listing walks.
+#[test]
+fn o211_a_passphrase_installation_answers_every_command_that_opens_twice() {
+    let home = TempDir::new().unwrap();
+    with_pw(&home, PW).args(["init"]).assert().success();
+    for v in ["b", "c"] {
+        with_pw(&home, PW)
+            .args(["vault", "create", v])
+            .assert()
+            .success();
+    }
+    with_pw(&home, PW)
+        .args([
+            "remember",
+            "the lighthouse key is under the third stone",
+            "--vault",
+            "b",
+        ])
+        .assert()
+        .success();
+    for posture in [vec![], vec!["--read-only"]] {
+        let mut args = posture.clone();
+        args.extend(["vault", "list"]);
+        with_pw(&home, PW)
+            .args(&args)
+            .assert()
+            .success()
+            .stdout(predicate::str::is_match(r"(?m)^b\s+level=sealed\s+records=1$").unwrap())
+            .stdout(predicate::str::is_match(r"(?m)^c\s+level=sealed\s+records=0$").unwrap())
+            .stdout(predicate::str::is_match(r"(?m)^default\s+level=sealed").unwrap())
+            .stdout(predicate::str::contains("unavailable").not());
+    }
+    with_pw(&home, PW)
+        .args(["vault", "rotate", "b"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Rotated vault 'b'"));
+    with_pw(&home, PW)
+        .args(["search", "lighthouse key", "--vault", "b"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("under the third stone"));
+    with_pw(&home, PW)
+        .args(["verify", "--vault", "b"])
+        .assert()
+        .success();
+    assert!(
+        !home.path().join("master.key").exists(),
+        "no key material was written beside the salt"
+    );
+    // A wrong passphrase still meets every manifest as the integrity verdict:
+    // listed, each one unavailable, and exit 2 — never a key some earlier
+    // open derived.
+    with_pw(&home, "wrong staple")
+        .args(["vault", "list"])
+        .assert()
+        .failure()
+        .code(2)
+        .stdout(predicate::str::is_match(r"(?m)^b\s+unavailable: ").unwrap())
+        .stdout(predicate::str::is_match(r"(?m)^c\s+unavailable: ").unwrap())
+        .stdout(predicate::str::is_match(r"(?m)^default\s+unavailable: ").unwrap());
+}
+
 /// `--read-only` writes nothing (probes P5, P10, P11): not a key into an
 /// empty directory, not a manifest, and not the staging-manifest deletion
 /// `vault rotate`'s writable unlock performs.

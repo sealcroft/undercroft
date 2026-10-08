@@ -1388,18 +1388,34 @@ fn manager(cli: &Cli, posture: Posture) -> Result<VaultManager> {
     manager_at(&data_dir(cli), posture)
 }
 
-/// The same open, from the data directory alone.
+/// The same open, from the data directory alone — the binary's ONE manager
+/// open, and so the one place its master key is derived (ROADMAP O211).
 ///
-/// It exists so a caller that must OUTLIVE the parsed command line can hold
-/// what it needs without cloning it: `serve-http` hands `Tenancy` a re-opener
-/// for the co-resident vault (ROADMAP O242), and that closure is `'static`.
-/// One implementation either way — [`manager`] is the adapter, not a second
-/// copy of the open.
+/// [`open_store_as`] reaches it with a path rather than the parsed command
+/// line, and [`manager`] is the adapter, not a second copy of the open. (It
+/// also existed for a `'static` re-opener `serve-http` handed `Tenancy`,
+/// ROADMAP O242; O256 removed that re-opener.)
 fn manager_at(dir: &std::path::Path, posture: Posture) -> Result<VaultManager> {
     let pw = passphrase()?;
-    VaultManager::open_as(dir, pw.as_deref(), posture.access())
+    VaultManager::open_cached(dir, pw.as_deref(), posture.access(), &KEY_CACHE)
         .with_context(|| format!("opening palace at {}", dir.display()))
 }
+
+/// The ONE master key this process derives from `UNDERCROFT_PASSPHRASE`
+/// (ROADMAP O211).
+///
+/// Every manager open ran Argon2id — 64 MiB, three passes — so `vault list`
+/// derived once for the list and once per vault it described, and `vault
+/// rotate` and a `serve-http` start twice each; the multi-tenant server's
+/// `/v1` opens already shared the one manager `Tenancy` holds. Every open in
+/// this binary goes through [`manager_at`], and it derives through this cache,
+/// so a process runs Argon2id once. What is held is the derivation alone:
+/// each open still classifies the data directory (ROADMAP O204) and reads
+/// `kdf.salt` before the cache is asked, and the cache answers only for the
+/// passphrase and salt its key came from. [`exit`] drops the key when a
+/// command ends; a server holds it for its life, as its manager always held
+/// its own copy.
+static KEY_CACHE: undercroft_vault::keys::KeyCache = undercroft_vault::keys::KeyCache::new();
 
 /// Whether a store this process opens is allowed to write to the vault.
 ///
@@ -2187,6 +2203,9 @@ fn main() -> std::process::ExitCode {
 /// chain, which an outbound socket raises too. The `process::exit(2)` arms
 /// inside `run` keep working, because printing no longer panics.
 fn exit(run: Run) -> std::process::ExitCode {
+    // The command is over: the master key this process derived is zeroized
+    // now rather than left to the process's end (ROADMAP O211).
+    KEY_CACHE.forget();
     let delivery = undercroft_obs::stdio::finish();
     if let Delivery::Failed(why) = &delivery {
         errln!("Error: writing to standard output: {why}");
@@ -5678,6 +5697,100 @@ mod tests {
                 .verify_tag(canonical(&elsewhere, 3).as_bytes(), &tag)
                 .is_err(),
             "a different port is refused, so the binding is not decoration"
+        );
+    }
+
+    /// **Every manager this binary opens derives through the ONE process
+    /// cache** (ROADMAP O211's source gate).
+    ///
+    /// The cost was per OPEN, so the gate is on the opens: in the production
+    /// text of every source file of this binary, the manager is opened in
+    /// exactly one place — [`manager_at`], through `open_cached` with
+    /// `KEY_CACHE` — and never through `VaultManager::open`/`open_as`, which
+    /// derive afresh, nor by deriving a master key directly. One cache exists,
+    /// and the command's end drops its key. The control plane opens no
+    /// manager at all: it is a `/v1` client, so its engines are `serve-http`
+    /// processes and derive under this gate. Counterfactual: today's
+    /// `open_as` in `manager_at` fails the first two counts.
+    #[test]
+    fn every_manager_open_in_this_binary_derives_through_the_process_cache() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut production = String::new();
+        let mut files = 0;
+        for entry in std::fs::read_dir(&src).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.ends_with(".rs") || name.ends_with("_tests.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let cut = text
+                .find(concat!("#[cfg(test)]\nmod ", "tests"))
+                .unwrap_or(text.len());
+            production.push_str(&text[..cut]);
+            files += 1;
+        }
+        assert!(
+            files >= 9,
+            "premise: the binary's sources were read ({files})"
+        );
+        let count = |needle: &str| production.matches(needle).count();
+        assert!(
+            count(concat!("manager_", "at(")) >= 3,
+            "premise: the one opener and its callers are in the text"
+        );
+        assert_eq!(
+            count(concat!("VaultManager::open_", "cached(")),
+            1,
+            "one manager open in the binary"
+        );
+        assert_eq!(
+            count(concat!(
+                "VaultManager::open_cached(dir, pw.as_deref(), posture.access(), &KEY_",
+                "CACHE)"
+            )),
+            1,
+            "and it derives through the process cache"
+        );
+        for uncached in [
+            concat!("VaultManager::", "open("),
+            concat!("VaultManager::", "open_as("),
+            concat!("keys::master_", "key("),
+            concat!("master_key_", "cached("),
+        ] {
+            assert_eq!(count(uncached), 0, "{uncached} derives outside the cache");
+        }
+        assert_eq!(
+            count(concat!("KeyCache::", "new()")),
+            1,
+            "one cache per process"
+        );
+        assert_eq!(
+            count(concat!("KEY_CACHE.", "forget()")),
+            1,
+            "the command's end drops the key"
+        );
+
+        let orch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("undercroft-orchestrator")
+            .join("src");
+        let mut read = 0;
+        for entry in std::fs::read_dir(&orch).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                assert!(
+                    !text.contains("VaultManager") && !text.contains("undercroft_vault"),
+                    "{} opens a manager: the control plane derives no key",
+                    path.display()
+                );
+                read += 1;
+            }
+        }
+        assert!(
+            read >= 3,
+            "premise: the control plane's sources were read ({read})"
         );
     }
 }

@@ -14122,6 +14122,115 @@ orchestrator likewise answers `/healthz`.
 C++ logger in a model build) is not a Rust print and is not counted; a telemetry build's JSON log
 layer writes STDOUT, which is O333's.
 
+### O211 — CLOSED 2026-10-08: a process derives a passphrase's key once — every open still classifies the key files and reads the salt, and only the Argon2id output is held, against both of its inputs
+
+**Filed 2026-09-17 by O204's ruling; verified by reading.** The CLI's
+`manager` opens a `VaultManager` per call, and each open derives the master key
+from the passphrase with Argon2id (64 MiB, t=3). `serve-http` opens it twice at
+start, `vault list` once for the list and once per vault it describes, and
+`vault rotate` twice. Nothing caches the derived key within a process.
+
+**Shape**: derive once per process and share the manager (or the key) across
+the call sites that open it, keeping the posture each caller states. The key
+stays in `SecretKey`, zeroised on drop, and is never written anywhere.
+
+**Gate**: a count of Argon2id derivations per command, under a passphrase, on
+`vault list` over three vaults and on a `serve-http` start: one each.
+Counterfactual: today's per-open derivation.
+
+#### BUILT 2026-10-08, as filed — the key shared, never the manager; the derivation cached, never the decision
+
+**Grounding.** No ruling was needed: the entry's shape and the dispatch's settled shape (derive once
+per process, CLI and both servers; the key in a `SecretKey`, never on disk, never in `Debug`; O204's
+`plan` on every open, only the DERIVATION cached) answer every design question. A case-insensitive
+`rul(ed|ing)` search of this entry finds only its filing by O204's ruling, which is FOLLOWED:
+Argon2id still runs only after the classifier returns. Of the shape's two readings, sharing the
+MANAGER lost: a shared manager skips O204's survey and classification on every later open, which the
+settled shape forbids, and carries one posture across call sites that state different ones
+(`witness` opens read-only under a writable command line).
+
+**What landed.**
+- `undercroft-vault/src/keys.rs`: `KeyCache`, one entry — the passphrase (in `Zeroizing`), the salt
+  bytes and the derived `SecretKey`. It answers from the held key only when BOTH inputs equal the
+  ones it was derived from (constant time, `subtle`), because Argon2id is a pure function of exactly
+  those two and its parameters are constants; otherwise it derives and replaces. The lock is held
+  across the derivation, so a cold race derives once. `derivations()` counts runs, `forget()` drops
+  the key, `Debug` prints the count alone, and `new()` is `const`. `master_key_cached` runs the
+  survey, `plan` and the read of the declared file exactly as before and only then asks the cache;
+  `master_key` derives through a fresh cache, so its callers still derive per call.
+  `derive_from_passphrase` has one caller, the cache, held by `key_material_has_exactly_one_writer`.
+- `undercroft-vault/src/lib.rs`: `VaultManager::open_cached`; `open_as` is it with a fresh cache, so
+  every library caller and test keeps today's behaviour.
+- The CLI: `static KEY_CACHE`, and `manager_at` — the binary's one manager open, reached by `init`,
+  `vault create|list|rotate`, `backup restore`, every `open_store_as` (so every command, `serve-mcp`
+  and `serve-http`'s `/mcp` store) and `Tenancy`'s manager — derives through it. `exit()` forgets it
+  when a command ends; a `process::exit` arm inside `run` skips that as it skips every destructor,
+  and a server holds the key for its life, as its manager always held its own copy.
+- Unchanged, read: `/v1`'s per-request opens unlock through the one manager `Tenancy` holds (HKDF
+  only), so they derived nothing before either; `config check` runs `plan` and derives nothing; the
+  orchestrator links no vault crate and opens no manager — its engines are `serve-http` processes.
+
+**Gates.** At the manager (`one_cache_serves_every_manager_open_a_command_makes`): nine opens — the
+list's, one per vault on each posture for three vaults, and a server start's two — run Argon2id once,
+every vault unlocks, and a wrong passphrase through the same cache derives its own key and meets
+`ManifestTampered`. At the key (`keys.rs`): once across five opens and equal to an uncached
+derivation; never for another passphrase (three near misses) or a replaced salt; a deleted salt
+(`MaterialMissing`), a planted key file (`SourceMismatch`) and a short salt (`CorruptKeyFile`)
+refused while a key is held, with nothing written and the both-present flag still raised; the
+key-file source never reaches the cache; `forget` derives again and `Debug` shows the count only;
+four racing opens on a cold cache derive once. At the binary (`main.rs`,
+`every_manager_open_in_this_binary_derives_through_the_process_cache`): one `open_cached` with
+`&KEY_CACHE`, no `VaultManager::open`/`open_as`/direct derivation, one cache, its `forget` at exit,
+and no manager in the control plane. Through the surface: `tests/cli.rs`
+`o211_a_passphrase_installation_answers_every_command_that_opens_twice` (`vault list` over three
+vaults on both postures, `vault rotate`, search and `verify` after it, no key file written, and a
+wrong passphrase still exit 2 on every vault listed) and four e2e checks (the same `vault list`, a
+rotation, a `serve-http` serving all three vaults' stats and the rotated vault's search). The
+surface checks hold behaviour the cache must keep and pass on the unfixed binary too (run against
+both, extracted from `tests/e2e.sh` itself); the count is the manager's and the source gate's,
+because no surface reports it.
+
+**Counterfactuals**, on a copy of the fixed tree in its own target directory, each edit asserted
+present and recompiled: the held key never answering (today's per-open derivation) fails four gates
+(the manager's, once-across-opens, the racing one and the classification gate's derivation count);
+a cache keyed on the salt alone fails the other-input arm and the manager's wrong-passphrase arm;
+keyed on the passphrase alone, the replaced-salt arm; a held key answering before the survey (the
+decision cached) fails the classification gate at its deleted salt, and the replaced-salt arm; and
+`manager_at` put back to `open_as` fails the binary's source gate. The new key tests looped three times on the pristine copy, green each time.
+
+**A real corpus, before (`5f5fe2f`) and after, three rounds.** The LoCoMo feed mined into two wings
+of each of four sealed vaults under a passphrase, 680 drawers, and the same installation under a key
+file as the baseline. GNU `time` per command; derivations counted from OUTSIDE the process, because
+each Argon2id run faults its 64 MiB afresh (16,384 pages) over a key-file baseline of 475–481 minor
+faults:
+
+| command | before | after |
+|---|---|---|
+| `vault list` (4 vaults) | 1.30–2.20 s, 82,401–82,407 faults = 5 derivations | 0.34–0.45 s, 16,860–16,864 = 1 |
+| `vault rotate` | 0.80–0.90 s, 33,343–33,347 = 2 | 0.41–0.49 s, 16,965–16,967 = 1 |
+| `serve-http` start to `/healthz` | 0.45–1.12 s, 33,334 = 2 | 0.31–0.42 s, 16,944–16,952 = 1 |
+| `search` (one open) | 0.27–0.54 s, 18,280–18,304 = 1 | 0.26–0.45 s, 18,233–18,308 = 1 |
+
+Peak RSS, in KiB: `vault list` 74,640–75,276 → 71,040, `rotate` 71,356–71,608 → 71,232, a server's
+VmHWM 75,048–75,240 → 70,848–71,232, `search` 71,232–71,424 → 71,040 (a key-file `vault list` is
+9,216–9,792). The derivations ran one at a time, so the peak was always one derivation's; what the
+fix removes is time and the 64 MiB touched again per extra open. Eight `/v1` requests across the four vaults (stats and a search each) added
+2,523–2,617 faults on either binary — no derivation per request, before or after — at 1.4–53 ms each,
+VmHWM unmoved.
+
+**Drift read.** CLI, MCP (`serve-mcp`: one open, unchanged), `/v1` and `/mcp` in `serve-http` (start
+2 → 1, requests 0 → 0), orchestrator (none), both consoles (they render no key source). Surfaces
+moved: `CLAUDE.md`'s vault-crate line, `docs/security.md`, `docs/THREAT_MODEL.md`,
+`docs/remote-server.md`, `architecture/index.html`'s `UNDERCROFT_PASSPHRASE` row; no diagram names
+how often the key is derived.
+
+**What stays outside it, stated.** No surface reports the derivation count — the gates are the
+manager's count and the binary's source, and the measurement reads page faults; adding a counter is a
+surface this entry did not ask for. The passphrase sits in the cache entry, zeroized when it is
+replaced or forgotten, beside the copy the process environment holds for the process's life anyway.
+PATCH inside the unreleased 1.7.0: a cost goes, no documented contract moves, and nothing can stop a
+deployment, so `UPGRADING.md` owes nothing.
+
 ## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
@@ -33100,22 +33209,6 @@ the same publish step.
 leaves a planted short file — and shows the next start either loads a whole
 key or refuses naming the torn file, never a key that seals nothing.
 Counterfactual: today's writer, under which the short file is published.
-
-### O211 — every manager open runs Argon2id, so a passphrase palace pays 64 MiB per command and per vault
-
-**Filed 2026-09-17 by O204's ruling; verified by reading.** The CLI's
-`manager` opens a `VaultManager` per call, and each open derives the master key
-from the passphrase with Argon2id (64 MiB, t=3). `serve-http` opens it twice at
-start, `vault list` once for the list and once per vault it describes, and
-`vault rotate` twice. Nothing caches the derived key within a process.
-
-**Shape**: derive once per process and share the manager (or the key) across
-the call sites that open it, keeping the posture each caller states. The key
-stays in `SecretKey`, zeroised on drop, and is never written anywhere.
-
-**Gate**: a count of Argon2id derivations per command, under a passphrase, on
-`vault list` over three vaults and on a `serve-http` start: one each.
-Counterfactual: today's per-open derivation.
 
 ### O213 — a vault `init` just created, opened read-only, is reported as tampering
 

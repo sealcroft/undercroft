@@ -3786,6 +3786,49 @@ fi
 kill "$KS_SRV" 2>/dev/null; wait "$KS_SRV" 2>/dev/null
 
 # ---------------------------------------------------------------------------
+# ROADMAP O211 — a process derives a passphrase's key once. Every manager open
+# ran Argon2id (64 MiB, three passes), so `vault list` derived once for the
+# list and once per vault, and `vault rotate` and a `serve-http` start twice.
+# The count is gated at the manager and on the binary's source, because no
+# surface reports it; these checks hold what the binary must keep under a
+# passphrase: the commands that open the manager more than once answer as they
+# did, and a server serves every vault from the one key its start derived.
+# ---------------------------------------------------------------------------
+PH_HOME="$(mktemp -d)"
+ph() { env -u UNDERCROFT_MCP_HTTP_TOKEN -u UNDERCROFT_ASSERTION_SECRET \
+         UNDERCROFT_HOME="$PH_HOME" UNDERCROFT_PASSPHRASE="correct horse" "$BIN" "$@"; }
+ph init >/dev/null 2>&1
+ph vault create b >/dev/null 2>&1
+ph vault create c >/dev/null 2>&1
+ph remember "the lighthouse key is under the third stone" --vault b >/dev/null 2>&1
+PH_OUT="$(ph vault list 2>&1)"; PH_RC=$?
+if [ "$PH_RC" -eq 0 ] \
+   && grep -qE '^b +level=sealed +records=1$' <<<"$PH_OUT" \
+   && grep -qE '^c +level=sealed +records=0$' <<<"$PH_OUT" \
+   && grep -qE '^default +level=sealed +records=0$' <<<"$PH_OUT"; then
+  echo "ok    O211: a passphrase installation's vault list describes all three vaults"; PASS=$((PASS+1))
+else
+  echo "FAIL  O211: vault list under a passphrase — exit $PH_RC"; sed 's/^/      /' <<<"$PH_OUT"; FAIL=$((FAIL+1))
+fi
+check "O211: a rotation under a passphrase completes" 0 "Rotated vault 'b'" -- ph vault rotate b
+ph serve-http --host 127.0.0.1 --port 18951 >"$PH_HOME/serve.log" 2>&1 &
+PH_SRV=$!
+for _ in $(seq 1 80); do curl -sf http://127.0.0.1:18951/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+PH_CODES=""
+for v in default b c; do
+  PH_CODES="$PH_CODES $(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:18951/v1/vaults/$v/stats")"
+done
+if [ "$PH_CODES" = " 200 200 200" ]; then
+  echo "ok    O211 /v1: a passphrase server serves all three vaults"; PASS=$((PASS+1))
+else
+  echo "FAIL  O211 /v1: stats across three vaults answered$PH_CODES"; sed 's/^/      /' "$PH_HOME/serve.log"; FAIL=$((FAIL+1))
+fi
+rest_body "O211 /v1: the rotated vault still reads under the one derived key" "third stone" -- \
+  -X POST http://127.0.0.1:18951/v1/vaults/b/search -H 'content-type: application/json' \
+  -d '{"query":"lighthouse key"}'
+kill "$PH_SRV" 2>/dev/null; wait "$PH_SRV" 2>/dev/null
+
+# ---------------------------------------------------------------------------
 # ROADMAP O176 — an export under a read-only posture is served and says it
 # went unaudited, on BOTH surfaces, through the one recording step. The CLI
 # used to call the audit writer unconditionally, so `--read-only export`

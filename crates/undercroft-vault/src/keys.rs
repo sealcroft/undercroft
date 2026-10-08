@@ -29,6 +29,12 @@
 //! declared on an installation keyed by `master.key` wrote a fresh `kdf.salt`,
 //! derived a key no vault was sealed under, and the first unlock reported
 //! tampering; `vault create` under that key then split the installation.
+//!
+//! **A process derives a passphrase's key once** (ROADMAP O211), through a
+//! [`KeyCache`] it holds. The survey and the classification still run on every
+//! open, and the salt is still read from disk on every open; only the
+//! Argon2id output is kept, against the passphrase and the salt bytes that
+//! produced it, because it is a pure function of exactly those two.
 
 use crate::Access;
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -38,7 +44,10 @@ use sha2::Sha256;
 use std::fs;
 use std::io;
 use std::path::Path;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
+use subtle::ConstantTimeEq;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 /// The installation's random master key — the key source when no passphrase is
 /// declared.
@@ -333,6 +342,106 @@ pub struct MasterKey {
     pub both_present: bool,
 }
 
+/// The master key a process derived from its passphrase, held so the process
+/// derives it ONCE (ROADMAP O211).
+///
+/// Argon2id is 64 MiB and three passes by design, and every manager open ran
+/// it: `vault list` once for the list and once per vault it described,
+/// `vault rotate` and a `serve-http` start twice. Nothing the derivation
+/// produces changes between those opens — the master key is never rotated
+/// (a rotation moves a vault's salt), and Argon2id is a pure function of the
+/// passphrase and the salt — so the second run bought nothing.
+///
+/// **What is cached is the derivation, never the decision.** [`plan`] still
+/// classifies the installation on every open, and `kdf.salt` is still read on
+/// every open; a held key answers only when BOTH inputs equal the ones it was
+/// derived from, compared in constant time. A deleted salt is still refused, a
+/// replaced one derives again, and a different passphrase never meets another
+/// passphrase's key. The key-file source never reaches this: `master.key` is
+/// read on every open, as before.
+///
+/// One entry, because one installation has one salt; a second (passphrase,
+/// salt) replaces the first. The held key is a [`SecretKey`], zeroized when it
+/// is replaced or when [`forget`](Self::forget) drops it, and never written
+/// anywhere. `Debug` prints the count and nothing else.
+pub struct KeyCache {
+    slot: Mutex<Option<Derived>>,
+    runs: AtomicU64,
+}
+
+/// One derivation: both of its inputs and its output.
+struct Derived {
+    passphrase: Zeroizing<Vec<u8>>,
+    salt: [u8; SALT_LEN],
+    key: SecretKey,
+}
+
+impl KeyCache {
+    /// An empty cache. `const`, so a binary can hold its one cache in a
+    /// `static` — the process is the scope this cache is for.
+    pub const fn new() -> Self {
+        Self {
+            slot: Mutex::new(None),
+            runs: AtomicU64::new(0),
+        }
+    }
+
+    /// How many times Argon2id has run through this cache.
+    pub fn derivations(&self) -> u64 {
+        self.runs.load(Ordering::Relaxed)
+    }
+
+    /// Drop the held key (zeroized) and its inputs. The next passphrase open
+    /// derives again.
+    pub fn forget(&self) {
+        *self.slot.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    /// The master key for this passphrase and salt: the held one when both
+    /// match, a fresh derivation otherwise. The lock is held across the
+    /// derivation, so two callers racing on a cold cache run Argon2id once.
+    fn derive(&self, passphrase: &str, salt: &[u8; SALT_LEN]) -> Result<SecretKey, KeyError> {
+        // A poisoned lock only means a holder panicked; the slot is replaced
+        // whole or not at all, so what it holds is either a complete
+        // derivation or nothing.
+        let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(held) = slot.as_ref() {
+            // Unequal lengths answer "different" (and say only that).
+            let same_salt: bool = held.salt[..].ct_eq(&salt[..]).into();
+            let same_passphrase: bool = held
+                .passphrase
+                .as_slice()
+                .ct_eq(passphrase.as_bytes())
+                .into();
+            if same_salt && same_passphrase {
+                return Ok(held.key.duplicate());
+            }
+        }
+        self.runs.fetch_add(1, Ordering::Relaxed);
+        let key = derive_from_passphrase(passphrase, salt)?;
+        *slot = Some(Derived {
+            passphrase: Zeroizing::new(passphrase.as_bytes().to_vec()),
+            salt: *salt,
+            key: key.duplicate(),
+        });
+        Ok(key)
+    }
+}
+
+impl Default for KeyCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for KeyCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyCache")
+            .field("derivations", &self.derivations())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Resolve the installation master key: survey, classify, then load or create.
 ///
 /// With a passphrase the key is Argon2id (64 MiB, t=3, p=1) over the
@@ -340,10 +449,27 @@ pub struct MasterKey {
 /// touches disk; otherwise it is the random key in `<root>/master.key`. A
 /// created file is owner-only on Unix (not narrowed on Windows). Argon2id
 /// runs only after the classifier has accepted the installation.
+///
+/// Derives on every call. A process that opens more than once holds a
+/// [`KeyCache`] and calls [`master_key_cached`] (ROADMAP O211).
 pub fn master_key(
     root: &Path,
     passphrase: Option<&str>,
     access: Access,
+) -> Result<MasterKey, KeyError> {
+    master_key_cached(root, passphrase, access, &KeyCache::new())
+}
+
+/// [`master_key`], deriving a passphrase's key through `cache` (ROADMAP
+/// O211). The survey, the classification and the read of the declared
+/// source's file run on every call exactly as they do uncached; only
+/// Argon2id is skipped, and only when the passphrase and the salt just read
+/// are the ones the held key came from.
+pub fn master_key_cached(
+    root: &Path,
+    passphrase: Option<&str>,
+    access: Access,
+    cache: &KeyCache,
 ) -> Result<MasterKey, KeyError> {
     let declared = KeySource::declared(passphrase);
     let mut retried = false;
@@ -351,7 +477,7 @@ pub fn master_key(
         match plan(declared, &survey(root)?, access)? {
             KeyPlan::Load { other_present } => {
                 return Ok(MasterKey {
-                    key: Some(load_master(root, passphrase)?),
+                    key: Some(load_master(root, passphrase, cache)?),
                     both_present: other_present,
                 })
             }
@@ -361,7 +487,7 @@ pub fn master_key(
                     both_present: false,
                 })
             }
-            KeyPlan::Create(witness) => match create_master(root, passphrase, witness) {
+            KeyPlan::Create(witness) => match create_master(root, passphrase, witness, cache) {
                 // A concurrent first start created the file between our stat
                 // and our exclusive create: classify again and load what it
                 // wrote, never overwrite it.
@@ -380,15 +506,21 @@ pub fn master_key(
 }
 
 /// Read the declared source's material and derive the master key. Never
-/// writes.
-fn load_master(root: &Path, passphrase: Option<&str>) -> Result<SecretKey, KeyError> {
+/// writes. The salt is read on every call, cached or not: it is half of what
+/// the cache compares.
+fn load_master(
+    root: &Path,
+    passphrase: Option<&str>,
+    cache: &KeyCache,
+) -> Result<SecretKey, KeyError> {
     match passphrase {
         Some(pw) => {
             let salt = fs::read(root.join(KDF_SALT_FILE))?;
-            if salt.len() != SALT_LEN {
-                return Err(KeyError::CorruptKeyFile);
-            }
-            derive_from_passphrase(pw, &salt)
+            let salt: [u8; SALT_LEN] = salt
+                .as_slice()
+                .try_into()
+                .map_err(|_| KeyError::CorruptKeyFile)?;
+            cache.derive(pw, &salt)
         }
         None => {
             let raw = fs::read(root.join(MASTER_KEY_FILE))?;
@@ -411,6 +543,7 @@ fn create_master(
     root: &Path,
     passphrase: Option<&str>,
     witness: CreateWitness,
+    cache: &KeyCache,
 ) -> Result<SecretKey, KeyError> {
     if witness.source != KeySource::declared(passphrase) {
         return Err(KeyError::Io(io::Error::other(
@@ -423,7 +556,7 @@ fn create_master(
             let mut salt = [0u8; SALT_LEN];
             rand::thread_rng().fill_bytes(&mut salt);
             write_new_private(&root.join(KDF_SALT_FILE), &salt)?;
-            derive_from_passphrase(pw, &salt)
+            cache.derive(pw, &salt)
         }
         None => {
             let mut key = [0u8; KEY_LEN];
@@ -434,6 +567,8 @@ fn create_master(
     }
 }
 
+/// Argon2id itself. Reached only through [`KeyCache::derive`], so every run is
+/// counted.
 fn derive_from_passphrase(pw: &str, salt: &[u8]) -> Result<SecretKey, KeyError> {
     let params =
         Params::new(64 * 1024, 3, 1, Some(KEY_LEN)).map_err(|e| KeyError::Kdf(e.to_string()))?;
@@ -453,6 +588,13 @@ impl SecretKey {
     /// The raw key bytes. Never logged and never `Debug`-printed.
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.0
+    }
+
+    /// A second owned copy, itself zeroized on drop. Crate-private and never
+    /// `Clone`: a copy is made only where a holder must keep one and hand one
+    /// out (the [`KeyCache`]).
+    pub(crate) fn duplicate(&self) -> SecretKey {
+        SecretKey(self.0)
     }
 }
 
@@ -812,7 +954,7 @@ mod tests {
         let witness = CreateWitness {
             source: KeySource::KeyFile,
         };
-        let err = create_master(dir.path(), None, witness)
+        let err = create_master(dir.path(), None, witness, &KeyCache::new())
             .expect_err("create_new must refuse an existing file");
         assert!(
             matches!(&err, KeyError::Io(e) if e.kind() == io::ErrorKind::AlreadyExists),
@@ -823,7 +965,7 @@ mod tests {
         let witness = CreateWitness {
             source: KeySource::Passphrase,
         };
-        assert!(create_master(dir.path(), None, witness).is_err());
+        assert!(create_master(dir.path(), None, witness, &KeyCache::new()).is_err());
         assert!(!dir.path().join(KDF_SALT_FILE).exists());
     }
 
@@ -905,5 +1047,217 @@ mod tests {
             "no truncating create"
         );
         assert_eq!(count(concat!("fs::", "write(")), 0);
+        // ROADMAP O211: Argon2id has one caller, the cache, so every run is
+        // counted and none can go around the held key.
+        assert_eq!(
+            count(concat!("derive_from_", "passphrase(")),
+            2,
+            "definition + the cache's one call"
+        );
+        assert_eq!(
+            count(concat!("cache.", "derive(")),
+            2,
+            "the load and the create, both through the cache"
+        );
+    }
+
+    // ---- ROADMAP O211: one derivation per process ---------------------------
+
+    fn cached(root: &Path, pw: Option<&str>, access: Access, cache: &KeyCache) -> SecretKey {
+        master_key_cached(root, pw, access, cache)
+            .unwrap()
+            .key
+            .expect("an installation with key material holds a key")
+    }
+
+    /// The gate's shape: one cache, every open a command makes. `vault list`
+    /// over three vaults opened the manager four times and `serve-http` twice;
+    /// each open now classifies and reads the salt, and derives nothing after
+    /// the first. The held key is the key a fresh derivation gives.
+    #[test]
+    fn a_cache_derives_a_passphrase_key_once_across_every_open() {
+        let dir = tempdir().unwrap();
+        let cache = KeyCache::new();
+        // The create derives through the cache too: `init` then reopens.
+        let created = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        assert_eq!(cache.derivations(), 1);
+        with_a_vault(dir.path());
+        for access in [
+            Access::ReadWrite,
+            Access::ReadOnly,
+            Access::ReadWrite,
+            Access::ReadWrite,
+        ] {
+            let k = cached(dir.path(), Some("correct horse"), access, &cache);
+            assert_eq!(k.as_bytes(), created.as_bytes());
+        }
+        assert_eq!(cache.derivations(), 1, "one Argon2id run for five opens");
+        // Premise: the uncached door derives every time and agrees.
+        assert_eq!(
+            key(dir.path(), Some("correct horse")).as_bytes(),
+            created.as_bytes()
+        );
+    }
+
+    /// The cache is keyed on BOTH inputs Argon2id takes. A held key never
+    /// answers for another passphrase — a wrong one still derives its own
+    /// wrong key, which the manifest MAC refuses — nor for a salt that changed
+    /// on disk under it.
+    #[test]
+    fn a_held_key_never_answers_for_another_passphrase_or_salt() {
+        let dir = tempdir().unwrap();
+        let cache = KeyCache::new();
+        let right = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        with_a_vault(dir.path());
+        for (pw, runs) in [
+            ("wrong staple", 2),
+            ("correct hors", 3),
+            ("correct horse ", 4),
+        ] {
+            let k = cached(dir.path(), Some(pw), Access::ReadWrite, &cache);
+            assert_ne!(k.as_bytes(), right.as_bytes(), "{pw:?} met the held key");
+            assert_eq!(cache.derivations(), runs, "{pw:?} derived its own");
+        }
+        // One entry: the right passphrase derives again, to the same key.
+        let again = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        assert_eq!(again.as_bytes(), right.as_bytes());
+        assert_eq!(cache.derivations(), 5);
+        // A salt replaced on disk is a different input, so a different key.
+        fs::remove_file(dir.path().join(KDF_SALT_FILE)).unwrap();
+        let mut other = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.path().join(KDF_SALT_FILE))
+            .unwrap();
+        std::io::Write::write_all(&mut other, &[0x5a; SALT_LEN]).unwrap();
+        drop(other);
+        let moved = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        assert_ne!(moved.as_bytes(), right.as_bytes());
+        assert_eq!(cache.derivations(), 6);
+    }
+
+    /// **Only the derivation is cached, never the decision** (ROADMAP O204's
+    /// classifier, under O211). With a key held, every open still surveys and
+    /// classifies: a deleted salt is refused, a planted key file beside a
+    /// missing salt is refused, and nothing is written — the held key is
+    /// never served in place of the files the installation holds.
+    #[test]
+    fn the_classification_runs_on_every_open_while_a_key_is_held() {
+        let dir = tempdir().unwrap();
+        let cache = KeyCache::new();
+        let held = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        with_a_vault(dir.path());
+        let salt = fs::read(dir.path().join(KDF_SALT_FILE)).unwrap();
+        fs::remove_file(dir.path().join(KDF_SALT_FILE)).unwrap();
+        for access in [Access::ReadWrite, Access::ReadOnly] {
+            let err = master_key_cached(dir.path(), Some("correct horse"), access, &cache)
+                .err()
+                .expect("a deleted salt refuses with a key held");
+            assert!(matches!(err, KeyError::MaterialMissing { .. }), "{err}");
+            assert_eq!(files(dir.path()), (false, false), "nothing created");
+        }
+        // A key file planted where the salt was: the other source's file.
+        let mut planted = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.path().join(MASTER_KEY_FILE))
+            .unwrap();
+        std::io::Write::write_all(&mut planted, &[7u8; KEY_LEN]).unwrap();
+        drop(planted);
+        let err = master_key_cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache)
+            .err()
+            .expect("a contradicting installation refuses with a key held");
+        assert!(matches!(err, KeyError::SourceMismatch { .. }), "{err}");
+        assert_eq!(files(dir.path()), (true, false), "no salt written");
+        // The salt put back beside the planted file: loaded, with the
+        // both-present flag the classifier raises, from the held key.
+        let mut back = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.path().join(KDF_SALT_FILE))
+            .unwrap();
+        std::io::Write::write_all(&mut back, &salt).unwrap();
+        drop(back);
+        let m = master_key_cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache)
+            .unwrap();
+        assert!(m.both_present, "the classifier still ran");
+        assert_eq!(m.key.unwrap().as_bytes(), held.as_bytes());
+        assert_eq!(cache.derivations(), 1, "refusals derive nothing");
+        // A corrupt salt is refused before the cache is asked.
+        fs::remove_file(dir.path().join(KDF_SALT_FILE)).unwrap();
+        let mut short = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.path().join(KDF_SALT_FILE))
+            .unwrap();
+        std::io::Write::write_all(&mut short, &salt[..SALT_LEN - 1]).unwrap();
+        drop(short);
+        assert!(matches!(
+            master_key_cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache),
+            Err(KeyError::CorruptKeyFile)
+        ));
+    }
+
+    /// The key-file source never reaches the cache: `master.key` is read on
+    /// every open, so a replaced file is what the next open loads.
+    #[test]
+    fn the_key_file_source_never_reaches_the_cache() {
+        let dir = tempdir().unwrap();
+        let cache = KeyCache::new();
+        let first = cached(dir.path(), None, Access::ReadWrite, &cache);
+        let _ = cached(dir.path(), None, Access::ReadOnly, &cache);
+        assert_eq!(cache.derivations(), 0);
+        fs::remove_file(dir.path().join(MASTER_KEY_FILE)).unwrap();
+        let mut replaced = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.path().join(MASTER_KEY_FILE))
+            .unwrap();
+        std::io::Write::write_all(&mut replaced, &[3u8; KEY_LEN]).unwrap();
+        drop(replaced);
+        let now = cached(dir.path(), None, Access::ReadWrite, &cache);
+        assert_ne!(now.as_bytes(), first.as_bytes());
+        assert_eq!(now.as_bytes(), &[3u8; KEY_LEN]);
+        assert_eq!(cache.derivations(), 0);
+    }
+
+    /// `forget` drops the held key, so the next open derives again; `Debug`
+    /// shows the count and nothing else.
+    #[test]
+    fn a_forgotten_key_is_derived_again_and_debug_shows_only_the_count() {
+        let dir = tempdir().unwrap();
+        let cache = KeyCache::new();
+        let k = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        let shown = format!("{cache:?}");
+        assert!(shown.contains("derivations: 1"), "{shown}");
+        assert!(!shown.contains("correct horse"), "{shown}");
+        assert!(!shown.contains(&hex::encode(k.as_bytes())), "{shown}");
+        cache.forget();
+        let again = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        assert_eq!(again.as_bytes(), k.as_bytes());
+        assert_eq!(cache.derivations(), 2);
+    }
+
+    /// The lock is held across the derivation: opens racing on a cold cache
+    /// run Argon2id once between them.
+    #[test]
+    fn racing_opens_on_a_cold_cache_derive_once() {
+        let dir = tempdir().unwrap();
+        let _ = key(dir.path(), Some("correct horse"));
+        with_a_vault(dir.path());
+        let cache = KeyCache::new();
+        let keys: Vec<[u8; KEY_LEN]> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    s.spawn(|| {
+                        *cached(dir.path(), Some("correct horse"), Access::ReadOnly, &cache)
+                            .as_bytes()
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert!(keys.windows(2).all(|w| w[0] == w[1]));
+        assert_eq!(cache.derivations(), 1);
     }
 }
