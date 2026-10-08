@@ -1971,6 +1971,96 @@ the banner prints `http://::1:<port>`, which no client accepts; a bare `::1` pas
 listen-address pre-flights and then dies at the orchestrator's bind; and `serve-http` opens the vault
 before it applies its bind rule.
 
+### A destruction's receipt survives a bad `--sign` or an unwritable `--out` (O262)
+
+**`forget`, `admission deny` and `retention sweep` lost their receipt to a typo.** All three read
+the `--sign` identity and wrote `--out` only after the store had destroyed the drawers and
+committed, each through `?`. A missing signing file, a file that was not a signing identity, or an
+output path that could not be written exited 1 over drawers already gone — and dropped the receipt,
+which can never be minted again: the unkeyed content fingerprints it carries are stored nowhere, by
+design. Measured on the unfixed tree: `forget --sign <missing>` destroyed the drawer and exited 1;
+`forget --sign <key> --out <directory>` destroyed it and printed nothing on stdout; `admission deny
+--sign <missing>` destroyed the pending row and `retention sweep --sign <missing>` both aged drawers.
+
+Now, in the order a command meets them: the identity is read and parsed BEFORE the vault is opened
+(`receipt::signing_identity` — a `SigningIdentity` exists only once `signer_of` has parsed its
+bytes), so a bad one refuses with nothing opened, sent or destroyed, `forget --backend`'s remote
+delete included; and once the drawers are gone the receipt's delivery is attempted before anything
+else is written (`receipt::deliver`) — `--out` FIRST, durably (a synced temporary renamed into
+place and its directory synced, since the destruction itself is committed with `synchronous=FULL`),
+and only then the summary lines and warnings. An `--out` that cannot be written puts the receipt's
+JSON on stdout — the bytes the file would have held — through the stdout door's flushed write
+(O287), and only then fails, exit 1, saying either *the drawers ARE destroyed, so their receipt is
+printed on stdout instead* or, when the door reports that stdout did not take it (its reader gone,
+or a write failed), that *the receipt is lost* — never claiming a copy went out that did not. A
+signing failure, unreachable once the identity was checked, delivers the receipt whole and unsigned
+and never writes it where a signed one was asked for. Without `--out`, stdout is the destination; a
+receipt it does not take is said lost on stderr and the door folds the exit (141 for a reader that
+left). A retention
+sweep that is NOT clean still exits 2 when its `--out` fails, the write error printed beside the
+verdict: exit 1 would tell a script to retry a tamper verdict. The dry-run sweep checks `--sign`
+too, so a scheduled preview meets the identity the real run will need; a sweep that destroyed
+nothing has no receipt, so its `--out` fails as an ordinary write and claims no destruction. The
+three commands' `--out` and `--sign` help says what now happens. `--out` is deliberately
+not probed ahead — a probe is a write before the destruction, the effect O212 removed from every
+read-only door, and a path writable when probed can still fail when written.
+
+`/v1` and the orchestrator carry no such flags and were read for the shape: `/v1`'s three
+destructions answer the receipt in the response body, and the orchestrator's `ops` prints the
+engine's body before any status check. One gap of that kind was found and filed rather than built
+(below).
+
+Gates. Four CLI integration tests, RED on the unfixed tree and GREEN after —
+`a_forget_whose_signing_identity_is_unusable_destroys_nothing` (a missing and a malformed identity,
+then the premise that a real one destroys and signs),
+`a_forget_whose_out_cannot_be_written_still_hands_over_the_receipt`,
+`an_admission_deny_keeps_its_receipt_through_a_bad_sign_or_out` and
+`a_retention_sweep_keeps_its_receipt_through_a_bad_sign_or_out` (a missing identity on the real
+and the dry run, a dry run's unwritable `--out` claiming nothing, a clean sweep's unwritable
+`--out` at exit 1, a sweep made not clean by a flipped mirror column at exit 2, and a sweep with
+nothing aged out and a missing identity) — each asserting the drawers' presence from the database,
+and each delivered receipt saved and verified, signature included, by `verify-forgetting`. Three
+more, from the independent review: `o262_a_sweep_writes_its_out_file_before_any_stdout_write`
+(stdout a reader that left: exit 141; stdout `/dev/full`: exit 1; a sweep not clean into a reader
+that left: exit 2 — each with the file on disk and its receipt verifying),
+`o262_a_forget_says_its_receipt_is_lost_when_stdout_did_not_take_it`, and
+`o262_a_bad_sign_refuses_before_forget_reaches_a_mirror` (a listener the test holds is contacted by
+`forget --backend` with no `--sign`, and never with a missing one). Five unit tests on the module
+and one on the door. Six checks in the e2e suite through the release binary. Counterfactuals, each
+on the fixed tree with its edit asserted present and the CLI recompiled: no stdout fallback fails
+three unit tests and the three `--out` integration tests; an unsigned receipt written to `--out`
+fails the signing unit test; the delivery error returned before the sweep's verdict fails the sweep
+test at its exit-2 arm; a dry run exempted from the check fails it at its dry-run arm; a dry run's
+report routed through the receipt delivery fails it at its dry-run `--out` arm; the first build's
+sweep — the summary through `println!` before `--out` — exits 101 into a reader that left; a
+fallback that ignores the door's answer claims a copy went out; and a check moved below
+`open_index` answers with the backend's error. Two defects of my own were caught before the first
+commit: the first precheck named the sweep's arm above the arm that projects its report, which
+`every_hand_projected_report_field_reaches_the_cli` reads from the first naming, so that gate
+failed until the identity was read through a method; and the first sweep build told a dry run whose
+`--out` failed that the drawers were destroyed. **An independent review then found five more, all
+mine**: the sweep printed its summary before writing `--out`, so a stdout on `/dev/full` panicked
+(101) after the destruction with no file (measured by the review: both drawers gone) — the same
+class as `forget`'s mirror warning and a not-clean sweep's verdict line; the fallback's "printed on
+stdout instead" did not ask whether stdout took it; a real sweep with nothing aged out and a bad
+`--sign` used to exit 0 and now exits 1, which `UPGRADING.md` understated; `--out` was written with
+no `fsync`; and the O264 relation was a note rather than a reciprocal `Relations:` line. A real
+corpus — the LoCoMo feed mined into eight wings of a sealed vault, 680 drawers: a whole-wing forget
+refused twice with all 85 drawers kept, then with `--out` a directory destroyed 85 in 68 ms and put a
+29,919-byte receipt on stdout that verifies; a deny and a 170-drawer sweep the same, both verifying;
+`VERIFY OK` on both vaults.
+
+Filed beside it: O-NEW-O262-1 — a destruction through the orchestrator whose receipt exceeds the
+256 MiB body ceiling is destroyed on the engine and its receipt refused at the control plane
+(288 to 289 bytes per drawer on `/v1`, measured in two runs, so about 930,000 drawers in one
+destruction).
+
+PATCH inside the unreleased 1.7.0: no documented contract moves; a defect is gone. Three
+observable changes are in `UPGRADING.md`: a sweep with a bad `--sign` now exits 1 when it has
+nothing to destroy — a dry run, or a real sweep with nothing aged out, both of which exited 0
+without reading the file — and a sweep that is not clean and whose `--out` fails now exits 2 where
+it exited 1. `config check` cannot see any of them.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

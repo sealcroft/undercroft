@@ -1067,6 +1067,24 @@ tool: capture the output, then match it. One door is exempt by design:
 the same client leaving by closing stdin already gave. The orchestrator's
 command line keeps the same four classes.
 
+**One exit 1 must NOT be retried: a destruction's receipt delivered on
+stdout** (ROADMAP O262, 1.7.0). `forget`, `admission deny` and `retention
+sweep` read and check `--sign` before the vault is opened — a missing file or
+one that is not a signing identity exits 1 with nothing destroyed, a sweep
+with nothing to destroy included — and once the drawers are destroyed the
+receipt's delivery is attempted before anything else is written: `--out`
+first, synced to disk, then the summary. An `--out` that cannot be written
+puts the receipt's JSON on stdout, the bytes the file would have held, and
+exits 1 saying *the drawers ARE destroyed* and whether stdout took the copy or
+*the receipt is lost*; a sweep that is not clean still exits 2. Retrying that
+run answers *not found*, and the receipt on stdout is the only copy that will
+ever exist — its content fingerprints are stored nowhere, by design — so
+capture stdout on every exit. Without `--out`, a receipt whose stdout reader
+went away is said lost on stderr and the run exits 141 (above). Until 1.7.0
+these failures came after the destruction and the receipt was lost. `/v1`'s
+three destructions return the receipt in the response body and take neither
+flag.
+
 - A **crash is never a tamper alarm** (open-time reconciliation
   fast-forwards a lagging manifest anchor); a **rollback or forged record
   always is**. On `VERIFY FAILED`, follow the

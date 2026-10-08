@@ -2140,6 +2140,13 @@ Consequences that are binding, not advisory:
   i18n.rs: result-string localization for nine languages
   (`UNDERCROFT_LANG` → `LANG`, primary subtag; errors, help and
   machine-oriented output stay English);
+  receipt.rs: the ONE place `forget`, `admission deny` and `retention sweep`
+  deliver a destruction's receipt (ROADMAP O262) — `--sign` read and parsed
+  before the vault is opened, and once the drawers are gone the receipt's
+  delivery is attempted before anything else is written: `--out` first and
+  durably, stdout through the door's flushed write (O287) as its fallback, and
+  a delivery that fails says where the receipt went or that it is lost, because
+  its fingerprints are stored nowhere and it can never be minted again;
   refine.rs: the ONE LLM-distillation implementation both `undercroft refine`
   and `POST /v1/…/refine` drive — same `UNDERCROFT_LLM_*` config used to
   build two different vaults, the CLI's facts carrying no date resolved from

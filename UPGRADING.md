@@ -503,6 +503,39 @@ tunnel it names — the delete does not read the row and records the deletion �
 and create the tunnel again or re-run the import. `undercroft config check`
 cannot detect this: it opens no vault.
 
+### a destruction with a bad `--sign` refuses before it destroys, and one whose `--out` cannot be written prints its receipt (O262)
+
+**Symptom:** `undercroft forget`, `admission deny` or `retention sweep` with a
+`--sign` file that is missing or is not a signing identity exits 1 (*"reading
+signing identity …"*, or *"… is not a signing identity"*) with nothing
+destroyed. **So does a `retention sweep` that has nothing to destroy** — a
+`--dry-run`, and an ordinary sweep with nothing aged out, which is the usual
+daily scheduled run: both used to exit 0 without reading the file, and the
+first sweep that did destroy something then failed over the destruction. One
+whose `--out` cannot be written still exits 1, but prints the receipt's JSON on
+stdout first and says *"the drawers ARE destroyed, so their receipt is printed
+on stdout instead"* — or, when stdout cannot take it either, *"the receipt is
+lost"*. A retention sweep that is NOT clean and whose `--out` cannot be written
+now exits 2, the integrity verdict, where it exited 1. When `--out` fails, the
+receipt's JSON comes first on stdout, ahead of the sweep's summary lines, since
+the file is now written before anything is printed.
+
+**Cause:** ROADMAP O262. All three read `--sign` and wrote `--out` only after
+the store had destroyed the drawers and committed, so a bad signing path, a
+file that was not a signing identity or an unwritable output path exited 1
+over drawers already gone and lost their receipt — whose content fingerprints
+are stored nowhere, so it can never be minted again. The sweep read `--sign`
+only when it had a receipt to sign, which is why a sweep with nothing to
+destroy never noticed a bad path.
+
+**Fix:** none for a correct invocation; correct the `--sign` path a scheduled
+sweep names before upgrading — run it once with `--dry-run`, which now reads
+the file. A script that retries these three commands on exit 1
+must not retry once stdout carries a receipt: the drawers are destroyed, a
+retry answers *not found*, and the receipt on stdout is the only copy — so
+capture stdout on every exit. `undercroft config check` cannot detect this: it
+is a flag on a command, not a declaration.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

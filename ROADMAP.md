@@ -6969,6 +6969,13 @@ decision is the drift the tree forbids.
 entry (writers wait out the destruction; a vanished target now refuses; a
 repeated id is named once).
 
+**Noted 2026-10-08 by O262.** The CLI half of the residual above — a receipt lost
+"by the CLI after it" — is closed: `--sign` is read and checked before the vault
+opens, and a failure after the destruction prints the receipt on stdout before
+the command fails. A receipt lost between the COMMIT and its delivery is still this
+entry's residual, and O262's build filed one more way to lose it, at the
+orchestrator's body ceiling (O-NEW-O262-1).
+
 ### O256 — CLOSED 2026-09-25: `backup create` archives exactly the state its verify judged — the pages copied inside the verified snapshot, beside the manifest those rows were verified against, published by one rename
 
 **Filed 2026-09-24 by O253's panel (the agentic-memory lens and the refuter);
@@ -15180,6 +15187,214 @@ not retried, where the old unit looped until a mount made by hand appeared and
 then served: that recovery is gone, which is why the entry exists, with
 `systemctl start undercroft-server` after mounting as its fix. `config check`
 cannot see either; they are the unit's, not a declaration's.
+
+### O262 — CLOSED 2026-10-08: a destruction's receipt survives a bad `--sign` or an unwritable `--out` — the identity is checked before the vault opens, and the receipt's delivery is attempted before anything else is written: `--out` first and durably, stdout as its fallback, and a failed delivery says where the receipt went or that it is lost
+
+**Filed 2026-09-25 by O255's ruling (the agentic-memory lens; confirmed by the
+refuter).** `forget`, `admission deny` and `retention sweep`
+(`crates/undercroft-cli/src/main.rs`) read the `--sign` identity and write
+`--out` only AFTER the store has destroyed the drawers and committed. A mistyped
+signing path or an unwritable output file exits non-zero and drops a receipt
+that can never be minted again: the unkeyed fingerprints it carries are stored
+nowhere, by design.
+
+**Shape**: read and check the signing identity (`signer_of`) before the store
+call; if writing `--out` fails, print the receipt's JSON before exiting non-zero.
+
+**Gate**: `forget --sign <missing file>` refuses with nothing destroyed; an
+unwritable `--out` still delivers the JSON.
+**Counterfactual**: today, the drawers destroyed and no receipt.
+
+#### BUILT 2026-10-08, to the filed shape — with three decisions the shape left open, each answered by the doctrine
+
+**Grounding.** The entry's shape is O255's ruling and was followed as written; the
+search for `rul(ed|ing)` in O262, O255, O175 and O212 found nothing else on the
+question. The three points the shape did not settle were answered by doctrine
+rather than by taste, and are stated so a reader can check them: (1) the check
+runs before the vault is OPENED, not merely before the store call, because O175 and
+O212 say a function with an effect outside the database decides first and a
+writable open can heal and migrate; (2) the dry-run sweep checks `--sign` too —
+"before the store call" names no exemption, and a scheduled preview should meet
+the identity the real run needs; (3) a sweep that is not clean still exits 2 when
+its `--out` fails, because exit 2 is reserved for the integrity verdict and exit 1
+would tell a compliance script to retry a tamper verdict (`integrity_verdict`'s
+doctrine). `--out` is not probed ahead, as the shape says: a probe is a write before
+the destruction — an empty file left by a refused or read-only run, O212's effect —
+and a path writable when probed can still fail when written.
+
+**What landed.** `crates/undercroft-cli/src/receipt.rs`, the one place the three
+commands deliver a receipt: `signing_identity` reads the file and parses it with
+`signer_of`, returning a `SigningIdentity` that nothing else can construct, so
+holding one is the proof the check ran; `sign` signs with it and, on a failure —
+unreachable once the check passed, since signing parses the same bytes the same
+way — leaves the receipt as the store minted it; `deliver` writes `--out` or prints
+on stdout, and on any failure after the destruction prints the receipt on stdout
+first (the bytes the file would have held), never writes an unsigned receipt where
+a signed one was asked for, and says *the drawers ARE destroyed* — or, when stdout
+cannot be written either, that the receipt is lost, rather than implying it was
+printed. In `main.rs` each arm reads the identity as its first statement, before
+`open_store` (and so before `forget --backend` reaches the mirror), and routes the
+receipt through `sign` and `deliver`; the sweep prints a failed delivery beside the
+NOT CLEAN verdict and exits 2. A sweep that destroyed nothing — a dry run, or
+nothing aged out — has no receipt, so its report goes to `--out` as an ordinary
+write that fails as one and never says a drawer was destroyed. The three `--out`
+and `--sign` help texts say what now happens.
+
+**Drift check, by reading.** MCP reaches none of the three (`OPERATOR_ONLY`). `/v1`'s
+`forget`, `admission` deny and `retention/sweep` take no `--sign` or `--out` and
+answer the receipt in the response body; the only failure between the destruction
+and the reply is serialization (`unwrap_or_else(|_| json!({}))`), which cannot fire
+for these derived structs, and the socket write, which is O255's stated residual.
+The orchestrator's `ops` prints the engine's body before any status check, and the
+consoles show the receipt they receive. One gap of the same kind was found there
+and filed: O-NEW-O262-1, a receipt past the 256 MiB body ceiling refused at the
+control plane after the engine destroyed.
+
+**Gates.** Four CLI integration tests (`tests/cli.rs`), RED on the unfixed tree for
+the defect's reason and GREEN after: `a_forget_whose_signing_identity_is_unusable_destroys_nothing`
+(RED: a missing `--sign` destroyed the drawer), `a_forget_whose_out_cannot_be_written_still_hands_over_the_receipt`
+(RED: stdout empty, "EOF while parsing"), `an_admission_deny_keeps_its_receipt_through_a_bad_sign_or_out`
+(RED: the pending row destroyed) and `a_retention_sweep_keeps_its_receipt_through_a_bad_sign_or_out`
+(RED: both aged drawers destroyed). Each reads the drawers' presence from the
+database at every step, and saves every delivered receipt and verifies it,
+signature included, with `verify-forgetting`. The sweep test also drives a dry run
+with a missing identity, a dry run whose `--out` fails (exit 1, no destruction
+claimed, nothing destroyed), and a sweep made not clean by a flipped mirror column
+whose `--out` fails (exit 2, the receipt on stdout, the write error on stderr). An
+unwritable `--out` is a DIRECTORY, which root cannot write either. Four unit tests
+on the module: the identity check, the `--out` fallback, the unsigned fallback and
+the lost-receipt wording. Six checks in `tests/e2e.sh` through the release binary,
+in a vault of their own.
+
+**Counterfactuals on the FIX**, each applied to the worktree with its edit asserted
+present (a grep count of one), the CLI recompiled (`Compiling undercroft-cli` in
+its log), run with `--no-fail-fast`, then restored and compared byte for byte: no
+stdout fallback fails three unit tests and the three `--out` integration tests; an
+unsigned receipt written to `--out` fails the signing unit test alone; the delivery
+error returned before the sweep's verdict fails the sweep test at its exit-2 arm
+(exit 1 seen); a dry run exempted from the check fails it at its dry-run arm (exit 0
+seen); a dry run's report routed through `deliver` fails it at its dry-run `--out`
+arm.
+
+**Two defects of mine, both caught before this landed.** (1) The first build read
+the identity in a `match` naming `RetentionAction::Sweep` above the arm that
+projects the sweep report, and `parity.rs`'s
+`every_hand_projected_report_field_reaches_the_cli` windows a report's projection
+from the FIRST place its anchor is named — so the window held the precheck and
+none of `RetentionSweep`'s nine fields, and the gate failed in the full run. The
+identity is now read through `AdmissionAction::sign` and `RetentionAction::sign`,
+spelled through `Self::`, their doc comments saying why. (2) The first sweep build
+routed every report through `deliver`, so a dry run whose `--out` failed told the
+operator "the drawers ARE destroyed" over a sweep that destroyed nothing — found
+reading the diff, and now a test arm.
+
+**A real corpus**: the LoCoMo feed mined into eight wings of a sealed vault, 680
+drawers, through the release binary (probed first: on a palace that does not exist
+it refuses `--sign` before the open). A whole-wing `forget` with a missing and with
+a malformed identity: exit 1 both, 85 drawers kept. With `--out` a directory:
+exit 1 in 68 ms, 85 destroyed, a 29,919-byte receipt on stdout that verifies; the
+control with a writable `--out` exits 0 in 61 ms. A deny with a missing identity
+kept the row pending; with `--out` a directory it delivered an 865-byte receipt
+that verifies. Two wings re-dated through export and import into a second vault: a
+sweep and a dry run with a missing identity kept all 170, and the sweep with `--out`
+a directory destroyed 170 in 58 ms and put its report on stdout, whose receipt
+verifies. `VERIFY OK` on both vaults. Figures from the run on the finished tree; an
+earlier run on the first build measured the same outcomes at 56, 49 and 56 ms.
+
+**Run at the finished tree, ad hoc in a plain container rather than through the
+battery** (the unit was built in parallel with others): the default-members
+`cargo test --release`, 1300 run and 17 ignored across 20 targets (eight new: four
+in the CLI's unit tests, four in `tests/cli.rs`); `tests/e2e.sh` against the release
+binary, 764 passed and 0 failed (six new); `cargo clippy -p undercroft-cli
+--all-targets -- -D warnings` on the default and the telemetry build, clean;
+`cargo fmt --check`, clean. The battery itself is the integrator's.
+
+**Residuals, stated.** A process killed between the COMMIT and the delivery still
+loses the receipt (O255's); so does a stdout that cannot be written, now said rather
+than implied. ~~A `--out` write that fails part-way leaves a partial file beside the
+receipt printed on stdout~~ — corrected by the review below: a regular-file `--out`
+is now written to a temporary and renamed, so a failed write leaves the path as it
+was. The receipt's JSON is
+serialized with `?` after the destruction — it cannot fail for these structs, every
+field being a string, a number or a list of them. The secret read for `--sign` stays
+an ordinary `String` across the destruction, as it was across the signing before;
+the CLI links no `zeroize`.
+
+**Versioning**: PATCH inside the unreleased `1.7.0`; no documented contract moves.
+`UPGRADING.md` carries the observable changes — three since the review below: a
+sweep with a bad `--sign` exits 1 when it has nothing to destroy, a dry run and a
+real sweep with nothing aged out alike, and a sweep that is not clean and whose
+`--out` fails exits 2 where it exited 1 — and the advice that this exit 1 is not
+one to retry. `docs/AGENTS.md`, `docs/THREAT_MODEL.md` and `CHANGELOG.md` say the
+same.
+
+#### REVIEWED 2026-10-08 by an independent reviewer — five findings, all mine, each fixed on the branch after `main` (5f5fe2f, O287) was merged into it
+
+**The merge.** `main` brought O287's stdout door: one `outln!`/`errln!` path that
+never panics, a latch on a reader that left, the exit fold 2, 1, 141, 0, and a
+source gate that fails on any `println!`, `eprintln!` or `stdout()` in either
+binary. Every print this entry added goes through the door, and `deliver`'s stdout
+is the door's new FLUSHED write, `undercroft_obs::stdio::write_bytes_flushed`,
+which answers what became of the bytes (a `Latch::reported` that is skipped once
+the stream is lost — `a_reported_write_answers_its_own_fate_and_is_skipped_after_a_latch`).
+The prose conflicts were unions, `main` first; the code conflicts were rewritten on
+their merits.
+
+1. **MEDIUM — a write that could fail stood between the destruction and `--out`.**
+   The sweep printed its summary before writing `--out`, so a stdout on `/dev/full`
+   panicked (101) after the destruction and before the file existed (the review
+   measured both drawers gone and no file); `forget`'s mirror warning and a
+   not-clean sweep's verdict line were the same class. **Fixed**: each arm attempts
+   the receipt's delivery before anything else is written — `--out` first, then the
+   summary and warnings — and O287's door makes the remaining prints unable to end
+   the run. The claim this entry's heading made, "the receipt reaches stdout before
+   any failure after the destruction", was not true on every path and is narrowed
+   on every surface that stated it: the heading, `receipt.rs`, `CHANGELOG.md`,
+   `docs/AGENTS.md`, `docs/THREAT_MODEL.md` and `CLAUDE.md`'s layout line.
+   **And the fallback's wording is decided by the door's answer**: "printed on stdout
+   instead" only when the door took the bytes; when its reader has gone or a write
+   failed — the latch set before or by this write — "the receipt is lost". Gates:
+   `o262_a_sweep_writes_its_out_file_before_any_stdout_write` (a reader that left:
+   141; `/dev/full`: 1; a not-clean sweep into a reader that left: 2 — the file on
+   disk and verifying in each) and
+   `o262_a_forget_says_its_receipt_is_lost_when_stdout_did_not_take_it`, plus the
+   unit test `a_receipt_the_door_did_not_take_is_called_lost_not_printed`.
+   **Counterfactuals**: the first build's sweep arm spliced back in exits **101**
+   into a reader that left (the review's defect, reproduced); a fallback that ignores
+   the door's answer fails the unit test and the forget test.
+2. **LOW-MED — `UPGRADING.md` understated.** A real sweep with nothing aged out read
+   `--sign` only when an attestation existed (`retention.rs` gives none when nothing
+   is destroyed), so a bad path exited 0 on every ordinary daily run and now exits 1.
+   **Fixed** in `UPGRADING.md` and the counts here and in `CHANGELOG.md` (three
+   observable changes, not two), and gated by a new arm of the sweep test.
+3. **LOW — `--out` was not durable.** `fs::write` with no `fsync`, then success,
+   while the drawers are gone under `synchronous=FULL`. **Fixed**:
+   `receipt::write_durably` writes a regular-file (or absent) path through a
+   `create_new` temporary beside it, `sync_all`, a rename over the path and a
+   directory sync; a symbolic link, FIFO or device is written through as before and
+   synced only if it opens as a regular file, since a rename would replace the link
+   or the device. `a_receipt_file_is_replaced_whole_or_not_at_all` holds the
+   replacement and the cleanup; the syncs themselves are not gated — no test can
+   see a page cache — and were observed on the release binary under `strace`: the
+   temporary opened `O_CREAT|O_EXCL`, an `fsync` on it, the `rename` over
+   `receipt.json`, then an `fsync` on the directory, and the receipt verifying.
+4. **LOW — no gate held the order against `--backend`.** **Added**:
+   `o262_a_bad_sign_refuses_before_forget_reaches_a_mirror` holds a TCP listener as
+   the mirror; its premise is that `forget --backend` with no `--sign` reaches it
+   (the remote delete goes first, O175); a missing `--sign` then refuses with the
+   listener never contacted; with the backend unconfigured the refusal is the
+   signing identity's. **Counterfactual**: the check moved below `open_index`
+   answers with the backend's error and fails the test. Looped 20 of 20 green, with
+   the other O262 integration tests, because it drives a network stub.
+5. **LOW — the O264 relation was a note.** **Fixed**: a reciprocal
+   `**Relations:**` line in both entries (O169).
+
+**Run at the merged tree, ad hoc as before**: the default-members `cargo test
+--release`, 1321 run and 17 ignored across 20 targets (`main` at 5f5fe2f publishes
+1308; thirteen new from this entry: five module tests, one on the door, seven in
+`tests/cli.rs`); `tests/e2e.sh` 773 passed and 0 failed (`main` publishes 767; six
+new); `cargo fmt --check` and the `lint` service's three clippy commands clean — the
+first clippy run failed on a test helper's return type, mine, fixed with a type alias.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -41891,24 +42106,41 @@ doctrine the old exit contradicted. The maintainer confirms it with the wording.
 client enumerating `verdict` meets a third value where it met a 409. `docs/AGENTS.md`'s documented exit-2 example and
 enumeration move with it. `undercroft config check` has nothing to detect.
 
-### O262 — the CLI loses a destruction's receipt when `--sign` or `--out` fails after the drawers are gone
+### O-NEW-O262-1 — a destruction through the orchestrator whose receipt passes the 256 MiB body ceiling is destroyed on the engine and its receipt refused at the control plane
 
-**Filed 2026-09-25 by O255's ruling (the agentic-memory lens; confirmed by the
-refuter).** `forget`, `admission deny` and `retention sweep`
-(`crates/undercroft-cli/src/main.rs`) read the `--sign` identity and write
-`--out` only AFTER the store has destroyed the drawers and committed. A mistyped
-signing path or an unwritable output file exits non-zero and drops a receipt
-that can never be minted again: the unkeyed fingerprints it carries are stored
-nowhere, by design.
+**Filed 2026-10-08 by O262's build; read in code, the per-drawer size measured,
+not executed at scale.** O262 read `/v1` and the orchestrator for the shape it
+closed on the CLI. Every orchestrator call to an engine reads the reply through
+`undercroft_net::read_body_bounded` (`engine::vault_request`,
+`crates/undercroft-orchestrator/src/engine.rs`), which refuses a body past
+`MAX_BODY_BYTES` (256 MiB) — by its declared `Content-Length`, before a byte is
+read. The engine answers `POST …/forget`, `POST …/admission` with a deny and
+`POST …/retention/sweep` AFTER the drawers are destroyed and committed, so a
+receipt larger than the ceiling is refused at the control plane over drawers
+already gone: `undercroft-orchestrator ops <tenant> forget` exits 1 printing no
+receipt, and the admin plane's ops route answers an engine error in its place
+(`proxy.rs`, `engine_response`). The receipt's fingerprints are stored nowhere, so
+it is lost. Measured on the LoCoMo corpus (O262's two runs): a `/v1` forget receipt
+is 288 to 289 bytes per drawer (24,561 and 24,565 bytes for 85 — the times' fractional
+digits vary), so the ceiling falls near 930,000
+drawers in one destruction; a sweep's report also lists each expired id under its
+policy, so a sweep meets it somewhat sooner. The engine's own listener bounds
+request bodies, not replies, so a direct `/v1` client is not affected.
 
-**Shape**: read and check the signing identity (`signer_of`) before the store
-call; if writing `--out` fails, print the receipt's JSON before exiting non-zero.
+**Shape, for a ruling panel**: O264's chunked destruction, one receipt per chunk,
+bounds the receipt with the lock; or the engine refuses, before destroying, a
+destruction whose receipt would pass the shared ceiling (every per-drawer field is
+fixed-width — hex ids, digests and tags, RFC 3339 times); or the orchestrator
+streams the three destruction routes' replies through without holding them. Each
+moves a different surface, and the first moves `RetentionSweep.attestation`'s
+JSON shape.
 
-**Gate**: `forget --sign <missing file>` refuses with nothing destroyed; an
-unwritable `--out` still delivers the JSON.
-**Counterfactual**: today, the drawers destroyed and no receipt.
+**Gate**: through `ops` and the admin plane, a destruction whose receipt would pass
+the ceiling either destroys nothing or delivers its receipt — with a lowered
+ceiling as a test seam if 10⁶ drawers is too slow for the battery.
+**Counterfactual**: today, by reading, the drawers destroyed and no receipt.
 
-**Relations:** shares a question with O264 — a destruction's receipt is delivered before the next call.
+**Relations:** shares a decision with O264 — chunked destruction, one receipt per chunk, would bound both the write lock and a receipt's size.
 
 ### O263 — the database schema is not authenticated, so a trigger planted by a writer without the key runs inside every legitimate transaction
 
@@ -42226,9 +42458,15 @@ which changed nothing measurable at 40,000).
 
 **Relations:** sequenced after O258 — that entry's busy handler, and the typed refusal a refused writer receives, are what this entry's bound restates.
 
-**Relations:** shares a question with O262 — a destruction's receipt is delivered before the next call.
+**Relations:** shares a decision with O-NEW-O262-1 — the chunked shape would also bound a receipt's size, which that entry finds refused at the orchestrator's 256 MiB body ceiling after the engine destroyed, near 930,000 drawers (288 to 289 bytes each on `/v1`, measured).
 
 **Relations:** shares a diff surface with O350 — rewriting the destroyed codes inside the destruction lock is a cost on the hold this entry bounds.
+
+**Recorded beside, 2026-10-08, at train 1's integration.** The 2026-10-08 rulings declared a relation
+here with O262 (a destruction's receipt is delivered before the next call). O262 closed under 1.7.0 the
+same day — the CLI now attempts a receipt's delivery before anything else is written — so the edge is
+no longer one between open entries and is not declared. The half a destruction through the orchestrator
+still owes is O-NEW-O262-1's, declared above.
 
 #### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
 

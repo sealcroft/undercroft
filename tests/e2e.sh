@@ -882,6 +882,42 @@ fi
 check "forged tag still exits 2"  2 "ATTESTATION FAILED"             -- \
   "$BIN" verify-forgetting "$ATT.forged"
 
+# ── ROADMAP O262: a destruction's receipt survives a bad --sign or --out ─────
+# `forget`, `admission deny` and `retention sweep` read `--sign` and wrote
+# `--out` only AFTER the drawers were destroyed and committed, so a mistyped
+# path exited 1 over drawers already gone and dropped a receipt that can never
+# be minted again — its fingerprints are stored nowhere. Through the release
+# binary, in a vault of its own so no later count moves: a missing identity
+# refuses with the drawer still there, and an output path that is a DIRECTORY
+# (which root cannot write either) still hands the receipt over on stdout,
+# where `verify-forgetting` accepts it. `deny` and the sweep take the same two
+# doors and are driven by the integration suite.
+O262_DIR="$(mktemp -d)"
+check "O262: vault creates"        0 "Created vault 'o262'"           -- \
+  "$BIN" vault create o262
+O262_ID="$("$BIN" remember "an O262 note whose erasure receipt must survive" \
+  --vault o262 --wing o262 | sed -n 's/^Filed drawer \([0-9a-f]*\) .*/\1/p')"
+check "O262: a missing --sign refuses" 1 "reading signing identity"  -- \
+  "$BIN" forget "$O262_ID" --vault o262 --sign "$O262_DIR/absent.key"
+check "O262: and destroys nothing" 0 "erasure receipt must survive"   -- \
+  "$BIN" drawer get "$O262_ID" --vault o262
+"$BIN" forget "$O262_ID" --vault o262 --out "$O262_DIR" \
+  >"$O262_DIR/receipt.json" 2>"$O262_DIR/err"
+O262_CODE=$?
+if [ -n "$O262_ID" ] && [ "$O262_CODE" -eq 1 ] \
+   && grep -qF -- "\"$O262_ID\"" "$O262_DIR/receipt.json" \
+   && grep -qF -- "ARE destroyed" "$O262_DIR/err"; then
+  echo "ok    O262: an unwritable --out exits 1 and the receipt still reaches stdout"
+  PASS=$((PASS+1))
+else
+  echo "FAIL  O262: an unwritable --out — id='$O262_ID', exit $O262_CODE"
+  sed 's/^/      /' "$O262_DIR/err"; FAIL=$((FAIL+1))
+fi
+check "O262: the delivered receipt verifies" 0 "ATTESTATION VERIFIED" -- \
+  "$BIN" verify-forgetting "$O262_DIR/receipt.json" --vault o262
+check "O262: and the drawer is gone" 1 "No drawer with id"            -- \
+  "$BIN" drawer get "$O262_ID" --vault o262
+
 # **UNDERCROFT_TRUST_FLOOR — the declared VAULT floor, end to end.** The
 # REQUEST floor (`--min-trust`, `min_trust`) is exercised on `/v1` below;
 # the declared vault floor had ZERO occurrences under tests/ on any
