@@ -468,7 +468,12 @@ so it answered OK and a backup archived it (ROADMAP O231). It can be a legacy or
 defect-written row, and it can also be made without the key, by moving where a
 drawer's meta ends and its content begins (ROADMAP O-NEW-O231-1). A failed HMAC is
 still printed under `hmac failures:`; this reason has its own line because the
-HMAC verifies.
+HMAC verifies. **One shape of this damage is not yet named on a line:** where the
+boundary is moved so that the covered meta is no longer valid UTF-8, `verify` and
+`backup create` exit 1 with `corrupt row …` (a run failure) instead of naming the
+row at exit 2 — O269's build is settling whether that reads as a named verdict
+too. So on this release treat a `corrupt row` exit 1 from `verify` as the same
+finding, not a transient error.
 
 **Fix:** `undercroft verify --vault <name>` names every such drawer. Restore the
 newest archive whose restore is accepted, if one holds the drawer intact; or, if

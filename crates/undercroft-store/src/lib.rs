@@ -3143,9 +3143,14 @@ pub enum BadReason {
     /// **It needs no key.** The drawer canonical joins id, meta and content
     /// with a 0x1f separator, and valid JSON never holds a raw 0x1f while
     /// at-rest content may, so a writer without the key can move the
-    /// meta/content boundary to the first 0x1f in the content and the tag
-    /// still verifies. The entry that filed this said the row needed the
-    /// vault key; it does not.
+    /// meta/content boundary to a 0x1f in the content and the tag still
+    /// verifies. The entry that filed this said the row needed the vault
+    /// key; it does not. **This reason covers only the moves that leave
+    /// `meta_json` valid UTF-8** (a 0x1f behind a UTF-8 prefix, such as the
+    /// first content byte): a move to a later 0x1f in ciphertext leaves bytes
+    /// that are not UTF-8, `covered_row` fails reading them before the tag is
+    /// checked, and `verify` returns that error without naming the row —
+    /// ROADMAP O269 item 2's arm, recorded under O-NEW-O231-1.
     MetaUnparseable,
 }
 
@@ -10981,11 +10986,17 @@ impl VaultStore {
         // `/v1/verify` both read the verdict, not the error). The swallow
         // is conditional on the alarm already standing.
         //
-        // An unparseable drawer that a link cites is not swallowed: `get`
-        // refuses it as `CorruptRow`, and `verify` returns that error rather
-        // than a verdict — never OK. Emptying the leg there would drop a
-        // tampered receipt from the rotation's blockers (above); turning the
-        // error into a verdict is ROADMAP O269's "no row aborts `verify`".
+        // An unparseable drawer that a link cites was never swallowed and is
+        // not now: `get` refuses it as `CorruptRow`, which the `Integrity`
+        // arm below does not match, so `verify` returns that error rather
+        // than a verdict — never OK, and turning it into a verdict is ROADMAP
+        // O269's "no row aborts `verify`". That is also why
+        // `o231_a_link_citing_the_row_answers_an_error_never_ok` cannot
+        // exercise the `tag_failed` condition: it pins the error, not the
+        // swallow. The condition is unobservable today — the only `Integrity`
+        // these legs raise is a `get` over a row the walk already named as a
+        // failed HMAC — and it is kept so that no future reason in
+        // `bad_records` that blocks no rotation can license emptying a leg.
         let supersessions = match self.verify_supersessions() {
             Ok(links) => links,
             Err(StoreError::Integrity(_)) if tag_failed => Vec::new(),

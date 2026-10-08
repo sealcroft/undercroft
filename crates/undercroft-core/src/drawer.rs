@@ -461,8 +461,13 @@ impl Drawer {
     }
 
     /// Canonical bytes covered by the integrity HMAC: id, meta (canonical
-    /// JSON), and content, separated by 0x1f so fields cannot bleed into
-    /// each other.
+    /// JSON), and content, separated by 0x1f with no lengths.
+    ///
+    /// **The separator does not keep the fields apart.** Serialized meta
+    /// never holds a raw 0x1f while at-rest content may, so moving the
+    /// meta/content boundary to a 0x1f inside the content leaves these bytes
+    /// — and a tag over them — unchanged. A verified tag proves this run of
+    /// bytes, not where each field ends (ROADMAP O231, O-NEW-O231-1).
     pub fn canonical_bytes(&self, content_at_rest: &[u8]) -> Vec<u8> {
         let meta_json = serde_json::to_vec(&self.meta).expect("meta serializes");
         let mut out =

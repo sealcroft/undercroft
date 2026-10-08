@@ -333,6 +333,10 @@ pub(crate) fn triple_canonical(
     terms: Option<&[u8]>,
 ) -> Vec<u8> {
     let mut out = Vec::new();
+    // `unwrap_or("")`: an absent bound and an empty one are ONE byte string
+    // here, so a tag cannot tell a NULL `valid_to` from `''` — and the two do
+    // not read alike (ROADMAP O-NEW-O231-1, measured: `''` on an approved
+    // canonical fact keeps its tag while `lookup_canonical` stops finding it).
     for part in [
         id,
         subject,
@@ -356,8 +360,12 @@ pub(crate) fn triple_canonical(
         out.extend_from_slice(sup);
     }
     // The authority tier rides the same precedent — and under a DIFFERENT
-    // separator (0x1e), so sealed support bytes and an authority extension
-    // can never alias each other's position in the canonical.
+    // separator (0x1e), which tells a reader of a well-formed canonical
+    // which extension follows. It does NOT stop a boundary moving: the
+    // object, support and extension bytes may themselves hold 0x1c–0x1f and
+    // nothing records a length, so `object‖0x1f‖support` re-read as an
+    // object with no support keeps the canonical and the tag (ROADMAP
+    // O-NEW-O231-1, measured on both security levels).
     if let Some(auth) = authority {
         out.push(0x1e);
         out.extend_from_slice(auth);
