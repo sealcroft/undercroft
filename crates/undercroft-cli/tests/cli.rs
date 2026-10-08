@@ -2402,8 +2402,11 @@ fn o204_config_check_refuses_the_palace_a_start_would_refuse() {
 /// destroyed, the real sweep destroys the flipped drawer too, prints the
 /// attestation, and exits 2 because the report carries drift; the next sweep
 /// is clean and exits 0.
-#[test]
-fn a_retention_sweep_destroys_a_drawer_flipped_out_of_its_scope_and_says_so() {
+/// A vault holding two expired drawers under a 30-day policy on `w1`, one of
+/// them with its clear `wing` mirror flipped out of the policy's scope — the
+/// drift a retention sweep reports and exits 2 on (ROADMAP O206). Returns the
+/// home and the flipped drawer's id.
+fn a_vault_with_retention_drift() -> (TempDir, String) {
     let src = TempDir::new().unwrap();
     cmd(&src).args(["init"]).assert().success();
     let docs = TempDir::new().unwrap();
@@ -2452,6 +2455,13 @@ fn a_retention_sweep_destroys_a_drawer_flipped_out_of_its_scope_and_says_so() {
     )
     .unwrap();
     drop(conn);
+    (home, flipped)
+}
+
+#[test]
+fn a_retention_sweep_destroys_a_drawer_flipped_out_of_its_scope_and_says_so() {
+    let (home, flipped) = a_vault_with_retention_drift();
+    let db = home.path().join("vaults/default/vault.db");
     let count = |id: &str| -> i64 {
         rusqlite_open(&db)
             .query_row("SELECT COUNT(*) FROM drawers WHERE id = ?1", [id], |r| {
@@ -2623,4 +2633,421 @@ fn a_replayed_policy_row_is_named_and_a_rotation_over_it_refuses() {
         .args(["verify", "--vault", "second"])
         .assert()
         .success();
+}
+
+// ---------------------------------------------------------------------------
+// ROADMAP O287: a reader that leaves never turns a run into a panic, and never
+// hides the verdict the run reached.
+//
+// Rust ignores SIGPIPE, so a write to a pipe with no reader returns EPIPE and
+// `println!` panicked on it: exit 101, a status no document defines, and the
+// verdicts printed BEFORE they are decided were lost with it. Each arm binds
+// one stream to a pipe whose reader was dropped BEFORE the spawn, so every
+// write to it fails — no race and no dependence on the pipe's buffer size —
+// and each asserts the premise that the same run into a live reader prints.
+// The counterfactual is the filing's own option, a quiet exit 0 at the first
+// broken write: it fails every verdict arm here, and today's binary fails
+// them all with 101.
+// ---------------------------------------------------------------------------
+
+/// Which of the child's streams has no reader.
+#[derive(Clone, Copy, Debug)]
+enum Closed {
+    Stdout,
+    Stderr,
+}
+
+/// Run `undercroft` with one stream bound to a pipe whose reader is already
+/// gone; the other stream is captured. `input` is written to its stdin.
+fn run_closed(home: &TempDir, args: &[&str], closed: Closed, input: &[u8]) -> std::process::Output {
+    run_closed_env(home, args, closed, input, &[])
+}
+
+/// `run_closed`, with extra environment variables.
+fn run_closed_env(
+    home: &TempDir,
+    args: &[&str],
+    closed: Closed,
+    input: &[u8],
+    envs: &[(&str, &str)],
+) -> std::process::Output {
+    use std::io::Write;
+    use std::process::Stdio;
+    let (reader, writer) = std::io::pipe().expect("a pipe");
+    drop(reader);
+    let mut c = std::process::Command::new(assert_cmd::cargo::cargo_bin("undercroft"));
+    c.env("UNDERCROFT_HOME", home.path())
+        .env_remove("UNDERCROFT_PASSPHRASE")
+        .envs(envs.iter().copied())
+        .args(args)
+        .stdin(Stdio::piped());
+    match closed {
+        Closed::Stdout => c.stdout(writer).stderr(Stdio::piped()),
+        Closed::Stderr => c.stderr(writer).stdout(Stdio::piped()),
+    };
+    let mut child = c.spawn().expect("undercroft spawns");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        // A child that exits before reading leaves this write a broken pipe
+        // of our own, which says nothing about the child.
+        let _ = stdin.write_all(input);
+    }
+    child.wait_with_output().expect("the child ends")
+}
+
+/// The exit code, with the streams on failure.
+fn code_of(out: &std::process::Output) -> i32 {
+    out.status
+        .code()
+        .unwrap_or_else(|| panic!("killed by a signal: {out:?}"))
+}
+
+fn text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Assert that no panic text reached the captured stream.
+fn no_panic(out: &std::process::Output) {
+    for s in [text(&out.stdout), text(&out.stderr)] {
+        assert!(!s.contains("panicked"), "a panic: {s}");
+        assert!(
+            !s.contains("Broken pipe"),
+            "a broken pipe was reported: {s}"
+        );
+    }
+}
+
+#[test]
+fn o287_search_into_a_closed_reader_exits_141_with_no_panic() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["remember", "the lighthouse keeper logs every passing ship"])
+        .assert()
+        .success();
+    // Premise: into a live reader the run prints, and is clean.
+    cmd(&home)
+        .args(["search", "lighthouse"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("lighthouse keeper"));
+
+    let out = run_closed(&home, &["search", "lighthouse"], Closed::Stdout, b"");
+    assert_eq!(code_of(&out), 141, "{out:?}");
+    no_panic(&out);
+    assert!(
+        out.stderr.is_empty(),
+        "the reader leaving prints nothing: {out:?}"
+    );
+
+    // A closed STDERR is no reader-left: the command printed nothing there.
+    let out = run_closed(&home, &["search", "lighthouse"], Closed::Stderr, b"");
+    assert_eq!(code_of(&out), 0, "{out:?}");
+    assert!(text(&out.stdout).contains("lighthouse keeper"), "{out:?}");
+}
+
+#[test]
+fn o287_verify_on_a_tampered_vault_exits_2_whichever_stream_is_closed() {
+    let home = TempDir::new().unwrap();
+    cmd(&home)
+        .args(["init", "--level", "hmac-only"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["remember", "the true untampered memory"])
+        .assert()
+        .success();
+    let conn = rusqlite_open(&home.path().join("vaults/default/vault.db"));
+    conn.execute("UPDATE drawers SET content = X'666f72676564'", [])
+        .unwrap();
+    drop(conn);
+    // Premise: into live readers the verdict prints, then exits 2.
+    cmd(&home)
+        .args(["verify"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("VERIFY FAILED"));
+
+    // The verdict is printed BEFORE it is decided: a panic at that print was
+    // 101, and the filed quiet exit 0 would read as VERIFY OK.
+    let out = run_closed(&home, &["verify"], Closed::Stdout, b"");
+    assert_eq!(code_of(&out), 2, "{out:?}");
+    no_panic(&out);
+    let out = run_closed(&home, &["verify"], Closed::Stderr, b"");
+    assert_eq!(code_of(&out), 2, "{out:?}");
+    assert!(text(&out.stdout).contains("VERIFY FAILED"), "{out:?}");
+    // A read on the same vault reaches the verdict at open and prints it on
+    // stderr — the final `eprintln!` that panicked under `2>&1 | head`.
+    let out = run_closed(&home, &["search", "memory"], Closed::Stderr, b"");
+    assert_eq!(code_of(&out), 2, "{out:?}");
+}
+
+/// ROADMAP O328, on a command's exit path: a DIAGNOSTIC printed beside a
+/// verdict — here the warning an unreadable `Tunes` declaration prints at
+/// open — went through `_diag`'s bare `eprintln!`, which panicked on a closed
+/// or full stderr, so a tampered vault's `verify` exited 101 and its verdict
+/// was lost. The diagnostic is a best-effort line now.
+#[test]
+fn o328_a_diagnostic_beside_a_verdict_never_loses_it() {
+    let home = TempDir::new().unwrap();
+    cmd(&home)
+        .args(["init", "--level", "hmac-only"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["remember", "the true untampered memory"])
+        .assert()
+        .success();
+    let conn = rusqlite_open(&home.path().join("vaults/default/vault.db"));
+    conn.execute("UPDATE drawers SET content = X'666f72676564'", [])
+        .unwrap();
+    drop(conn);
+    let warn = [("UNDERCROFT_SEMANTIC_FLOOR", "lots")];
+    // Premise: into live readers the warning prints, and the verdict is 2.
+    cmd(&home)
+        .env("UNDERCROFT_SEMANTIC_FLOOR", "lots")
+        .args(["verify"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("UNDERCROFT_SEMANTIC_FLOOR"))
+        .stdout(predicate::str::contains("VERIFY FAILED"));
+    let out = run_closed_env(&home, &["verify"], Closed::Stderr, b"", &warn);
+    assert_eq!(code_of(&out), 2, "{out:?}");
+    assert!(text(&out.stdout).contains("VERIFY FAILED"), "{out:?}");
+    #[cfg(target_os = "linux")]
+    {
+        let full = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .expect("premise: /dev/full exists");
+        let out = std::process::Command::new(assert_cmd::cargo::cargo_bin("undercroft"))
+            .env("UNDERCROFT_HOME", home.path())
+            .env_remove("UNDERCROFT_PASSPHRASE")
+            .env("UNDERCROFT_SEMANTIC_FLOOR", "lots")
+            .args(["verify"])
+            .stderr(full)
+            .output()
+            .unwrap();
+        assert_eq!(code_of(&out), 2, "{out:?}");
+    }
+}
+
+/// ROADMAP O328's probe P7: a server whose stderr reader went away BEFORE it
+/// started keeps serving through its start-up line and a per-request
+/// diagnostic (a missing vault assertion), and still answers `/healthz`. It
+/// panicked at its first diagnostic, the start-up line, and never served.
+#[test]
+fn o328_serve_http_whose_stderr_reader_is_gone_keeps_serving() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let (reader, writer) = std::io::pipe().expect("a pipe");
+    drop(reader);
+    let mut server = std::process::Command::new(assert_cmd::cargo::cargo_bin("undercroft"))
+        .env("UNDERCROFT_HOME", home.path())
+        .env_remove("UNDERCROFT_PASSPHRASE")
+        .env(
+            "UNDERCROFT_ASSERTION_SECRET",
+            "o328-assertion-secret-0123456789",
+        )
+        .args(["serve-http", "--port", &port.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(writer)
+        .spawn()
+        .expect("serve-http spawns");
+    let addr = format!("127.0.0.1:{port}");
+    let ready = (0..100).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::net::TcpStream::connect(&addr).is_ok()
+    });
+    let first = ready.then(|| raw_http(&addr, "GET", "/v1/vaults/default/stats", ""));
+    let second = ready.then(|| raw_http(&addr, "GET", "/v1/vaults/default/stats", ""));
+    let health = ready.then(|| raw_http(&addr, "GET", "/healthz", ""));
+    let alive = server.try_wait().expect("try_wait").is_none();
+    let _ = server.kill();
+    let status = server.wait().expect("wait");
+    assert!(
+        ready,
+        "serve-http never came up with its stderr reader gone: {status:?}"
+    );
+    // Premise: each unasserted request is refused, which is the diagnostic.
+    assert_eq!(first.as_ref().map(|r| r.0), Some(401), "{first:?}");
+    assert_eq!(second.as_ref().map(|r| r.0), Some(401), "{second:?}");
+    assert_eq!(health.as_ref().map(|r| r.0), Some(200), "{health:?}");
+    assert!(alive, "the server died after a diagnostic: {status:?}");
+}
+
+#[test]
+fn o287_a_rolled_back_vault_s_witness_check_exits_2_into_a_closed_reader() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    let w = |name: &str| home.path().join(name).to_str().unwrap().to_string();
+    for entry in [
+        "the first ledger entry names the harbour master",
+        "the second ledger entry names the pilot boat",
+    ] {
+        cmd(&home).args(["remember", entry]).assert().success();
+    }
+    let vault = home.path().join("vaults/default");
+    std::fs::copy(vault.join("vault.db"), home.path().join("db-at-2")).unwrap();
+    std::fs::copy(vault.join("vault.json"), home.path().join("json-at-2")).unwrap();
+    cmd(&home)
+        .args(["remember", "the third ledger entry names the lamp trimmer"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["witness", "emit", "--out", &w("w3.json")])
+        .assert()
+        .success();
+    // The rollback: the genuine earlier pair, restored together.
+    std::fs::copy(home.path().join("db-at-2"), vault.join("vault.db")).unwrap();
+    std::fs::copy(home.path().join("json-at-2"), vault.join("vault.json")).unwrap();
+    for f in ["vault.db-wal", "vault.db-shm"] {
+        let _ = std::fs::remove_file(vault.join(f));
+    }
+    // Premise: into a live reader the verdict prints and exits 2.
+    cmd(&home)
+        .args(["witness", "check", &w("w3.json")])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("WITNESS FAILED"));
+
+    let out = run_closed(
+        &home,
+        &["witness", "check", &w("w3.json")],
+        Closed::Stdout,
+        b"",
+    );
+    assert_eq!(code_of(&out), 2, "{out:?}");
+    no_panic(&out);
+    let out = run_closed(
+        &home,
+        &["witness", "check", &w("w3.json")],
+        Closed::Stderr,
+        b"",
+    );
+    assert_eq!(code_of(&out), 2, "{out:?}");
+}
+
+#[test]
+fn o287_a_retention_sweep_with_drift_exits_2_into_a_closed_reader() {
+    let (home, flipped) = a_vault_with_retention_drift();
+    // Premise: the dry run names the drift and exits 2.
+    cmd(&home)
+        .args(["retention", "sweep", "--dry-run"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(format!("MIRROR: {flipped}")))
+        .stdout(predicate::str::contains("NOT CLEAN"));
+
+    let out = run_closed(
+        &home,
+        &["retention", "sweep", "--dry-run"],
+        Closed::Stdout,
+        b"",
+    );
+    assert_eq!(code_of(&out), 2, "{out:?}");
+    no_panic(&out);
+    let out = run_closed(
+        &home,
+        &["retention", "sweep", "--dry-run"],
+        Closed::Stderr,
+        b"",
+    );
+    assert_eq!(code_of(&out), 2, "{out:?}");
+    assert!(text(&out.stdout).contains("NOT CLEAN"), "{out:?}");
+}
+
+#[test]
+fn o287_drawer_get_of_a_missing_id_exits_1_into_a_closed_reader() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    let id = "0123456789abcdef0123456789abcdef";
+    // Premise: into a live reader it says so, then exits 1.
+    cmd(&home)
+        .args(["drawer", "get", id])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("No drawer with id"));
+    for closed in [Closed::Stdout, Closed::Stderr] {
+        let out = run_closed(&home, &["drawer", "get", id], closed, b"");
+        assert_eq!(code_of(&out), 1, "{closed:?}: {out:?}");
+        no_panic(&out);
+    }
+}
+
+/// A stdout that fails for a reason other than its reader leaving is a run
+/// failure, named on stderr — never 141, never a panic.
+#[cfg(target_os = "linux")]
+#[test]
+fn o287_stdout_to_a_full_device_is_a_run_failure() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["remember", "the lighthouse keeper logs every passing ship"])
+        .assert()
+        .success();
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("premise: /dev/full exists");
+    let out = std::process::Command::new(assert_cmd::cargo::cargo_bin("undercroft"))
+        .env("UNDERCROFT_HOME", home.path())
+        .env_remove("UNDERCROFT_PASSPHRASE")
+        .args(["search", "lighthouse"])
+        .stdout(full)
+        .output()
+        .unwrap();
+    assert_eq!(code_of(&out), 1, "{out:?}");
+    let err = text(&out.stderr);
+    assert!(
+        err.contains("writing to standard output") && !err.contains("panicked"),
+        "{err}"
+    );
+}
+
+/// The products and the two doors that print outside a command's own body:
+/// an export whose payload never arrived is 141, not success; help into a
+/// closed reader is 141, not a quiet 0 over truncated text; and `serve-mcp`
+/// whose client has gone ends with 0, the status the same client leaving by
+/// EOF already gives.
+#[test]
+fn o287_export_help_and_serve_mcp_into_a_closed_reader() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["remember", "an exported memory"])
+        .assert()
+        .success();
+    // Premise: each prints into a live reader.
+    cmd(&home)
+        .args(["export"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"drawer\""));
+    let out = run_closed(&home, &["export"], Closed::Stdout, b"");
+    assert_eq!(code_of(&out), 141, "{out:?}");
+    no_panic(&out);
+
+    cmd(&home)
+        .args(["--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage"));
+    let out = run_closed(&home, &["--help"], Closed::Stdout, b"");
+    assert_eq!(code_of(&out), 141, "{out:?}");
+
+    let init = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n";
+    cmd(&home)
+        .args(["serve-mcp"])
+        .write_stdin(init.to_vec())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"protocolVersion\""));
+    let out = run_closed(&home, &["serve-mcp"], Closed::Stdout, init);
+    assert_eq!(code_of(&out), 0, "{out:?}");
+    no_panic(&out);
 }
