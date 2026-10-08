@@ -155,6 +155,19 @@ stateDiagram-v2
   witness, forged or not, is writes since the witness. Always read-only on
   the CLI; a rollback is exit 2 / 409 `class: "integrity"`; off MCP by
   ruling, since an agent's memory is this vault.
+- **A verdict survives its reader** (1.7.0, ROADMAP O287): every stdout
+  write the code of `undercroft` and `undercroft-orchestrator` makes goes
+  through one door that never panics (a telemetry build's
+  `UNDERCROFT_LOG_FORMAT=json` log lines are the one write that does not —
+  ROADMAP O333). A reader that leaves early is latched and the command
+  runs on to its own verdict, so `verify | head` over a tampered vault exits
+  **2**, where it used to panic with 101; the reader leaving is its own
+  documented class, **141**, never 0, and any other stdout failure is exit 1.
+  The converse is not promised: output that fits in a pipe's buffer can be
+  lost to a reader that dies after the last write with the run at 0. The
+  lines a binary prints on stderr on its way out, and every diagnostic
+  (ROADMAP O328), are best-effort writes too, so `cmd 2>&1 | head` keeps the
+  verdict and a server whose log reader went away keeps serving.
 - **Key rotation** (`undercroft vault rotate <name>`): the vault gets a
   fresh salt ⇒ fresh enc/mac/manifest keys; every sealed blob is
   re-encrypted byte-exact at the seal layer (AAD domains preserved) and
