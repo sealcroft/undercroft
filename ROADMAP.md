@@ -14391,6 +14391,183 @@ orchestrator likewise answers `/healthz`.
 C++ logger in a model build) is not a Rust print and is not counted; a telemetry build's JSON log
 layer writes STDOUT, which is O333's.
 
+### O331 — CLOSED 2026-10-08: the house-figures job reads the latest release with the job's own token, and a failed read names its HTTP status, the API's message and curl's exit code
+
+**Filed 2026-10-07, from PR sealcroft/undercroft#259's first CI run.** Run 37555908483's job `House page
+figures match the tree` failed with `FAIL  could not read the latest release tag` / `unreachable is a
+failure, not a skip`, while its other three arms passed — the tests tile read 1292 in CI too. Minutes
+later the same request from the maintainer's machine answered HTTP 200 with `v1.6.1`, and a re-run of
+the failed jobs passed (attempt 2). This PR touched none of it.
+
+**Measured over 300 `ci` runs, 2026-08-30 to 2026-10-07**: 314 attempts of the job, 8 failures. Five were
+the gate working — three stale test tiles, two release claims stale across a release window — and
+**three were this arm and nothing else** (runs 34117215716 on 2026-09-07, 34229405353 on 2026-09-08 and
+37555908483 on 2026-10-07): one attempt in a hundred, and three of the eight times the job went red.
+The window is what the API's run listing returned; the job is older (O65, 2026-08-21).
+
+**The mechanism, read from `tests/house-figures.sh` 148-156.** `REL=$(curl -sS --max-time 30
+https://api.github.com/repos/sealcroft/undercroft/releases/latest 2>/dev/null | sed … | head -1)`, and an
+empty `REL` is the failure. Three things are thrown away, and together they leave the log unable to say
+what happened:
+
+1. **The call is unauthenticated** from a hosted runner. Measured: `X-RateLimit-Limit: 60`
+   (`X-RateLimit-Resource: core`) unauthenticated, per IP; the same call through `gh` reads 5000, and the
+   job's `GITHUB_TOKEN` gets 1,000 an hour per repository (GitHub's documented figure, not measured
+   here — gate (2) below measures it). A runner's IP is shared, so another tenant's
+   requests can spend the 60 before this job asks — a cause outside this repository AND outside the
+   house page, which the gate exists to read.
+2. **The response BODY is discarded.** With `-sS` and no `-f`, an HTTP error exits **0** — measured with
+   these exact flags against a release that does not exist: exit 0, body `{"message": "Not Found", …}`.
+   A 403 rate-limit answer is the same shape, so its cause sits in a body the `sed` turns into an empty
+   string. **The task card that started this said the cause was the discarded stderr, and that was mine
+   and wrong**: for an HTTP error stderr is empty anyway.
+3. **curl's exit status is lost** inside the pipeline (the page fetch at 60-61 captures `CURL_RC`; this
+   read does not), and `2>/dev/null` discards the one place a DNS failure or a timeout would be named.
+
+So a rate limit, an API outage, a DNS failure and a malformed answer all print the same line, and that
+line is the one O65 wrote for an unreachable page. The likeliest cause of the three is the rate limit,
+and it is **unproven**: nothing in any of the three logs can say.
+
+**What does not move.** O65's premise rule — an unreachable source and an accurate page never produce the
+same verdict — and its ruled semantics: the release claims follow the latest PUBLISHED RELEASE, not the
+workspace version and not a tag, because the tree carries the next version during release prep. The
+`--update` re-check loop (`bash "$0"` up to ten times) makes the same unauthenticated call, which is fine
+for a person and is noted only because a fix should cover both.
+
+**Shape, to be confirmed at the build.** Two halves, both small:
+
+- **Report the cause.** Keep the body and the status: `curl -sS -w '%{http_code}'` (or `-D`), capture
+  curl's exit status the way the page fetch does, and on any failure print the HTTP status, the API's
+  `message` and curl's exit code beside the existing line. Uncontroversial, and it is what would settle
+  the question the next time it fires.
+- **Authenticate where a token exists.** Pass the job its own token (`env: GH_TOKEN: ${{ github.token
+  }}` under the workflow's existing `contents: read`) and send it when set — `gh api` or an
+  `Authorization` header — falling back to the unauthenticated call for a person running the script
+  locally. The token is read-only for this repository; it adds no credential for the house repository,
+  so O65's reason for never running `--update` in CI is untouched.
+
+**Rejected, with their cost.** A retry: the unauthenticated window is an hour, so a retry within a job's
+minutes cannot outlast it, and a retry that happens to pass hides the cause again. Treating a 403 as a
+skip: O65's premise rule, verbatim — an unreachable source must not read as an accurate page. Reading the
+tags instead (`git ls-remote --tags`, or the checkout's own): it answers a different question, a tag
+rather than a published release, and moving O65's ruled semantics owes a ruling of its own. Scraping
+`github.com/…/releases/latest`'s redirect: it keeps the semantics through an undocumented interface
+whose throttling is just as unstated.
+
+**Gate.** (1) An override for the release URL, beside `HOUSE_PAGE_URL`, pointed at a release that does
+not exist: exit 1, and the FAIL line names `HTTP 404` and `Not Found` — counterfactual, today's script
+prints neither. (2) The CI job's step carries the token, and its log shows the authenticated limit (not
+60) on a green run. (3) The script run locally with no token still reads the release and passes.
+
+#### BUILT 2026-10-08, the recorded shape — with three readings it left to the build, the same file's siblings, and gate (2) still to be read off CI
+
+No ruling exists for this entry and none was needed: the shape above was the plan, and every question
+the build met is answered by the doctrine. The search found O65's two rulings (keep and qualify the
+figures; keep the volatile tile) and neither is touched.
+
+**The closure stands on one reading nobody here can take.** Gate (2)'s second half — the authenticated
+limit on a green CI run — is only observable on CI, and the integrator reads it off this unit's first
+run before the merge. If that line reads `rate limit 60`, the token did not reach the read and this
+entry reopens.
+
+**What landed.** `tests/house-figures.sh` has ONE reader, `fetch`, for both network reads. It keeps
+curl's exit status, the HTTP status (`-w '%{http_code}'`, `000` when no answer arrived), the response
+headers (`-D`) and curl's own error line, each in a temporary directory removed on exit (a mixed
+`C:/` path on Git Bash, so a native curl reads it whatever `MSYS_NO_PATHCONV` says). curl runs with
+`-q`, so a caller's `~/.curlrc` cannot add `--verbose` and print the header. When the release read
+fails, its FAIL line carries the HTTP status, the API's `message` and curl's exit code —
+`could not read the latest release tag: HTTP 404 "Not Found" (curl exit 0, without a token)` — then
+the URL, curl's line and O65's existing line. Every run that reaches the release read prints a
+`release read:` line — `HTTP 200, without a token; rate limit 60 (core), 59 remaining, resets in 60
+min` — which is gate (2)'s observable on a green run. `HOUSE_RELEASE_URL` overrides the release URL
+beside `HOUSE_PAGE_URL`. `.github/workflows/ci.yml` passes `GH_TOKEN: ${{ github.token }}` on the
+step, not the job: the checkout step does not need it.
+
+**Three readings the shape left to the build.** (1) A header through curl, not `gh api`: one code
+path for both postures, curl already holds the status, headers and body this must report, and a
+person's run needs no `gh`. The token travels on curl's STDIN (`-H @-`), never its argv. (2) The
+token goes ONLY to a URL that begins `https://api.github.com/` — a credential to the host it is for,
+since the override can point anywhere; the prefix ends in the slash that closes the host, and a
+userinfo spelling (`https://api.github.com@127.0.0.1/`) does not match it, measured. (3) Inside
+GitHub Actions a read with no token FAILS, and an empty `GH_TOKEN` fails everywhere — this file's
+opaque-payload rule (an empty value is a failed interpolation), and the same rule now refuses an
+empty `HOUSE_PAGE_URL`, `HOUSE_RELEASE_URL` or `HOUSE_REPO`, which `${…:-}` had read as the default.
+The shape scopes the unauthenticated fallback to "a person running the script locally", and this is
+what holds gate (2)'s first half once this unit is gone: without it, a workflow that dropped the
+`env:` line would read unauthenticated and pass, the one-in-a-hundred failure back with nothing to
+say so.
+
+**The same file's siblings, fixed with it** (O29's sweep). The PAGE fetch discarded curl's line too
+and took any answer as a page: a 404 or a 503 reached the tile reader and failed as "the markup
+moved". It goes through `fetch` and refuses anything but a 200 as unreachable, naming the status and
+curl's line; the verdict is unchanged (it failed before), the cause is now right. The `--update`
+re-check loop sent every re-check's output to `/dev/null`, so a timeout said "page still not serving
+the new figures" over whatever had failed — a release read's 403 included; it now prints the last
+check. When nothing derivable was stale, `--update` sent the reader to "the benchmark tile, or the
+release claims" — now also to the release read and its token, whose FAIL line names the cause. And
+the strings the script quotes from the PAGE (the benchmark label, the banner, the badge) go through
+the same log-safe filter as the API's message.
+
+**Gates, executed at the final tree.** (1) Against the real API, `HOUSE_RELEASE_URL=…/releases/tags/
+v0.0.0`: exit 1, `HTTP 404 "Not Found"` on the FAIL line. Counterfactual: HEAD's script with only its
+URL made overridable (the edit asserted landed, one line of diff): the two generic lines, neither
+string. (3) The real network with no token: green, in a Linux container (curl 8.14.1, mawk) and on
+this Windows host (Git Bash, curl 8.21.0 over Schannel), the latter also under `MSYS_NO_PATHCONV=1`,
+where a copy without the mixed path fails at curl exit 23. (2) is CI's: the step carries the token —
+`ci.yml` parsed with a YAML parser, the step's `env` holds `GH_TOKEN`, eleven jobs and `verdict`'s ten
+needs unchanged — and the limit is read as above.
+
+**A stub matrix**, both trees, 27 cases each, ad hoc and not in the tree (nothing in the battery runs
+this script, and a harness nothing runs would rot): a Python stub serving the page over http and
+GitHub's API over https under a throwaway certificate, `api.github.com` mapped to loopback, a dummy
+token (`o331-dummy-not-a-token`, never a credential). The fixed script names each cause: a 403 rate
+limit (GitHub's message, `rate limit 60 (core), 0 remaining`), 404, 401 `Bad credentials`, 301 `Moved
+Permanently`, a 200 with no `tag_name`, a DNS failure (curl 6 and its line), a refused connection (7)
+and a timeout (28, after 30 s); a page 404, 503 and DNS failure; an empty token, Actions with no
+token, and Actions with an empty token (one failure, not two); each empty override. The stub saw
+exactly the dummy bearer under `https://api.github.com/` (limit 1000, green), and never the token over
+plain http or under the userinfo spelling, where curl sends the userinfo itself as Basic credentials.
+HEAD's script printed the same two lines for all eight release causes, read a page 404 and 503 as
+"the markup moved", printed a page DNS failure with its exit code but not curl's line, never sent a
+token, passed inside Actions with none, and read every empty override as the default. **The token
+reaches no command line**: with the token handed over by the environment alone, a scan of every
+`/proc/*/cmdline` through a five-second authenticated read saw it on none, six runs of six; its
+premise, a curl holding the token on its argv, was named. **A hostile answer cannot write the log**:
+a message carrying ESC, BEL, BS, a raw line break and `::error::`, and a page whose benchmark label
+carries a lone carriage return before `::error::`, left no control byte and no line opening with `::`
+in the fixed script's output; HEAD's printed the carriage return; both checks fire on a planted
+sample. A `verbose` line in a caller's `~/.curlrc` reached the FAIL detail in a copy without `-q`
+and not in the fixed script. Against the real API the dummy token answers 401 `Bad credentials` on
+both curls — the header arrives through stdin on Linux and on Windows. `--update` through a fake `gh`
+(no repository read or written): a page that deploys reads "live and correct after 20s", both trees;
+one that never deploys, under a 403 release, ends after about 200 s printing the last check, its 403
+line included, where HEAD's says "page still not serving the new figures after 200s" and nothing
+else; with every tile current and only the release read failing, it names the release read where
+HEAD's named the tiles alone.
+
+**An independent review of the build found ten things, all mine, each fixed before this landed**: the
+closure was stated before gate (2) could run (now stated as above); a count read "nine release
+causes" over eight, and the CHANGELOG said HEAD printed a page DNS failure as the generic line, which
+it did not; the page strings were printed unfiltered beside a comment claiming every network string
+was; the `--update` "nothing derivable" message named the wrong fix; the CHANGELOG missed two
+contributor-facing effects (below); a comment said a dropped token would show "as a stale page";
+`MSYS_NO_PATHCONV=1` broke the temporary paths and a `~/.curlrc` could add `--verbose` (both closed
+above), and BSD `tr`/`sed` could stop at an invalid byte (`LC_ALL=C`); an empty override read as the
+default; two sentences overstated ("every run", a quoted line missing its reset); and the new
+`CLAUDE.md` sentence made "This sentence said" point at the wrong sentence. Two more were mine and
+caught by my own premises: the first script moving this entry ended it at its own `####` subsection
+and left the subsection under O330 (restored from the copy and redone), and the first argv harness
+put the token on `env`'s argv itself, which its scan caught once in two runs (redone with the token
+in the environment alone).
+
+**What does not move.** No cargo test and no e2e suite reaches this script — it is CI's alone (O65)
+— so no published figure moves; the "real corpus" here is the live page and the real API, both
+driven. Nothing an operator runs changes, and no `UPGRADING.md` entry. What a contributor runs
+changes: the script fails with an empty `GH_TOKEN` or an empty override, inside any GitHub Actions
+workflow that runs it without a token, and with an expired `GH_TOKEN` exported (401 where it used to
+pass unauthenticated) — and `gh` already prefers an exported `GH_TOKEN` to its stored login, so one
+exported for this read is also what `--update`'s write uses.
+
 ## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
@@ -29871,6 +30048,16 @@ than to remove it:
 
 Verified in both directions before shipping: a deliberately staled copy fails
 the gate, the patched output passes it, and only the two derivable tiles move.
+
+**Recorded beside, 2026-10-08 (O331):** the release read "via the public API"
+was an unauthenticated call from a shared runner IP, and three of the job's
+eight red runs to 2026-10-07 were that read alone, printed as the line written
+above for an unreachable page with its cause discarded — most likely the
+60-an-hour limit, which nothing logged could prove. It now reads with the
+job's own token,
+and a failed read names its HTTP status, the API's message and curl's exit
+code. The semantics ruled here — the latest PUBLISHED RELEASE, an unreachable
+source a failure — are unchanged.
 
 **The original filing follows.** ↓
 
@@ -46703,7 +46890,11 @@ O331's read.
 through `//`; it finds a ruleset by name; it reads `/rules/branches/main`; it falls back to an
 unauthenticated read on a 403.
 
-**Relations:** shares a diff surface with O331 — one authenticated reader of GitHub's API, which keeps the status and the message, serves both jobs.
+**Recorded beside, 2026-10-08, at train 1's integration.** This entry declared a relation with O331 here
+(one authenticated reader of GitHub's API, which keeps the status and the message, serving both jobs).
+O331 closed under 1.7.0 the same day, so the relation is no longer an edge between open entries and is
+no longer declared: the reader it names exists now, `fetch` in `tests/house-figures.sh`, and the ruling
+above ("One reader, shared with O331's arm") is what this entry's build owes it.
 
 **Relations:** called by O310 — the release guard runs this entry's tag-ruleset decision before anything publishes, and its first-parent verdict leans on ruleset (A) below.
 
@@ -47266,76 +47457,6 @@ restated reason gets this file's backwards test.
 **Version class.** None for the recommended answer: governance text. The rejected option would change
 documented install contracts and owe `UPGRADING.md` and every install document.
 
-### O331 — the house-figures job reads the latest release unauthenticated and throws away why it failed, so a rate limit fails CI as a stale page
-
-**Filed 2026-10-07, from PR sealcroft/undercroft#259's first CI run.** Run 37555908483's job `House page
-figures match the tree` failed with `FAIL  could not read the latest release tag` / `unreachable is a
-failure, not a skip`, while its other three arms passed — the tests tile read 1292 in CI too. Minutes
-later the same request from the maintainer's machine answered HTTP 200 with `v1.6.1`, and a re-run of
-the failed jobs passed (attempt 2). This PR touched none of it.
-
-**Measured over 300 `ci` runs, 2026-08-30 to 2026-10-07**: 314 attempts of the job, 8 failures. Five were
-the gate working — three stale test tiles, two release claims stale across a release window — and
-**three were this arm and nothing else** (runs 34117215716 on 2026-09-07, 34229405353 on 2026-09-08 and
-37555908483 on 2026-10-07): one attempt in a hundred, and three of the eight times the job went red.
-The window is what the API's run listing returned; the job is older (O65, 2026-08-21).
-
-**The mechanism, read from `tests/house-figures.sh` 148-156.** `REL=$(curl -sS --max-time 30
-https://api.github.com/repos/sealcroft/undercroft/releases/latest 2>/dev/null | sed … | head -1)`, and an
-empty `REL` is the failure. Three things are thrown away, and together they leave the log unable to say
-what happened:
-
-1. **The call is unauthenticated** from a hosted runner. Measured: `X-RateLimit-Limit: 60`
-   (`X-RateLimit-Resource: core`) unauthenticated, per IP; the same call through `gh` reads 5000, and the
-   job's `GITHUB_TOKEN` gets 1,000 an hour per repository (GitHub's documented figure, not measured
-   here — gate (2) below measures it). A runner's IP is shared, so another tenant's
-   requests can spend the 60 before this job asks — a cause outside this repository AND outside the
-   house page, which the gate exists to read.
-2. **The response BODY is discarded.** With `-sS` and no `-f`, an HTTP error exits **0** — measured with
-   these exact flags against a release that does not exist: exit 0, body `{"message": "Not Found", …}`.
-   A 403 rate-limit answer is the same shape, so its cause sits in a body the `sed` turns into an empty
-   string. **The task card that started this said the cause was the discarded stderr, and that was mine
-   and wrong**: for an HTTP error stderr is empty anyway.
-3. **curl's exit status is lost** inside the pipeline (the page fetch at 60-61 captures `CURL_RC`; this
-   read does not), and `2>/dev/null` discards the one place a DNS failure or a timeout would be named.
-
-So a rate limit, an API outage, a DNS failure and a malformed answer all print the same line, and that
-line is the one O65 wrote for an unreachable page. The likeliest cause of the three is the rate limit,
-and it is **unproven**: nothing in any of the three logs can say.
-
-**What does not move.** O65's premise rule — an unreachable source and an accurate page never produce the
-same verdict — and its ruled semantics: the release claims follow the latest PUBLISHED RELEASE, not the
-workspace version and not a tag, because the tree carries the next version during release prep. The
-`--update` re-check loop (`bash "$0"` up to ten times) makes the same unauthenticated call, which is fine
-for a person and is noted only because a fix should cover both.
-
-**Shape, to be confirmed at the build.** Two halves, both small:
-
-- **Report the cause.** Keep the body and the status: `curl -sS -w '%{http_code}'` (or `-D`), capture
-  curl's exit status the way the page fetch does, and on any failure print the HTTP status, the API's
-  `message` and curl's exit code beside the existing line. Uncontroversial, and it is what would settle
-  the question the next time it fires.
-- **Authenticate where a token exists.** Pass the job its own token (`env: GH_TOKEN: ${{ github.token
-  }}` under the workflow's existing `contents: read`) and send it when set — `gh api` or an
-  `Authorization` header — falling back to the unauthenticated call for a person running the script
-  locally. The token is read-only for this repository; it adds no credential for the house repository,
-  so O65's reason for never running `--update` in CI is untouched.
-
-**Rejected, with their cost.** A retry: the unauthenticated window is an hour, so a retry within a job's
-minutes cannot outlast it, and a retry that happens to pass hides the cause again. Treating a 403 as a
-skip: O65's premise rule, verbatim — an unreachable source must not read as an accurate page. Reading the
-tags instead (`git ls-remote --tags`, or the checkout's own): it answers a different question, a tag
-rather than a published release, and moving O65's ruled semantics owes a ruling of its own. Scraping
-`github.com/…/releases/latest`'s redirect: it keeps the semantics through an undocumented interface
-whose throttling is just as unstated.
-
-**Gate.** (1) An override for the release URL, beside `HOUSE_PAGE_URL`, pointed at a release that does
-not exist: exit 1, and the FAIL line names `HTTP 404` and `Not Found` — counterfactual, today's script
-prints neither. (2) The CI job's step carries the token, and its log shows the authenticated limit (not
-60) on a green run. (3) The script run locally with no token still reads the release and passes.
-
-**Relations:** shares a diff surface with O324 — one authenticated reader of GitHub's API, which keeps the status and the message, serves both jobs.
-
 ### O332 — the harness's curl and printf producers meet O287's race: fifteen status-consuming pipelines from a producer that is not one of the binaries into a reader that may leave first
 
 **Filed 2026-10-07 by O287's build; counted, not measured.** O287's ruling scoped its harness half to
@@ -47357,6 +47478,12 @@ printf of a captured string at `context-check.sh` 172, 191 and 201, `e2e-backend
 already captured, and a captured body for curl; then widen the preflight's producer set to curl and
 printf, with a probe for each. **Gate**: the preflight refuses a status-consuming curl or printf
 pipeline into an early reader, its premise refusing a probe line per producer.
+
+**Recorded beside, 2026-10-08 (O331).** `house-figures.sh`'s three moved to 239, 334 and 341, and
+O331 added no producer pipeline into an early reader: curl writes its body and headers to files, and
+its one pipeline (`printf` feeding the token to `curl -H @-`) ends in curl, which reads all of its
+stdin and whose status is the one read. That script sets `-u` and not `pipefail`, so today each of the three reads
+grep's status, never printf's; it joins the race only if the script takes `pipefail`.
 
 ### O333 — on a telemetry build, `UNDERCROFT_LOG_FORMAT=json` writes its log lines to STDOUT, into the MCP stream and an export's payload, and a published diagram says stdout is where they go
 
