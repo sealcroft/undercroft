@@ -22,11 +22,26 @@
 # docs/remote-server.md has the command. If you change ExecStart to serve a
 # vault other than `default` (`--vault`), remove ExecStartPre: it would create
 # an empty `default` beside it.
+#
+# RequiresMountsFor= is what keeps that init from minting a SECOND
+# installation. If /var/lib/undercroft is its own mount and that mount is not
+# there yet, init would find an empty directory, write a new master.key and
+# an empty `default` vault into the directory beneath the mount point, and the
+# server would serve that instead of yours. With it, systemd starts the mount
+# first, or does not start the unit. It covers mounts systemd knows of (an
+# fstab entry or a .mount unit); a directory mounted by hand after boot is not
+# one, so mount it before you start the unit. The data directory is the one
+# UNDERCROFT_HOME names below: set it here, not in the environment file, or
+# the mount this requires is not the one the server writes to.
+#
+# With UNDERCROFT_PASSPHRASE set, every start derives the master key twice,
+# once for init and once for the server (Argon2id, 64 MiB).
 
 [Unit]
 Description=Undercroft remote MCP server
 After=network-online.target
 Wants=network-online.target
+RequiresMountsFor=/var/lib/undercroft
 
 [Service]
 Type=simple

@@ -2568,13 +2568,25 @@ echo "      root-only PKI tree, across:$CA_FILES"
 #            fine), with no `;`, `|`, `&` or `>` before the `&&` — so a failed
 #            init stops the command and its error reaches the log. A command
 #            written as a YAML list (`- serve-http`, the pre-O172 recipe) has
-#            no init on its line and fails.
-#   systemd  the unit has an `ExecStartPre=` that runs `init` through the SAME
-#            executable its `ExecStart=` runs, with no prefix: `-` ignores
-#            init's failure (systemd's spelling of `|| true`), and `+` or `!`
-#            would run it with privileges the server does not have, writing a
-#            key file the unit's user might not read. `--level <word>` is
-#            allowed after `init`, nothing else.
+#            no init on its line and fails. `--data-dir` on the line fails:
+#            the data directory is the service's UNDERCROFT_HOME, and a flag
+#            on one of the two commands points them at different ones.
+#   systemd  the unit is read as systemd reads it: `[Section]` headers, blanks
+#            around `=`, indentation, `\` continuations, `#`/`;` comments, and
+#            an empty `ExecStartPre=` resetting the list before it. Every
+#            active line that names `serve-http` must be an `ExecStart=` in
+#            `[Service]` with no `--data-dir`, and `[Service]` must keep an
+#            `ExecStartPre=` that runs `init` through the SAME executable,
+#            with no prefix: `-` ignores init's failure (systemd's spelling of
+#            `|| true`), and `+` or `!` would run it with privileges the
+#            server does not have, writing a key file the unit's user might
+#            not read. `--level <word>` is allowed after `init`, nothing else.
+#            And the data directory must be declared in `[Service]`
+#            (`Environment=UNDERCROFT_HOME=<dir>`) and its mount required in
+#            `[Unit]` (`RequiresMountsFor=<dir>`): an init that starts before
+#            the data directory's mount finds it empty and mints a second
+#            installation beneath the mount point, which the server then
+#            serves (the independent review of O200's first build).
 #
 # SCOPE, stated rather than implied: tracked `.yml`, `.yaml` and `.service`
 # files under `deploy/` whose active lines (comments aside) run `serve-http`,
@@ -2583,85 +2595,173 @@ echo "      root-only PKI tree, across:$CA_FILES"
 # hand), and not `serve-mcp`, which only the root `docker-compose.yml` test
 # harness runs. A compose command split across a block scalar's lines is
 # refused rather than read: a false refusal by design, never a false pass.
-# Host-side beside the CA-pin preflight, because it asks `git ls-files`.
+# What the systemd half cannot see: an UNDERCROFT_HOME the unit's environment
+# FILE sets (it overrides `Environment=`, and the file is the host's, not the
+# repo's), and a mount made outside systemd, which RequiresMountsFor= does not
+# know of. Host-side beside the CA-pin preflight, because it asks `git grep`.
 echo "═══ preflight: every shipped serve-http recipe runs init first ═══"
 # init_first_findings <file> — one line per command in <file> that starts
 # `serve-http`: `ok|<line>` or `bad|<line>|<why>`. Prints nothing for a file
 # that runs no `serve-http`, which is how the selector below tells a recipe.
 init_first_findings() {
-  local f="$1" n=0 line exe pre lvl found
-  case "$f" in
-    *.service)
-      while IFS= read -r line; do
-        n=$((n + 1))
-        line="${line%$'\r'}"
-        case "$line" in ExecStart=*serve-http*) ;; *) continue ;; esac
-        exe="${line#ExecStart=}"
-        while :; do case "$exe" in [-+!@:]*) exe="${exe#?}" ;; *) break ;; esac; done
-        exe="${exe%%[[:space:]]*}"
-        found=""
-        while IFS= read -r pre; do
-          pre="${pre%$'\r'}"
-          if [ "$pre" = "ExecStartPre=$exe init" ]; then found=1; fi
-          case "$pre" in
-            "ExecStartPre=$exe init --level "?*)
-              lvl="${pre#"ExecStartPre=$exe init --level "}"
-              case "$lvl" in *[!a-z-]*) ;; *) found=1 ;; esac ;;
-          esac
-        done < "$f"
-        if [ -n "$found" ]; then
-          echo "ok|$n"
-        else
-          echo "bad|$n|no unprefixed 'ExecStartPre=$exe init' runs before it"
-        fi
-      done < "$f" ;;
-    *)
-      while IFS= read -r line; do
-        n=$((n + 1))
-        line="${line%$'\r'}"
-        case "${line#"${line%%[![:space:]]*}"}" in "#"*) continue ;; esac
-        case "$line" in *serve-http*) ;; *) continue ;; esac
-        if printf '%s\n' "$line" |
-             grep -qE 'undercroft[[:space:]]+init[^;|&>]*&&[[:space:]]*(exec[[:space:]]+)?undercroft[[:space:]]+serve-http'; then
-          echo "ok|$n"
-        else
-          echo "bad|$n|serve-http does not run behind 'undercroft init &&' on this line"
-        fi
-      done < "$f" ;;
+  case "$1" in
+    *.service) unit_init_findings "$1" ;;
+    *) compose_init_findings "$1" ;;
   esac
+}
+compose_init_findings() {
+  local f="$1" n=0 line
+  while IFS= read -r line; do
+    n=$((n + 1))
+    line="${line%$'\r'}"
+    case "${line#"${line%%[![:space:]]*}"}" in "#"*) continue ;; esac
+    case "$line" in *serve-http*) ;; *) continue ;; esac
+    case "$line" in
+      *--data-dir*)
+        echo "bad|$n|names --data-dir, so init and serve-http may open different data directories"
+        continue ;;
+    esac
+    if printf '%s\n' "$line" |
+         grep -qE 'undercroft[[:space:]]+init[^;|&>]*&&[[:space:]]*(exec[[:space:]]+)?undercroft[[:space:]]+serve-http'; then
+      echo "ok|$n"
+    else
+      echo "bad|$n|serve-http does not run behind 'undercroft init &&' on this line"
+    fi
+  done < "$f"
+}
+# unit_init_findings <unit file>: one verdict per active line naming
+# `serve-http`, the unit read as systemd reads it (see the comment above).
+unit_init_findings() {
+  local f="$1" n=0 start=0 raw buf="" line key val sec="" tok home="" reqs=""
+  local -a pres=() toks=() s_n=() s_sec=() s_key=() s_val=()
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    n=$((n + 1))
+    raw="${raw%$'\r'}"
+    [ -z "$buf" ] && start=$n
+    case "$raw" in *\\) buf="$buf${raw%\\} "; continue ;; esac
+    line="$buf$raw"; buf=""
+    line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
+    case "$line" in ""|"#"*|";"*) continue ;; "["*"]") sec="$line"; continue ;; esac
+    key=""; val="$line"
+    case "$line" in
+      *=*)
+        key="${line%%=*}"; key="${key%"${key##*[![:space:]]}"}"
+        val="${line#*=}"; val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}" ;;
+    esac
+    case "$line" in
+      *serve-http*) s_n+=("$start"); s_sec+=("$sec"); s_key+=("$key"); s_val+=("$val") ;;
+    esac
+    case "$sec|$key" in
+      "[Service]|ExecStartPre") if [ -z "$val" ]; then pres=(); else pres+=("$val"); fi ;;
+      "[Service]|Environment")
+        read -ra toks <<< "$val"
+        for tok in "${toks[@]}"; do
+          tok="${tok#\"}"; tok="${tok%\"}"
+          case "$tok" in UNDERCROFT_HOME=*) home="${tok#UNDERCROFT_HOME=}" ;; esac
+        done ;;
+      "[Unit]|RequiresMountsFor") if [ -z "$val" ]; then reqs=""; else reqs="$reqs $val"; fi ;;
+    esac
+  done < "$f"
+  local i exe found why p lvl
+  for i in "${!s_n[@]}"; do
+    why=""
+    if [ "${s_sec[i]}" != "[Service]" ] || [ "${s_key[i]}" != ExecStart ]; then
+      why="serve-http outside an ExecStart= in [Service]"
+    else
+      exe="${s_val[i]}"
+      while :; do case "$exe" in [-+!@:]*) exe="${exe#?}" ;; *) break ;; esac; done
+      exe="${exe%%[[:space:]]*}"
+      case "${s_val[i]}" in
+        *--data-dir*) why="names --data-dir, so init and serve-http may open different data directories" ;;
+      esac
+      found=""
+      for p in "${pres[@]}"; do
+        if [ "$p" = "$exe init" ]; then found=1; fi
+        case "$p" in
+          "$exe init --level "?*)
+            lvl="${p#"$exe init --level "}"
+            case "$lvl" in *[!a-z-]*) ;; *) found=1 ;; esac ;;
+        esac
+      done
+      [ -n "$found" ] || why="${why:+$why; }no unprefixed 'ExecStartPre=$exe init' in [Service] (an empty ExecStartPre= resets the list)"
+      if [ -z "$home" ]; then
+        why="${why:+$why; }no Environment=UNDERCROFT_HOME=<dir> in [Service], so the directory init writes is undeclared"
+      else
+        case " $reqs " in
+          *" $home "*) ;;
+          *) why="${why:+$why; }no RequiresMountsFor=$home in [Unit], so an init before that mount mints a second installation beneath it" ;;
+        esac
+      fi
+    fi
+    if [ -n "$why" ]; then echo "bad|${s_n[i]}|$why"; else echo "ok|${s_n[i]}"; fi
+  done
 }
 # PREMISE PROBE, both directions, before any file is believed: the judge must
 # refuse the shapes that shipped broken and accept the shapes that fixed them.
 # A judge that refuses everything and one that accepts everything are both
 # caught here, and the fixtures are the shipped lines verbatim — the pre-O172
 # compose command, O199's command, and O200's unit without its init.
+#
+# Each broken unit fixture is a correct unit with ONE defect, and the probe
+# requires the refusal to name that defect: a fixture refused for some other
+# reason (it lacked a section, say) would otherwise pass while proving nothing
+# about the shape it exists for. The spellings are the independent review's
+# (2026-10-08): blanks around `=`, indentation and a `\` continuation were not
+# selected at all, and `--data-dir`, an emptied `ExecStartPre=` and an init in
+# `[Install]` were accepted.
 IF_TMP="$(mktemp -d 2>/dev/null || { mkdir -p "${TMPDIR:-/tmp}/initfirst.$$" && echo "${TMPDIR:-/tmp}/initfirst.$$"; })"
-printf 'services:\n  undercroft:\n    command:\n      - serve-http\n      - --host\n      - "0.0.0.0"\n' \
-  > "$IF_TMP/bad-pre-o172.yml"
-printf '    command: ["undercroft init 2>/dev/null || true; exec undercroft serve-http --host 0.0.0.0 --port 8765"]\n' \
-  > "$IF_TMP/bad-o199.yml"
-printf 'ExecStart=/usr/local/bin/undercroft serve-http --host 0.0.0.0 --port 8765\n' \
-  > "$IF_TMP/bad-pre-o200.service"
-printf 'ExecStartPre=-/usr/local/bin/undercroft init\nExecStart=/usr/local/bin/undercroft serve-http --port 8765\n' \
-  > "$IF_TMP/bad-ignored-init.service"
-printf 'ExecStartPre=/opt/other/undercroft init\nExecStart=/usr/local/bin/undercroft serve-http --port 8765\n' \
-  > "$IF_TMP/bad-other-binary.service"
-printf '    command: ["undercroft init && exec undercroft serve-http --host 0.0.0.0 --port 8765"]\n' \
-  > "$IF_TMP/good.yml"
-printf 'ExecStartPre=/usr/local/bin/undercroft init\nExecStart=/usr/local/bin/undercroft serve-http --port 8765\n' \
-  > "$IF_TMP/good.service"
+declare -A IF_WANT_WHY=()
+if_fx() { # if_fx <file name> <what the refusal must name, or "" to accept> <content, %b escapes>
+  printf '%b' "$3" > "$IF_TMP/$1"; IF_WANT_WHY[$1]="$2"
+}
+IF_U='[Unit]\nRequiresMountsFor=/var/lib/uc\n[Service]\nEnvironment=UNDERCROFT_HOME=/var/lib/uc\n'
+IF_PRE='ExecStartPre=/usr/local/bin/undercroft init\n'
+IF_RUN='ExecStart=/usr/local/bin/undercroft serve-http --port 8765\n'
+IF_NOPRE="no unprefixed 'ExecStartPre="
+if_fx bad-pre-o172.yml "does not run behind" \
+  'services:\n  undercroft:\n    command:\n      - serve-http\n      - --host\n      - "0.0.0.0"\n'
+if_fx bad-o199.yml "does not run behind" \
+  '    command: ["undercroft init 2>/dev/null || true; exec undercroft serve-http --host 0.0.0.0 --port 8765"]\n'
+if_fx bad-datadir.yml "--data-dir" \
+  '    command: ["undercroft init --data-dir /x && exec undercroft serve-http"]\n'
+if_fx bad-pre-o200.service "$IF_NOPRE" "$IF_U$IF_RUN"
+if_fx bad-ignored-init.service "$IF_NOPRE" "${IF_U}ExecStartPre=-/usr/local/bin/undercroft init\n$IF_RUN"
+if_fx bad-other-binary.service "$IF_NOPRE" "${IF_U}ExecStartPre=/opt/other/undercroft init\n$IF_RUN"
+if_fx bad-spaced.service "$IF_NOPRE" "${IF_U}ExecStart = /usr/local/bin/undercroft serve-http --port 8765\n"
+if_fx bad-indented.service "$IF_NOPRE" "${IF_U}  ExecStart=/usr/local/bin/undercroft serve-http --port 8765\n"
+if_fx bad-continued.service "$IF_NOPRE" "${IF_U}ExecStart=/usr/local/bin/undercroft \\\\\n  serve-http --port 8765\n"
+if_fx bad-reset.service "$IF_NOPRE" "$IF_U${IF_PRE}ExecStartPre=\n$IF_RUN"
+if_fx bad-install.service "$IF_NOPRE" "$IF_U$IF_RUN[Install]\n$IF_PRE"
+if_fx bad-datadir.service "--data-dir" "$IF_U${IF_PRE}ExecStart=/usr/local/bin/undercroft --data-dir /srv/x serve-http\n"
+if_fx bad-no-home.service "no Environment=UNDERCROFT_HOME" "[Unit]\nRequiresMountsFor=/var/lib/uc\n[Service]\n$IF_PRE$IF_RUN"
+if_fx bad-no-mount.service "no RequiresMountsFor=" "[Unit]\n[Service]\nEnvironment=UNDERCROFT_HOME=/var/lib/uc\n$IF_PRE$IF_RUN"
+if_fx bad-parent-mount.service "no RequiresMountsFor=" \
+  "[Unit]\nRequiresMountsFor=/var/lib\n[Service]\nEnvironment=UNDERCROFT_HOME=/var/lib/uc\n$IF_PRE$IF_RUN"
+if_fx bad-mount-reset.service "no RequiresMountsFor=" \
+  "[Unit]\nRequiresMountsFor=/var/lib/uc\nRequiresMountsFor=\n[Service]\nEnvironment=UNDERCROFT_HOME=/var/lib/uc\n$IF_PRE$IF_RUN"
+if_fx bad-outside.service "outside an ExecStart=" \
+  "$IF_U$IF_PRE${IF_RUN}ExecStartPost=/usr/local/bin/undercroft serve-http --port 1\n"
+if_fx good.yml "" '    command: ["undercroft init && exec undercroft serve-http --host 0.0.0.0 --port 8765"]\n'
+if_fx good.service "" "$IF_U$IF_PRE$IF_RUN"
+if_fx good-spelled.service "" \
+  "; a comment\n[Unit]\nRequiresMountsFor = /srv /var/lib/uc\n\n[Service]\n  Environment=\"A=b\" \"UNDERCROFT_HOME=/var/lib/uc\"\n  ExecStart = /usr/local/bin/undercroft serve-http --port 8765\n  ExecStartPre = /usr/local/bin/undercroft init --level hmac-only\n"
 IF_PROBE=""
-for f in "$IF_TMP"/bad-*; do
-  r="$(init_first_findings "$f")"
-  case "$r" in *"bad|"*) ;; *) IF_PROBE="$IF_PROBE\n        $(basename "$f") was not refused (got: ${r:-nothing})" ;; esac
-done
-for f in "$IF_TMP"/good.*; do
-  r="$(init_first_findings "$f")"
-  case "$r" in
-    *"bad|"*|"") IF_PROBE="$IF_PROBE\n        $(basename "$f") was not accepted (got: ${r:-nothing})" ;;
-  esac
+for f in $(printf '%s\n' "${!IF_WANT_WHY[@]}" | sort); do
+  r="$(init_first_findings "$IF_TMP/$f")"
+  want="${IF_WANT_WHY[$f]}"
+  if [ -n "$want" ]; then
+    case "$r" in
+      *"bad|"*"$want"*) ;;
+      *) IF_PROBE="$IF_PROBE\n        $f was not refused for '$want' (got: ${r:-nothing})" ;;
+    esac
+  else
+    case "$r" in
+      *"bad|"*|"") IF_PROBE="$IF_PROBE\n        $f was not accepted (got: ${r:-nothing})" ;;
+    esac
+  fi
 done
 rm -rf "$IF_TMP"
+unset -f if_fx
 if [ -n "$IF_PROBE" ]; then
   echo "FAIL  premise: the init-first judge does not tell the shipped broken shapes"
   echo "      from the fixed ones, so a clean scan below would mean nothing:"
@@ -2708,11 +2808,14 @@ for IF_WANT in deploy/docker-compose.server.yml \
   esac
 done
 if [ -n "$IF_BAD" ]; then
-  echo "FAIL  a shipped recipe starts serve-http without running init first, or"
-  echo "      runs init in a way that hides its failure (ROADMAP O199, O200):"
+  echo "FAIL  a shipped recipe starts serve-http without running init first, runs"
+  echo "      init in a way that hides its failure, or lets init run before its data"
+  echo "      directory is mounted (ROADMAP O199, O200):"
   printf '%b\n' "${IF_BAD#\\n}"
   echo "      Compose: 'undercroft init && exec undercroft serve-http …'."
-  echo "      systemd: 'ExecStartPre=<the ExecStart executable> init', unprefixed."
+  echo "      systemd: 'ExecStartPre=<the ExecStart executable> init', unprefixed, in"
+  echo "      [Service] with Environment=UNDERCROFT_HOME=<dir>, and RequiresMountsFor=<dir>"
+  echo "      in [Unit]."
   echo ""
   echo "BATTERY FAILED — preflight"
   exit 1

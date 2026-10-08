@@ -16,9 +16,11 @@
   Every start runs `undercroft init` first (`ExecStartPre`), as the unit's
   user with its data directory and environment file, so the first start
   creates a sealed `default` vault and a failed init stops the start with its
-  own error in the journal. For another level, create the vault before the
-  first start in that same identity and environment (`docs/remote-server.md`
-  has the command).
+  own error in the journal. `RequiresMountsFor=/var/lib/undercroft` keeps that
+  init from running before the data directory's mount, which would mint a
+  second installation beneath the mount point. For another level, create the
+  vault before the first start in that same identity and environment
+  (`docs/remote-server.md` has the command).
 - `undercroft-daemon.service` — per-user auto-save daemon (periodic
   `undercroft daemon run` sweep of `~/.claude/projects`).
 - `server.env.example` — environment template; copy to `.env` / 

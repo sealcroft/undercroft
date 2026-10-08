@@ -452,6 +452,34 @@ reader left": it is not a failed run to retry, because a retry of a write that
 committed files it again. `undercroft config check` cannot detect this:
 nothing in an environment predicts a reader closing.
 
+### the systemd unit runs `init` first and waits for its data directory's mount (O200)
+
+**Affects:** an installation that copies the new
+`deploy/undercroft-server.service` over its old one. An installed unit does
+not change on its own.
+
+**Symptom:** if `/var/lib/undercroft` is its own mount and that mount fails at
+boot, `undercroft-server` stays failed with a dependency error and is not
+restarted. The old unit kept restarting every three seconds and came up by
+itself once someone mounted the directory by hand. On a start that finds no
+`default` vault, the unit now creates a sealed one and serves it, where the old
+unit exited `vault "default" not found`.
+
+**Cause:** every start runs `undercroft init` first (`ExecStartPre`), and the
+unit declares `RequiresMountsFor=/var/lib/undercroft` so that init never runs
+against the empty directory beneath a mount that is not up yet. Without that,
+init would write a new master key and an empty `default` vault there and the
+server would serve them in place of your installation — measured under systemd
+252, with the directive and without (ROADMAP O200).
+
+**Fix:** mount the directory, then `systemctl start undercroft-server`. Mount
+it through an fstab entry or a `.mount` unit so systemd orders the two; a
+directory mounted by hand after boot is invisible to `RequiresMountsFor=`.
+Keep `UNDERCROFT_HOME` in the unit, not in `/etc/undercroft/server.env`, so
+the directory the unit waits for is the one it writes to. To serve a vault
+other than `default`, remove `ExecStartPre`. `undercroft config check` cannot
+detect any of this: it is the unit's behaviour, not a declaration.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

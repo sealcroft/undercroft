@@ -79,6 +79,17 @@ is root-owned `0600`, so `sudo -u undercroft` could not source it. A unit
 edited to serve a vault other than `default` (`--vault`) should drop its
 `ExecStartPre`, which would otherwise create an empty `default` beside it.
 
+The unit also declares `RequiresMountsFor=/var/lib/undercroft`. If the data
+directory is its own mount, an `init` that ran before it would find the
+directory empty and create a second installation beneath the mount point — a
+new `master.key` and an empty `default` vault — and the server would serve
+that one. With the directive, systemd mounts the directory first, or does not
+start the unit. It knows only mounts it manages (an fstab entry or a `.mount`
+unit), so a directory mounted by hand must be mounted before the unit starts.
+Set `UNDERCROFT_HOME` in the unit, never in the environment file, so the
+directory the unit requires is the one it writes to. Under a passphrase every
+start derives the master key twice, once for `init` and once for the server.
+
 ## The optional Qdrant mirror
 
 The recipe also runs Qdrant, behind its own TLS terminator (`qdrant-tls`).

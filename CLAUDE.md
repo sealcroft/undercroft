@@ -2347,9 +2347,13 @@ Consequences that are binding, not advisory:
   a failed init behind serve-http's `vault "default" not found`, and
   `deploy/undercroft-server.service` had no `init` at all, so a fresh install
   restarted forever. The compose files use `init && exec`, the unit an
-  unprefixed `ExecStartPre=` on the same executable, and the
-  `every shipped serve-http recipe runs init first` preflight holds all three
-  with a probe of the shipped broken lines
+  unprefixed `ExecStartPre=` on the same executable plus
+  `RequiresMountsFor=` on its `UNDERCROFT_HOME` — without it, an init that
+  ran before the data directory's mount minted a second installation beneath
+  the mount point and the server served it (the review of O200's first
+  build, reproduced under systemd 252) — and the
+  `every shipped serve-http recipe runs init first` preflight holds all three,
+  reading a unit as systemd reads it, with a probe of the shipped broken lines
 - `architecture/DIAGRAM_LESSONS.md` — **read it before changing any diagram, in
   any of the three sets**: which file is each set's source, the standards a change
   keeps (text fit included, O188), how width is estimated and measured, the fix

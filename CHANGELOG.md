@@ -1771,12 +1771,20 @@ Now the observability engine runs `undercroft init && exec undercroft serve-http
 file, the passphrase included. The first start creates a sealed `default` vault, later starts find it
 and `init` exits 0 writing nothing, and a failed init stops the start with its own error in the log or
 the journal. For another level, create the vault before the first start (`docs/remote-server.md`).
+The unit also declares `RequiresMountsFor=/var/lib/undercroft`: without it, a data directory that is
+its own mount and not yet up let the new init write a fresh master key and an empty `default` vault
+beneath the mount point, and the server served that second installation — the independent review's
+finding against this unit's first build, reproduced under systemd 252 and fixed.
 
 Gates. A new host-side preflight, `every shipped serve-http recipe runs init first`, judges every
 command under `deploy/` that runs `serve-http`: on a compose line, `init` joined to `serve-http` by
-`&&` and nothing that discards its failure; in a unit, an unprefixed `ExecStartPre=` running `init`
-through the `ExecStart` executable. A probe refuses the shipped broken lines verbatim and accepts the
-fixed ones, and a premise requires all three recipes to be selected. The e2e suite reads the unit's own
+`&&`, nothing that discards its failure and no `--data-dir`; a unit is read as systemd reads it
+(sections, blanks around `=`, indentation, continuations, an emptied list), and needs an unprefixed
+`ExecStartPre=` running `init` through the `ExecStart` executable in `[Service]`, its data directory
+declared in `Environment=UNDERCROFT_HOME`, and `RequiresMountsFor=` on that directory. A probe of 20
+fixtures refuses the shipped broken lines verbatim and every spelling the review named, each for the
+defect it carries, and accepts the fixed ones; a premise requires all three recipes to be selected.
+The e2e suite reads the unit's own
 `ExecStartPre=` and `ExecStart=` lines out of the file and runs them in systemd's order on a fresh
 install — init, serve, and a restart's init that changes no byte of the data directory (four checks).
 `tests/tls-pins.sh` replaces the observability engine over a volume whose `vaults/default` is a regular
@@ -1785,15 +1793,18 @@ broken shape fails the preflight by file and line, a judge broken either way fai
 arm over the pre-O200 unit fails three of its four checks, the fourth being its premise — its first
 version passed one check over that unit, because nothing ran there at all, and was rebuilt. A real
 corpus: the LoCoMo feed mined into eight wings, 680 drawers, served through each recipe's own command,
-with a restart's init leaving the data directory hashed unchanged and `verify` OK. `systemd-analyze
-verify` (systemd 252) accepts the unit and refuses a copy whose `ExecStartPre` names a missing
-executable; no container here runs systemd itself, so its restart and sandbox behaviour are argued from
-its documentation.
+with a restart's init leaving the data directory hashed unchanged and `verify` OK. Under systemd 252
+as PID 1 in a container, with the data directory its own `.mount` unit: the shipped unit mounts it
+first and writes nothing beneath it, the unit without the directive leaves the second installation
+there, a failing init restarts with its own error in the journal, and a mount that fails stops the start
+as a dependency. Under a passphrase each start now derives the key twice, about 0.1 s more.
 
-PATCH inside the unreleased 1.7.0, and no `UPGRADING.md` entry: `init` opens the installation exactly as
-`serve-http` does, exits 0 writing nothing where the default vault exists, and fails only where
-`serve-http`'s own open would, so no start that served before refuses now. Filed from the measurement:
-init's error over a `vaults/default` it cannot create names no path (O-NEW-O199-1).
+PATCH inside the unreleased 1.7.0. `init` opens the installation exactly as `serve-http` does, exits 0
+writing nothing where the default vault exists, and fails only where `serve-http`'s own open would. The
+observability change therefore needs no `UPGRADING.md` entry. The unit's does, once an operator copies
+the new template: a data-directory mount that fails at boot now leaves the unit failed rather than
+looping until the directory appears. Filed from the measurement: init's error over a `vaults/default` it
+cannot create names no path (O-NEW-O199-1).
 
 ## 1.6.1 — 2026-09-22
 

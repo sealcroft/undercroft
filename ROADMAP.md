@@ -14216,21 +14216,33 @@ ruling.
   passphrase included, and its failure stops the start. The header says what
   every start does, how to choose another level, and that a unit edited to
   serve a vault other than `default` should drop the line, which would
-  otherwise create an empty `default` beside it.
+  otherwise create an empty `default` beside it. Since the review below it
+  also carries `RequiresMountsFor=/var/lib/undercroft`, and the header says
+  why, that `UNDERCROFT_HOME` belongs in the unit rather than the environment
+  file, and that a passphrase means two key derivations per start.
 - **The preflight `every shipped serve-http recipe runs init first`**
   (`tests/battery.sh`, beside the CA-pin preflight). It selects the tracked
-  `.yml`, `.yaml` and `.service` files under `deploy/` whose active lines run
-  `serve-http` — three today — and judges each command. On a compose line:
-  `undercroft init`, then `undercroft serve-http` behind `&&`, with no `;`,
-  `|`, `&` or `>` before the `&&`. In a unit: an `ExecStartPre=` running
-  `init` through the `ExecStart` executable with no prefix, because `-`
-  ignores the failure and `+` or `!` would write the key file with privileges
-  the server lacks. Two premises. A probe refuses the shipped broken lines
-  verbatim — the pre-O172 compose list, O199's command, the pre-O200 unit —
-  plus a `-`-prefixed init and an init on another executable, and accepts the
-  fixed compose line and unit. A file-set premise requires all three recipes
-  to be selected. Scope, stated in the preflight: no docs snippet, no
-  `serve-mcp`, and a block-scalar command is refused rather than read.
+  `.yml`, `.yaml` and `.service` files under `deploy/` that `git grep` finds
+  naming `serve-http` — three today — and judges each command. On a compose
+  line: `undercroft init`, then `undercroft serve-http` behind `&&`, with no
+  `;`, `|`, `&` or `>` before the `&&`, and no `--data-dir`. A unit is read as
+  systemd reads it — sections, blanks around `=`, indentation, `\`
+  continuations, `#`/`;` comments, an empty `ExecStartPre=` resetting the
+  list — and every active line naming `serve-http` must be an `ExecStart=` in
+  `[Service]` without `--data-dir`, with an `ExecStartPre=` in `[Service]`
+  running `init` through the same executable and no prefix (`-` ignores the
+  failure; `+` or `!` would write the key file with privileges the server
+  lacks), `Environment=UNDERCROFT_HOME=<dir>` in `[Service]`, and
+  `RequiresMountsFor=<dir>` in `[Unit]`. Two premises. A probe of 20 fixtures,
+  17 that must be refused — the shipped broken lines verbatim (the pre-O172
+  compose list, O199's command, the pre-O200 unit), every spelling the review
+  named, and each unit defect as a correct unit with that one defect, the
+  refusal required to name it — and 3 that must be accepted, one of them every
+  legal spelling at once. A
+  file-set premise requires all three recipes to be selected. Scope, stated in
+  the preflight: no docs snippet, no `serve-mcp`, a block-scalar command
+  refused rather than read, and neither an `UNDERCROFT_HOME` the environment
+  file sets nor a mount made outside systemd is visible to it.
 - `tests/e2e.sh`, four checks: the unit's own `ExecStartPre=` and `ExecStart=`
   lines, read out of `/src/deploy/undercroft-server.service`, run in systemd's
   order against the release binary, with the installed path, the data
@@ -14261,16 +14273,69 @@ ruling.
   `bad-pre-o172.yml`; one that refuses every unit fails it on `good.service`.
   A selector without `.service` fails the file-set premise, naming the unit.
   Both mutated tree files were restored and compared byte for byte.
+- After the review, on the rebuilt judge: the shipped unit without
+  `RequiresMountsFor=` fails naming its `ExecStart` line and the mount; and on
+  copies of the judge, an emptied `ExecStartPre=` that no longer resets, a
+  unit judge that ignores `--data-dir`, `ExecStartPre=` read from any section,
+  blanks around `=` left on the key, the mount check removed, and the first
+  build's column-0 `ExecStart=` selector each fail the probe, naming the
+  fixtures they let through. The unit was restored and compared.
 
-**Measured on the artifact, never by systemd.** `systemd-analyze verify`
-(systemd 252, Debian 12) accepts the shipped unit with no diagnostic, and
-refuses a copy whose `ExecStartPre` names a missing executable (exit 1), so it
-does read the line. No container here runs systemd as PID 1, so two things are
-argued from systemd's documented semantics rather than measured: that
-`Restart=on-failure` restarts after a failed `ExecStartPre`, the journal then
-repeating init's error as compose's `restart:` repeats it in a log; and that
-`ProtectSystem=strict` with `ReadWritePaths=/var/lib/undercroft` lets the
-pre-start write there, since the sandbox applies to every `Exec*` line alike.
+**The independent review found one MEDIUM and one LOW, both mine.**
+- MEDIUM: the unit had no `RequiresMountsFor=`. systemd orders a unit after
+  the mounts its `WorkingDirectory=` or `StateDirectory=` need, never its
+  `ReadWritePaths=`, so with `/var/lib/undercroft` a separate mount not yet
+  up, the new `ExecStartPre` found an empty directory, wrote a new master key
+  and an empty `default` vault beneath the mount point, and the server served
+  that. Before O200 the same start looped loudly and recovered once the mount
+  arrived; my first build turned a loud failure into a silent wrong answer.
+  Fixed with `RequiresMountsFor=/var/lib/undercroft`. `StateDirectory=` would
+  add the same mount dependency and was not taken: it creates the directory
+  at default mode 0755 where the install makes it 0750, and re-owns the whole
+  tree recursively on any start that finds an ownership mismatch, two effects
+  a template should not gain inside a fix, while the unit already declares its
+  path in `UNDERCROFT_HOME` and `ReadWritePaths=`.
+- LOW: the judge missed legal systemd spellings — `ExecStart = …`, an
+  indented `ExecStart=` and a `\` continuation were not selected at all — and
+  accepted `--data-dir` on `ExecStart`, an empty `ExecStartPre=` after the
+  init line, and an init placed under `[Install]`. The rebuilt judge above
+  reads the unit as systemd does and refuses each, one probe fixture apiece.
+- The review's own fourteen fixtures through the rebuilt judge: every unit
+  fixture is refused (they carry no section headers, so nothing is in
+  `[Service]`), and of the compose fixtures two are accepted, both harmless:
+  `… && exec undercroft serve-http || true`, whose `|| true` runs only if the
+  `exec` itself fails, and a line running init twice whose second init still
+  stops the command.
+- Not taken: the review's optional `RestartPreventExitStatus=2`, which would
+  leave the unit failed on an integrity refusal instead of restarting it
+  every three seconds. Both compose recipes restart on every exit, and a
+  restart policy for one recipe of three would make them answer the same
+  verdict differently; the restarts are loud, each one repeating the verdict
+  in the journal, so nothing is hidden by keeping them.
+
+**Measured under systemd itself.** `systemd-analyze verify` (systemd 252,
+Debian 12) accepts the shipped unit with no diagnostic, and refuses a copy
+whose `ExecStartPre` names a missing executable (exit 1), so it does read the
+line. Then systemd 252 ran as PID 1 in a privileged container, with the data
+directory its own tmpfs `.mount` unit, not yet started:
+- the shipped unit: systemd started the mount first, init wrote the
+  installation onto the tmpfs, `/healthz` answered, and once unmounted
+  nothing lay beneath the mount point;
+- the same unit without `RequiresMountsFor=`, O200's first build: the mount
+  stayed inactive, `/healthz` answered, and the master key and a `default`
+  vault sat in the directory beneath the mount point — the review's second
+  installation, reproduced;
+- a failing `ExecStartPre` (`vaults/default` a regular file): `systemctl
+  start` exit 1, `Restart=on-failure` restarted it three times in about
+  12 s, and the journal repeated init's own `File exists (os error 17)`;
+- the shipped unit over a mount that fails (an ext4 `.mount` naming a device
+  that does not exist): `systemctl start` exit 1, the job's result
+  `dependency`, no restart in 10 s, and nothing written beneath the mount
+  point — the recovery the `UPGRADING.md` entry names as lost.
+The first run also settles that `ProtectSystem=strict` with
+`ReadWritePaths=/var/lib/undercroft` lets the pre-start write there. Under a
+passphrase a restart's `init` costs one Argon2id derivation, 106–115 ms over
+five runs against 2–3 ms with a key file.
 
 **A real corpus, through the unit's own lines.** `ExecStartPre` on a fresh
 install, 21 ms; the LoCoMo feed mined into eight wings, 680 drawers and 681
@@ -14283,14 +14348,20 @@ and not the server, and the "restart" figures came from the first server,
 still bound to the port. The run recorded here starts the server directly and
 checks the port is free after each stop.
 
-**No `UPGRADING.md` entry.** The unit is a template an operator copies at
-install, so an installed unit changes only when it is copied again. Then
+**`UPGRADING.md` carries an entry since the review; before it, this
+paragraph argued none was owed.** The unit is a template an operator copies
+at install, so an installed unit changes only when it is copied again. Then
 `init` reports the installation already initialized and writes nothing on an
 existing one (the e2e arm's hash), and fails only where `serve-http`'s own
-open would (O199's argument). The one behavioural difference is the one
-O172's recipe has had since 1.6.0: a start that finds no `default` vault
-creates one rather than failing, which the unit's header and
-`docs/remote-server.md` state for a unit edited to serve another vault.
+open would (O199's argument). Two behavioural differences remain. A start
+that finds no `default` vault creates one rather than failing, as O172's
+recipe has done since 1.6.0; the unit's header and `docs/remote-server.md`
+state it for a unit edited to serve another vault. And a start whose
+data-directory mount systemd cannot bring up now fails as a dependency and is
+not retried, where the old unit looped until a mount made by hand appeared and
+then served: that recovery is gone, which is why the entry exists, with
+`systemctl start undercroft-server` after mounting as its fix. `config check`
+cannot see either; they are the unit's, not a declaration's.
 
 ## 1.6.1 — released 2026-09-22
 
