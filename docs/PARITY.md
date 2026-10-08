@@ -248,7 +248,7 @@ offline hash embedder as the default.
 | Website | Rust-native mdBook site in `website/` reusing docs/ (`docker compose run --rm site`) |
 
 | Memory-extraction eval task | `undercroft-bench model-eval memories` — SQuAD-style token-F1 with greedy one-to-one alignment (threshold 0.5), CJK-aware tokenization; reports match P/R/F1, mean token-F1, type accuracy |
-| i18n (`mempalace/i18n`) | CLI result strings localized in the 9 dataset languages (de/es/fr/hi/it/ko/pt/ru/zh) via `UNDERCROFT_LANG`, English default + fallback; errors/help stay English by design (exit codes are the script contract) |
+| i18n (`mempalace/i18n`) | CLI result strings localized in the 9 dataset languages (de/es/fr/hi/it/ko/pt/ru/zh) via `UNDERCROFT_LANG`, English default + fallback; errors/help stay English by design (exit codes are the script contract: 0 clean, 1 the run failed, 2 an integrity verdict, and since 1.7.0 141 the reader of stdout left — `docs/AGENTS.md` §7.3) |
 
 ## Not ported
 

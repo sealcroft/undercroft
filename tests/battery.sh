@@ -2638,6 +2638,360 @@ fi
 echo "ok    $TD_TOTAL destructive compose teardown(s) in tests/, every one"
 echo "      scoped to a project it names"
 
+# ── preflight: a check captures the binary, then matches (ROADMAP O287) ─────
+# Under `set -o pipefail` a pipeline's status is its producer's whenever the
+# reader leaves first, so `if "$BIN" x | grep -q y` went RED at random over a
+# correct tree — and GREEN over a present defect in every negative-sense check
+# (`if X | grep -q BAD; then FAIL`, or `if ! X | grep -q GOOD`) whenever the
+# producer exited non-zero after the match. That held under every non-zero
+# status, the 101 `println!` panicked with and the 141 the stdout door gives
+# now alike, so the cure is the harness's: capture, then match, exit code
+# first. This refuses the shape: a STATUS-CONSUMING pipeline (`if`, `elif`,
+# `while`, `until`, `!`, `&&`, `||`, `$?`, `PIPESTATUS`) whose producer is a
+# binary (`$BIN`, `$ORCH`, in any quoting, inside a `{ …; }` or `( … )`
+# group, or in an `sh -c`/`bash -c` string) or a function whose body runs one
+# (to a fixed point, so a wrapper of a wrapper counts), and whose reader —
+# the next stage or any later one, so `| tee … | grep -q` counts, with `|` or
+# `|&` — may exit before the producer is done: `grep`, `egrep` or `fgrep`
+# (by any path, after `command`, in a `( … )` group) with `-q`, `-l` or `-m`
+# in any cluster and in any position, or `--quiet`, `--silent`,
+# `--files-with-matches`, `--max-count`; `head`; `sed` with a `q` command;
+# `awk` with `exit`. A substitution assigned as a whole statement whose status
+# is read (`x=$("$BIN" … | head -1) && …`) counts too.
+#
+# The pipelines are split by a small depth-aware parser — quotes, `$(…)`,
+# `(…)` and `{…}` — run only on lines holding a producer and a pipe. Its
+# probe below names every spelling and shape it refuses, one line each, and
+# every shape it exempts.
+#
+# SCOPE, stated: `tests/*.sh` except this file, whose probe below holds the
+# refused shapes on purpose. NOT refused, by the ruling: a substitution whose
+# status is not read (`ID="$("$BIN" … | head -1)"`, `[[ $(…) == y ]]`,
+# `local v=$(…)`) — a panic there was log noise, not a verdict; a plain
+# statement whose status nothing reads; and a producer that is not one of the
+# binaries (curl, printf), which ROADMAP O332 files. Not SEEN: a status read
+# on a LATER line (`x | grep -q y` then `rc=$?` below it), a pipeline built in
+# a variable or by `eval`; and a grep PATTERN after `--` that looks like an
+# option is read as one, which refuses rather than misses.
+# ps_split <text> <mode>: split shell text at depth 0 — outside quotes, `$(…)`,
+# `(…)` and `{…}` — into pieces, one per line of output, each line
+# `<separator-before>\t<piece>`. mode `elem` splits at `;`, `&&`, `||` and a
+# lone `&`; mode `stage` splits at `|` and `|&`.
+ps_split() {
+  local s="$1" mode="$2" i=0 n=${#1} ch nx q="" stack="" piece="" sep="" esc=0
+  local before_close='[[:space:];]' before_amp='[>|]'
+  while [ "$i" -lt "$n" ]; do
+    ch=${s:i:1}; nx=${s:i+1:1}
+    if [ "$esc" = 1 ]; then piece+=$ch; esc=0; i=$((i + 1)); continue; fi
+    if [ "$ch" = '\' ] && [ "$q" != "'" ]; then piece+=$ch; esc=1; i=$((i + 1)); continue; fi
+    if [ "$q" = "'" ]; then piece+=$ch; [ "$ch" = "'" ] && q=""; i=$((i + 1)); continue; fi
+    if [ "$q" = '"' ]; then
+      if [ "$ch" = '"' ]; then q=""; piece+=$ch; i=$((i + 1)); continue; fi
+      if [ "$ch" = '$' ] && [ "$nx" = '(' ]; then stack+=s; piece+='$('; i=$((i + 2)); continue; fi
+      if [ "$ch" = ')' ] && [ "${stack: -1}" = s ]; then stack=${stack%?}; fi
+      piece+=$ch; i=$((i + 1)); continue
+    fi
+    case "$ch" in
+      "'") q="'"; piece+=$ch; i=$((i + 1)); continue ;;
+      '"') q='"'; piece+=$ch; i=$((i + 1)); continue ;;
+    esac
+    if [ "$ch" = '$' ] && [ "$nx" = '(' ]; then stack+=s; piece+='$('; i=$((i + 2)); continue; fi
+    if [ "$ch" = '(' ]; then stack+=p; piece+=$ch; i=$((i + 1)); continue; fi
+    if [ "$ch" = ')' ]; then [ -n "$stack" ] && stack=${stack%?}; piece+=$ch; i=$((i + 1)); continue; fi
+    if [ "$ch" = '{' ] && { [ -z "$piece" ] || [[ ${piece: -1} == [[:space:]] ]]; } && [[ $nx == [[:space:]] ]]; then
+      stack+=b; piece+=$ch; i=$((i + 1)); continue
+    fi
+    if [ "$ch" = '}' ] && [ "${stack: -1}" = b ] && { [ -z "$piece" ] || [[ ${piece: -1} == $before_close ]]; }; then
+      stack=${stack%?}; piece+=$ch; i=$((i + 1)); continue
+    fi
+    if [ -z "$stack" ]; then
+      if [ "$mode" = elem ]; then
+        if [ "$ch$nx" = '&&' ] || [ "$ch$nx" = '||' ]; then
+          printf '%s\t%s\n' "$sep" "$piece"; sep="$ch$nx"; piece=""; i=$((i + 2)); continue
+        fi
+        if [ "$ch" = ';' ]; then printf '%s\t%s\n' "$sep" "$piece"; sep=';'; piece=""; i=$((i + 1)); continue; fi
+        if [ "$ch" = '&' ] && [ "$nx" != '>' ] && [[ ${piece: -1} != $before_amp ]]; then
+          printf '%s\t%s\n' "$sep" "$piece"; sep='&'; piece=""; i=$((i + 1)); continue
+        fi
+        if [ "$ch$nx" = '|&' ]; then piece+='|&'; i=$((i + 2)); continue; fi
+      else
+        if [ "$ch$nx" = '|&' ]; then printf '%s\t%s\n' "$sep" "$piece"; sep='|&'; piece=""; i=$((i + 2)); continue; fi
+        if [ "$ch" = '|' ] && [ "$nx" != '|' ]; then printf '%s\t%s\n' "$sep" "$piece"; sep='|'; piece=""; i=$((i + 1)); continue; fi
+        if [ "$ch$nx" = '||' ]; then piece+='||'; i=$((i + 2)); continue; fi
+      fi
+    fi
+    piece+=$ch; i=$((i + 1))
+  done
+  printf '%s\t%s\n' "$sep" "$piece"
+}
+
+# ps_unsubst <text>: the text with every `$(…)` body removed.
+ps_unsubst() {
+  local s="$1" i=0 n=${#1} ch nx out="" depth=0 q=""
+  while [ "$i" -lt "$n" ]; do
+    ch=${s:i:1}; nx=${s:i+1:1}
+    if [ "$depth" -eq 0 ]; then
+      if [ "$ch" = '$' ] && [ "$nx" = '(' ]; then depth=1; out+='$()'; i=$((i + 2)); continue; fi
+      out+=$ch
+    else
+      if [ "$ch" = '(' ]; then depth=$((depth + 1)); fi
+      if [ "$ch" = ')' ]; then depth=$((depth - 1)); fi
+    fi
+    i=$((i + 1))
+  done
+  printf '%s' "$out"
+}
+
+# ps_early <stage text>: is this stage a reader that may exit before its
+# producer is done?
+ps_early() {
+  local t="$1" w name rest a
+  local sed_q="(^|[;{}[:space:]'\"])[0-9\$]*[qQ]([;}[:space:]'\"]|\$)"
+  local awk_exit='(^|[^A-Za-z0-9_])exit([^A-Za-z0-9_]|$)'
+  while [ -n "$t" ]; do
+    case "${t:0:1}" in ' ' | $'\t' | '(' | '{' | '!') t=${t:1} ;; *) break ;; esac
+  done
+  read -r -a w <<<"$t"
+  [ "${#w[@]}" -eq 0 ] && return 1
+  [ "${w[0]}" = command ] && w=("${w[@]:1}")
+  [ "${#w[@]}" -eq 0 ] && return 1
+  name=${w[0]##*/}
+  rest=" ${w[*]:1} "
+  case "$name" in
+    head) return 0 ;;
+    grep|egrep|fgrep)
+      for a in "${w[@]:1}"; do
+        case "$a" in
+          --quiet|--silent|--files-with-matches|--max-count*) return 0 ;;
+          --*) ;;
+          -*[qlm]*) return 0 ;;
+        esac
+      done
+      return 1 ;;
+    sed) [[ $rest =~ $sed_q ]] && return 0; return 1 ;;
+    awk|gawk|mawk) [[ $rest =~ $awk_exit ]] && return 0; return 1 ;;
+  esac
+  return 1
+}
+
+# ps_line <text> <consumed-by-caller> <prod-re> <wrapper-re>: 0 when the line
+# holds a refused pipeline.
+ps_line() {
+  local text="$1" outer="$2" prod="$3" wre="$4" sep elem consumed k nstage first inner
+  local -a E S
+  local sh_dq="(^|[[:space:]])(sh|bash)[[:space:]]+-c[[:space:]]+\"(.*)\""
+  local sh_sq="(^|[[:space:]])(sh|bash)[[:space:]]+-c[[:space:]]+'(.*)'"
+  local assign="^[[:space:]]*(if[[:space:]]+|![[:space:]]*)?[A-Za-z_][A-Za-z0-9_]*=\"?\\\$\\((.*)\\)\"?[[:space:]]*\$"
+  local group="^[[:space:]]*(if[[:space:]]+|![[:space:]]*)?[{(](.*)[})][[:space:]]*\$"
+  local lead='^[[:space:]]*(if|elif|while|until|!)[[:space:]]'
+  local status_read='\$\?|PIPESTATUS'
+  local wword="(^|[^A-Za-z0-9_\$-])($wre)([[:space:];)}]|\$)"
+  mapfile -t E < <(ps_split "$text" elem)
+  for ((k = 0; k < ${#E[@]}; k++)); do
+    sep=${E[k]%%$'\t'*}; elem=${E[k]#*$'\t'}
+    consumed=$outer
+    [[ $sep == '&&' || $sep == '||' ]] && consumed=1
+    if [ $((k + 1)) -lt "${#E[@]}" ]; then
+      local nsep=${E[k + 1]%%$'\t'*}
+      [[ $nsep == '&&' || $nsep == '||' ]] && consumed=1
+    fi
+    [[ $elem =~ $lead ]] && consumed=1
+    [[ $text =~ $status_read ]] && consumed=1
+    # sh -c / bash -c: the string is a script of its own.
+    if [[ $elem =~ $sh_dq ]]; then
+      inner=${BASH_REMATCH[3]}; inner=${inner//\\\"/\"}; inner=${inner//\\\$/\$}
+      ps_line "$inner" 0 "$prod" "$wre" && return 0
+    elif [[ $elem =~ $sh_sq ]]; then
+      ps_line "${BASH_REMATCH[3]}" 0 "$prod" "$wre" && return 0
+    fi
+    # A substitution assigned as the whole statement, whose status is read.
+    if [ "$consumed" = 1 ] && [[ $elem =~ $assign ]]; then
+      ps_line "${BASH_REMATCH[2]}" 1 "$prod" "$wre" && return 0
+    fi
+    [ "$consumed" = 1 ] || continue
+    mapfile -t S < <(ps_split "$elem" stage)
+    nstage=${#S[@]}
+    if [ "$nstage" -lt 2 ]; then
+      # A lone group: its body is a list of its own.
+      first=${S[0]#*$'\t'}
+      if [[ $first =~ $group ]]; then
+        ps_line "${BASH_REMATCH[2]}" 1 "$prod" "$wre" && return 0
+      fi
+      continue
+    fi
+    local pi=-1 j st
+    for ((j = 0; j < nstage; j++)); do
+      st=$(ps_unsubst "${S[j]#*$'\t'}")
+      if [ "$pi" -lt 0 ]; then
+        if [[ $st =~ $prod ]] || { [ -n "$wre" ] && [[ $st =~ $wword ]]; }; then
+          pi=$j
+        fi
+      elif ps_early "${S[j]#*$'\t'}"; then
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
+pipe_scan() { # <file>...: <file>:<line>: <logical line> per refused pipeline
+  local f i j name body text start wre changed wword
+  local prod='\$\{?(BIN|ORCH)\}?([^A-Za-z0-9_]|$)'
+  local -a L
+  local -A W
+  for f in "$@"; do
+    L=(); W=()
+    mapfile -t L < "$f"
+    changed=1
+    while [ "$changed" -eq 1 ]; do
+      changed=0; wre=""
+      for name in "${!W[@]}"; do wre="${wre:+$wre|}$name"; done
+      for ((i = 0; i < ${#L[@]}; i++)); do
+        [[ ${L[i]} =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(\)[[:space:]]*\{(.*)$ ]] || continue
+        name=${BASH_REMATCH[1]}; body=${BASH_REMATCH[2]}
+        [ -n "${W[$name]:-}" ] && continue
+        if ! [[ $body =~ \}[[:space:]]*$ ]]; then
+          for ((j = i + 1; j < ${#L[@]}; j++)); do
+            [[ ${L[j]} =~ ^[[:space:]]*\}[[:space:]]*$ ]] && break
+            body+=$'\n'${L[j]}
+          done
+        fi
+        if [[ $body =~ $prod ]] || { [ -n "$wre" ] && [[ $body =~ (^|[^A-Za-z0-9_$-])($wre)([[:space:]]|$) ]]; }; then
+          W[$name]=1; changed=1
+        fi
+      done
+    done
+    wre=""
+    for name in "${!W[@]}"; do wre="${wre:+$wre|}$name"; done
+    text=""; start=0
+    for ((i = 0; i < ${#L[@]}; i++)); do
+      [ -z "$text" ] && start=$((i + 1))
+      if [[ ${L[i]} =~ \\$ ]]; then text+="${L[i]%\\} "; continue; fi
+      text+=${L[i]}
+      if [[ $text =~ ^[[:space:]]*# ]] || ! [[ $text == *'|'* ]]; then text=""; continue; fi
+      wword="(^|[^A-Za-z0-9_\$-])($wre)([[:space:];)}]|\$)"
+      if [[ $text =~ $prod ]] || { [ -n "$wre" ] && [[ $text =~ $wword ]]; }; then
+        if ps_line "$text" 0 "$prod" "$wre"; then
+          printf '%s:%s: %s\n' "$f" "$start" "$text"
+        fi
+      fi
+      text=""
+    done
+  done
+}
+echo "═══ preflight: checks capture the binary, then match ═══"
+PS_FAIL=0
+PS_DIR=$(mktemp -d)
+# PREMISE, both directions. Every spelling and shape the scanner refuses is a
+# probe line here, the ruling's and the independent review's (2026-10-08) —
+# a scanner that matched only `"$BIN" … | grep -q` is how the filing counted
+# twelve sites where there were nineteen — and every shape it exempts must
+# pass, or a refusal of everything would read as coverage.
+cat > "$PS_DIR/refuse.sh" <<'O287_PROBE'
+if "$BIN" search x | grep -q y; then :; fi
+if "$BIN" search x | grep -qE 'y'; then :; fi
+if "$BIN" search x | grep -qF y; then :; fi
+if "$BIN" search x | grep -qi y; then :; fi
+if "$BIN" search x | grep -qx y; then :; fi
+if "$BIN" search x | grep -Eq y; then :; fi
+if "$BIN" search x | grep -E -q y; then :; fi
+if "$BIN" search x | grep --quiet y; then :; fi
+if "$BIN" search x | grep -m1 y; then :; fi
+if "$BIN" search x | grep -l y; then :; fi
+if "$BIN" search x | head -1; then :; fi
+if ! $BIN search x 2>&1 | grep -q y; then :; fi
+if "$ORCH" ops a verify | grep -q y; then :; fi
+"${BIN}" search x | grep -q y && echo hit
+UNDERCROFT_HOME="$h" "$BIN" verify | grep -q OK || echo miss
+env A=b "$BIN" stats | grep -q c && :
+check "listed" 0 "hidden" -- sh -c \
+  "\"$BIN\" vault list | grep -q a && echo LISTED || echo hidden"
+w1() { UNDERCROFT_HOME="$h" "$BIN" "$@"; }
+if w1 stats | grep -q a; then :; fi
+w2() {
+  local x=1
+  "$ORCH" "$@"
+}
+if w2 keygen | grep -q KEY; then :; fi
+w3() { w2 "$@"; }
+if w3 keygen | grep -q KEY; then :; fi
+"$BIN" stats | grep -q a; rc=$?
+if a && w1 stats >/dev/null 2>&1 \
+   && w1 verify 2>&1 | grep -qF OK; then :; fi
+if "$BIN" x |& grep -q y; then :; fi
+if "$BIN" x | grep -e y -q; then :; fi
+if "$BIN" x | grep y -q; then :; fi
+if "$BIN" x | sed -n '/y/{p;q}' | grep -c y; then :; fi
+if "$BIN" x | awk '/y/{f=1;exit} END{exit !f}'; then :; fi
+if "$BIN" x | tee /dev/null | grep -q y; then :; fi
+if  "$BIN" x | grep -qs y; then :; fi
+if "$BIN" x|grep -q y; then :; fi
+if "$BIN" x | /usr/bin/grep -q y; then :; fi
+if "$BIN" x | command grep -q y; then :; fi
+if "$BIN" x | egrep -q y; then :; fi
+if "$BIN" x | grep -wq y; then :; fi
+if "$BIN" x | (grep -q y); then :; fi
+if { "$BIN" x; } | grep -q y; then :; fi
+if ( "$BIN" x ) | grep -q y; then :; fi
+x=$("$BIN" x | head -1) && echo hit
+bash -c '"$BIN" x | grep -q y && echo LISTED'
+O287_PROBE
+PS_WANT="1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 20 25 27 28 29 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47"
+cat > "$PS_DIR/pass.sh" <<'O287_PROBE'
+out="$("$BIN" search x 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q y <<<"$out"; then :; fi
+ID="$("$BIN" admission list | sed -n 's/x/y/p' | head -1)"
+"$BIN" --read-only stats 2>&1 | head -2 | sed 's/^/  /'; FAIL=1
+if "$BIN" history | grep -cF x; then :; fi
+if curl -s http://x | grep -q y; then :; fi
+if "$BINARY" x | grep -q y; then :; fi
+# if "$BIN" x | grep -q y; then  (a comment)
+n() { echo "$1"; }
+if n x | grep -q x; then :; fi
+case "$("$BIN" x)" in *y*) :;; esac
+[[ $("$BIN" x | head -1) == y ]] && echo hit
+if "$BIN" x | sed -n 's/quick/x/p' | grep -c y; then :; fi
+if "$BIN" x | awk '{print $1}' | grep -c y; then :; fi
+local v="$("$BIN" x | head -1)" && echo hit
+O287_PROBE
+PS_GOT=$(pipe_scan "$PS_DIR/refuse.sh" | sed -E 's/^[^:]*:([0-9]+):.*/\1/' | tr '\n' ' ')
+PS_GOT=${PS_GOT% }
+if [ "$PS_GOT" != "$PS_WANT" ]; then
+  echo "FAIL  premise: the pipeline scanner refused probe lines [$PS_GOT]"
+  echo "      where every spelling and producer shape needs refusing: [$PS_WANT]."
+  echo "      A scanner that misses a shape reports what a clean harness reports."
+  PS_FAIL=1
+fi
+PS_PASS=$(pipe_scan "$PS_DIR/pass.sh")
+if [ -n "$PS_PASS" ]; then
+  echo "FAIL  premise: the pipeline scanner refused a shape it exempts:"
+  printf '%s\n' "$PS_PASS" | sed 's/^/        /'
+  PS_FAIL=1
+fi
+rm -rf "$PS_DIR"
+PS_FILES=()
+for f in tests/*.sh; do [ "$f" = tests/battery.sh ] || PS_FILES+=("$f"); done
+PS_HITS=$(pipe_scan "${PS_FILES[@]}")
+if [ -n "$PS_HITS" ]; then
+  echo "FAIL  a check pipes a binary into a reader that may leave first, and reads the"
+  echo "      pipeline's status — under pipefail that status is the producer's whenever"
+  echo "      the reader leaves, red over a correct tree and green over a defect:"
+  printf '%s\n' "$PS_HITS" | sed 's/^/        /'
+  echo "      Capture, then match, exit code first:"
+  echo "        CAP=\"\$(\"\$BIN\" … 2>&1)\"; CAP_RC=\$?"
+  echo "        if [ \"\$CAP_RC\" -eq 0 ] && grep -q … <<<\"\$CAP\"; then …"
+  PS_FAIL=1
+fi
+if [ "$PS_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    ${#PS_FILES[@]} harness script(s): no status-consuming pipeline feeds a binary,"
+echo "      or a function that runs one, into a reader that may leave first; the"
+echo "      scanner refused every probe shape and exempted every exempt one"
+unset -f pipe_scan ps_line ps_early ps_unsubst ps_split
+
 echo "═══ preflight: published figures ═══"
 
 # `LANDING` is set beside the shared readers above, OUTSIDE the preflight
