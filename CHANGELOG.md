@@ -1757,6 +1757,38 @@ PATCH inside the unreleased 1.7.0, by the 2026-09-08 versioning ruling: the defe
 undefined panic status, and the new class reports a condition that was undefined; 0, 1 and 2 keep
 their meanings. `UPGRADING.md` carries the entry; `config check` cannot detect it.
 
+### `verify` names a drawer whose HMAC verifies over covered meta that does not parse (O231)
+
+`verify` walked such a row, counted it, and reported it in no leg — on the argument that every read
+reports it as a corrupt row — so it answered `VERIFY OK` over a drawer nothing could read, and `backup
+create`, which gates on that verdict, archived it as clean. Now it is a finding in `bad_records` with
+its own reason, and the verdict fails on every renderer: the CLI prints it under a new `unreadable:`
+line (`UNREADABLE: <id>: its HMAC verifies and its covered meta does not parse, so every read refuses
+it`) beside an `hmac failures:` count that keeps meaning a failed HMAC, MCP counts both, and `/v1`
+carries the line in `bad_records` — one string per record, a failed HMAC still a bare id byte for byte.
+`backup create` refuses such a vault and `backup restore` such an archive. A key rotation is not
+refused over it, by O232's ruling: the rotation re-tags the same bytes without parsing them, so the row
+is exactly as detectable afterwards.
+
+**The entry said the row needed the key, and it does not.** A drawer's tag covers its id, meta and
+content joined by a 0x1f separator, with no lengths, and serialized meta never holds a raw 0x1f while
+at-rest content may, so a writer without the key can move the boundary between them and the tag still
+verifies. Measured on the LoCoMo feed mined into 64 wings of a sealed vault (5,440 drawers): 19 drawers
+qualified, one SQL statement that wrote no tag made all 19 unreadable, the previous binary answered
+`VERIFY OK` and archived a backup, and this one exits 2 naming exactly those 19 and refuses the backup.
+`verify`'s time is unchanged (0.21–0.35 s either way). The ambiguity itself is filed as O-NEW-O231-1.
+
+Gates: five store tests (the entry's gate with the key, the keyless move, the backup refusal with a
+rotation that leaves the row detectable, an archive that refuses to restore, and a supersession link
+citing the row, which still makes `verify` answer the drawer's `CorruptRow` rather than a verdict —
+pinned and handed to O269's "no row aborts `verify`"), and twelve `e2e` checks through the CLI, MCP and
+`/v1` on an hmac-only vault whose 0x1f arrived by `import`. With the silent arm restored four of the
+five store tests fail; against the base binary seven of the twelve e2e checks do.
+
+PATCH inside the unreleased 1.7.0: the defect was the silence. `UPGRADING.md` carries the entry, since
+a backup or a restore can now refuse a vault the previous binary accepted; `config check` cannot see
+it, and `verify --read-only` is the pre-flight.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

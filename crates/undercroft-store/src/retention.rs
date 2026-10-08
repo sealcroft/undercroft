@@ -815,7 +815,7 @@ fn classify(
         crate::CoveredRow::MetaUnparseable { id } => {
             return Member::Unverifiable(RetentionUnverifiable {
                 id,
-                reason: "its HMAC-covered meta does not parse".into(),
+                reason: "its HMAC-covered meta does not parse; `verify` names it".into(),
             });
         }
         crate::CoveredRow::Verified { id, meta, drift } => (id, meta, drift),

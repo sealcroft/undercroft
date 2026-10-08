@@ -869,6 +869,17 @@ Consequences that are binding, not advisory:
   HMACs, the chain replay, the label commitment (O233), drawer supersession
   receipts, **KG fact receipts**, orphan graph labels, mirror drift,
   **declared-policy drift**, **version replay (O234)**.
+  **The first leg is `bad_records`, a `Vec<BadRecord>` since O231**: a record
+  id and a `BadReason` — a failed HMAC, or a drawer whose HMAC VERIFIES over
+  covered meta that does not parse, which `verify` counted and reported in no
+  leg, answering OK over a drawer every read refuses. Each serializes as one
+  string (a bare id for a failed HMAC, `"<id>: <reason>"` otherwise), the CLI
+  prints them as `hmac failures:` and `unreadable:`, and
+  `rotation_blockers()` matches every reason with no `_` and blocks on a
+  failed HMAC alone (O232's ruling: "never on … an O231 row"). Such a row needs
+  no key: the drawer canonical joins id, meta and content with a 0x1f and no
+  lengths, so the meta/content boundary moves with the tag intact
+  (O-NEW-O231-1).
   The rule that keeps growing
   it: *a keyed claim living in columns no drawer HMAC and no chain step
   covers must have a leg, or nothing sees it.* **The NINTH is that rule

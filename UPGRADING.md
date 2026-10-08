@@ -452,6 +452,33 @@ reader left": it is not a failed run to retry, because a retry of a write that
 committed files it again. `undercroft config check` cannot detect this:
 nothing in an environment predicts a reader closing.
 
+### `verify`, `backup create` and `backup restore` refuse a drawer whose HMAC verifies over covered meta that does not parse (O231)
+
+**Symptom:** `undercroft verify` exits 2 with `unreadable:      1` and a line
+`UNREADABLE: <id>: its HMAC verifies and its covered meta does not parse, so every
+read refuses it` (MCP: `isError`, `unreadable: 1`; `/v1`: `"ok": false`, the same
+line in `bad_records`), on a vault the previous binary verified. `backup create`
+then exits 2 (`/v1`: 409 `class: "integrity"`), and `backup restore` of an archive
+holding such a row is refused, with the live vault untouched. `vault rotate` is
+not refused over it.
+
+**Cause:** such a row was always unreadable — `drawer get`, and a `search` whose
+candidates include it, answer `corrupt row <id>` — and `verify` counted it and reported it nowhere,
+so it answered OK and a backup archived it (ROADMAP O231). It can be a legacy or a
+defect-written row, and it can also be made without the key, by moving where a
+drawer's meta ends and its content begins (ROADMAP O-NEW-O231-1). A failed HMAC is
+still printed under `hmac failures:`; this reason has its own line because the
+HMAC verifies.
+
+**Fix:** `undercroft verify --vault <name>` names every such drawer. Restore the
+newest archive whose restore is accepted, if one holds the drawer intact; or, if
+its content is not needed or its source can be mined again, `undercroft drawer
+delete <id> --vault <name>`, which records a `del/` tombstone — `verify` is OK
+afterwards and `backup create` works again. An archive taken before 1.7.0 that
+holds such a row can still be restored by the binary that took it; then delete
+the row with this one. `undercroft config check` cannot detect this: it opens no
+vault database. Run the new binary's `verify --read-only` before the upgrade.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

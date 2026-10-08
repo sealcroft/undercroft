@@ -4819,7 +4819,7 @@ mod tests {
         let s = VaultStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
         let report = s.verify().unwrap();
         assert!(!report.ok());
-        assert!(report.bad_records[0].starts_with("kg/"));
+        assert!(report.bad_records[0].record.starts_with("kg/"));
     }
 
     #[test]
@@ -6093,7 +6093,7 @@ mod tests {
             report
                 .bad_records
                 .iter()
-                .any(|r| r.starts_with("kg-entity/")),
+                .any(|r| r.record.starts_with("kg-entity/")),
             "and it is named as an entity, got {:?}",
             report.bad_records
         );
@@ -6142,7 +6142,7 @@ mod tests {
             report
                 .bad_records
                 .iter()
-                .any(|r| r.starts_with("kg-entity/")),
+                .any(|r| r.record.starts_with("kg-entity/")),
             "and it is named as an entity, got {:?}",
             report.bad_records
         );
@@ -6180,7 +6180,7 @@ mod tests {
                 && swapped
                     .bad_records
                     .iter()
-                    .any(|r| r.starts_with("kg-entity/")),
+                    .any(|r| r.record.starts_with("kg-entity/")),
             "swapping one entity's sealed name for another's must be \
              tampering, got {:?}",
             swapped.bad_records
@@ -6328,7 +6328,7 @@ mod tests {
             .unwrap();
         let report = s.verify().unwrap();
         assert!(
-            !report.ok() && report.bad_records.iter().any(|b| b.contains(&id)),
+            !report.ok() && report.bad_records.iter().any(|b| b.record.contains(&id)),
             "a tampered legacy entity row must be caught: {:?}",
             report.bad_records
         );

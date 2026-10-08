@@ -2474,7 +2474,10 @@ mod tests {
             .unwrap();
         let before = store.verify().unwrap();
         assert!(
-            before.bad_records.contains(&d.id) && !before.policy_drift.is_empty(),
+            before
+                .bad_records
+                .contains(&crate::BadRecord::tag_failed(d.id.clone()))
+                && !before.policy_drift.is_empty(),
             "premise: both tampers are detected before the rotation: {before:?}"
         );
         assert!(
@@ -2517,7 +2520,9 @@ mod tests {
 
         let after = store.verify().unwrap();
         assert!(
-            after.bad_records.contains(&d.id),
+            after
+                .bad_records
+                .contains(&crate::BadRecord::tag_failed(d.id.clone())),
             "the edited drawer must still fail its tag after a rotation: {after:?}"
         );
         assert!(

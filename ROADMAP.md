@@ -14122,6 +14122,100 @@ orchestrator likewise answers `/healthz`.
 C++ logger in a model build) is not a Rust print and is not counted; a telemetry build's JSON log
 layer writes STDOUT, which is O333's.
 
+### O231 — CLOSED 2026-10-08: `verify` names a drawer whose tag verifies over covered meta that does not parse, and fails
+
+**Filed 2026-09-19 by O206's ruling; established by reading.**
+`walk_covered` yields `CoveredRow::MetaUnparseable` for a row whose record HMAC
+verifies while its `meta_json` does not parse as `DrawerMeta`, and `verify`
+counts it and reports it in no leg, on the argument that the decode path
+reports a corrupt row on every read. So `verify` answers OK over a row every
+read refuses — and `backup create` gates on that verdict. The row needs the
+vault key to reach (the tag covers `meta_json`), so it is a legacy or a
+defect-written row rather than an offline writer's. O206's sweep already names
+it as `unverifiable`; `verify` kept its verdict exactly, because changing a
+verify leg is a four-renderer change O206 did not rule.
+
+**Shape**: report it, either in `bad_records` with a distinct reason or in a
+leg of its own projected on all four renderers.
+
+**Gate**: a drawer re-tagged over an unparseable `meta_json` makes `verify`
+fail and names it. **Counterfactual**: today, `VERIFY OK`.
+
+#### BUILT 2026-10-08
+
+**Rulings followed, none made.** The direction is CLAUDE.md's rule that a keyed
+claim no leg reads is a gap. The placement is `bad_records` with a reason, as the
+2026-10-07 triage judged and as O269's ruling of 2026-10-08 (item 2: O231's
+`MetaUnparseable` "shares the arm") requires. The rotation is O232's ruling,
+verbatim: it refuses on `rotation_blockers()` and "never on … an O231 row" — a
+rotation re-tags the row over the bytes it holds without parsing them, so the row
+is exactly as detectable afterwards. That ruling's reason was read against this
+build's own finding below and still holds.
+
+**What was built.** `VerifyReport.bad_records` is a `Vec<BadRecord>`: a record id
+and a `BadReason` — `TagFailed` (every entry it held before) or `MetaUnparseable`.
+It serializes as ONE string per record, a bare id for a failed HMAC byte for byte
+as before and `"<id>: its HMAC verifies and its covered meta does not parse, so
+every read refuses it"` for the new reason, so `/v1`'s wire shape and the admin
+console's rendering are unchanged. `ok()` fails on either; `rotation_blockers()`
+matches every reason with no `_` and returns only `TagFailed`, so a new reason
+(O269's undecodable rows) does not compile unruled. The CLI prints the list as
+two lines — `hmac failures:` (failed HMACs, `TAMPERED:`) and `unreadable:`
+(`UNREADABLE: <the line>`) — because counting a verified tag as an HMAC failure
+misnames it; MCP prints both counts. The two receipt legs swallowed a refused
+`get` while `bad_records` was non-empty; they now swallow it only while a FAILED
+HMAC stands, which is the same condition for every vault that existed before this
+build — an O231 row, which blocks no rotation, must never empty a leg whose
+tampered receipt does. Unobservable today (the only `Integrity` those legs raise
+is a `get` over a row the walk already names as a failed HMAC), stated rather than
+tested. The retention sweep's `unverifiable` reason for such a row now says
+`verify` names it.
+
+**The entry's premise was wrong, and measured so.** "The row needs the vault key
+to reach" is false: the drawer canonical joins id, meta and content with a 0x1f
+separator and no lengths, so a writer without the key can move the meta/content
+boundary to a 0x1f in the content and the tag still verifies. Filed as
+O-NEW-O231-1, with the measurement below.
+
+**Tests**, a new `unparseable_meta_tests.rs` (5, in `undercroft-store`):
+`o231_a_drawer_tagged_over_unparseable_meta_fails_verify_and_is_named` (the gate:
+re-tagged with the key, its new tag recorded in the chain so the version-replay
+leg stays clean and the verdict is this finding's; the line and the wire too),
+`o231_a_writer_without_the_key_makes_one_by_moving_the_separator`,
+`o231_backup_create_refuses_it_and_a_rotation_leaves_it_detectable`,
+`o231_an_archive_holding_one_refuses_to_restore`, and
+`o231_a_link_citing_the_row_answers_an_error_never_ok` — a supersession link that
+cites the row makes `verify` return the cited drawer's `CorruptRow` (exit 1)
+rather than a verdict, never OK: pinned as a residual and handed to O269's item 2
+(noted there). Twelve `e2e` checks drive it through the release binary on an
+hmac-only vault whose 0x1f arrived by `import`: the premises, the CLI's `verify`
+(exit 2, `UNREADABLE:`, `hmac failures: 0`), `backup create` (exit 2), MCP
+(`isError`, `unreadable: 1`), `/v1` verify (200, `ok:false`, the line) and
+backups (409 integrity), a rotation that is not refused, the row still named
+after it, and `drawer delete` restoring `VERIFY OK`.
+
+**Counterfactuals.** CF-A, the silent arm put back: four of the five store tests
+fail (`verify` answered OK), the link test passes both ways as pinned. CF-B, the
+row made a rotation blocker: three fail. The e2e block against the base binary
+(`5f5fe2f`): seven of twelve fail — every verdict check and the post-rotation
+one — and the five tree-independent ones pass.
+
+**Real corpus**, the LoCoMo feed mined into 64 wings of a sealed vault (5,440
+drawers, 26 s): `verify` 0.21–0.35 s before and after the change on the clean
+vault, three runs each, both binaries in that band — the arm adds no query. 19
+drawers' sealed content began with 0x1f; one SQL statement moved their boundary
+and wrote no tag (the tag column's digest unchanged). The base binary then
+answered `VERIFY OK` and archived a backup; this build exits 2 naming exactly
+those 19 ids and refuses the backup. A `search` touching one exits 1 and a sealed
+rotation exits 1 at the re-seal with the database and manifest unchanged, on both
+binaries (O-NEW-O231-1). `drawer delete` of the 19 brought `VERIFY OK` and a
+backup back.
+
+**PATCH** inside the unreleased 1.7.0 (the 2026-09-08 ruling: the defect was the
+silence). `backup create` and `backup restore` now refuse a vault or an archive
+holding such a row, so `UPGRADING.md` carries the entry; `config check` cannot see
+it, and `verify --read-only` is the pre-flight.
+
 ## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
@@ -33468,24 +33562,40 @@ so they are checked in the same transaction.
 unless the destination still holds what the operator named. **Counterfactual**:
 today, no override exists.
 
-### O231 — `verify` skips a drawer whose tag verifies and whose covered meta does not parse, and answers OK
+### O-NEW-O231-1 — a drawer's tag binds its id, meta and content as one run of bytes, not where each ends
 
-**Filed 2026-09-19 by O206's ruling; established by reading.**
-`walk_covered` yields `CoveredRow::MetaUnparseable` for a row whose record HMAC
-verifies while its `meta_json` does not parse as `DrawerMeta`, and `verify`
-counts it and reports it in no leg, on the argument that the decode path
-reports a corrupt row on every read. So `verify` answers OK over a row every
-read refuses — and `backup create` gates on that verdict. The row needs the
-vault key to reach (the tag covers `meta_json`), so it is a legacy or a
-defect-written row rather than an offline writer's. O206's sweep already names
-it as `unverifiable`; `verify` kept its verdict exactly, because changing a
-verify leg is a four-renderer change O206 did not rule.
+**Filed 2026-10-08 by O231's build; measured.** `canonical` (store `lib.rs`) joins
+a drawer's id, `meta_json` and at-rest content with a 0x1f separator and no
+lengths. Serialized JSON never holds a raw 0x1f and at-rest content may — any
+ciphertext byte on a sealed vault, and on an hmac-only vault plaintext that an
+`import` carried, since only the save surfaces strip control characters — so a
+writer WITHOUT the key can move the meta/content boundary and the row's tag still
+verifies. O231 had said such a row needs the key. Measured on the LoCoMo feed
+mined into 64 wings of a sealed vault (5,440 drawers): 19 drawers' content began
+with 0x1f, and one SQL statement over them that wrote no tag made each unreadable
+everywhere — `drawer get` exited 1 with `corrupt row`, a `search` whose
+candidates included one exited 1, and a rotation exited 1 at its re-seal with
+nothing changed — while `verify` answered OK on the 1.6.1-era binary. Since
+O231's build `verify` names all 19 by id (exit 2) and `backup create` refuses.
+What remains is the ambiguity itself: an offline writer can make a chosen drawer
+unreadable without breaking its tag, and every read path fails on it as a run
+failure rather than a verdict. Not established, and the first thing this entry's
+unit must measure: whether the id/meta boundary can move too, so that a
+parseable meta is read from bytes that were written as content (reasoning says
+the row's id then changes, which `orphan_labels` would report; whether anything
+reads the moved row first is the question).
 
-**Shape**: report it, either in `bad_records` with a distinct reason or in a
-leg of its own projected on all four renderers.
+**Shape, for a ruling panel**: a length-prefixed canonical is the structural fix
+and a tag-format change, so it needs a recorded re-tag of every drawer and its
+own versioning ruling — never half-landed. A cheaper fence beside or before it:
+a covered `meta_json` holding a raw control byte, or an id holding one, is never
+one the write path produced, so `verify` and the read paths could name it as its
+own reason; and the search path's response to one unreadable candidate (fail the
+whole query) is a separate question from detecting it.
 
-**Gate**: a drawer re-tagged over an unparseable `meta_json` makes `verify`
-fail and names it. **Counterfactual**: today, `VERIFY OK`.
+**Gate**: a boundary moved with no key fails every read as a named finding and
+cannot yield a parseable meta from content bytes. **Counterfactual**: today the
+move succeeds with the tag intact, measured above.
 
 ### O235 — `StoreError::Integrity` says "HMAC mismatch" at sites where no HMAC was compared
 
@@ -34071,6 +34181,21 @@ every surface at once and is why O268 did not take it.
 **Gate**: the R3 flips and the two row-level corruptions each fail `verify` as a
 verdict (exit 2 / 409 integrity) on every renderer. **Counterfactual**: today, exit
 0 on the index flips and exit 1 on the others.
+
+**Amended 2026-10-08 by O231's build.** The arm this entry's ruling shares with
+O231 exists now: `VerifyReport.bad_records` is a `Vec<BadRecord>`, each a record id
+and a `BadReason` (`TagFailed`, `MetaUnparseable`), serialized as one string — a
+bare id for a failed HMAC, as before, and `"<id>: <reason>"` otherwise. An
+undecodable row joins it as a new `BadReason` variant, and the compiler then asks
+for its ruling in three exhaustive matches: `rotation_blockers()` (this entry's
+item 2 makes it a blocker, where O232's ruling keeps an O231 row out), the CLI's
+split into `hmac failures:` and `unreadable:`, and MCP's counts. One more abort
+belongs to item 2: a supersession link or a fact receipt that cites an O231 row
+makes `verify` return the cited drawer's `CorruptRow` (exit 1, a 500 on `/v1`)
+instead of a verdict, because the receipt legs read it through `get`.
+`o231_a_link_citing_the_row_answers_an_error_never_ok` pins that, and the two
+receipt legs now swallow an `Integrity` refusal only while a FAILED HMAC stands —
+an emptied leg must never drop a tampered receipt from the rotation's blockers.
 
 ### O270 — a restore over a vault whose database is missing refuses, including a fresh host `init` has populated
 
