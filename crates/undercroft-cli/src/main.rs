@@ -3678,6 +3678,7 @@ fn run(cli: Cli) -> Result<()> {
             let mut kg_facts = 0usize;
             let mut kg_entities = 0usize;
             let mut tunnels = 0usize;
+            let mut tunnels_new = 0usize;
             let mut batch: Vec<Drawer> = Vec::new();
             let mut kg_batch: Vec<undercroft_store::TripleExport> = Vec::new();
             let mut entity_batch: Vec<(String, String)> = Vec::new();
@@ -3744,8 +3745,14 @@ fn run(cli: Cli) -> Result<()> {
                 store.kg_import(exp)?;
                 kg_facts += 1;
             }
+            // A tunnel this vault already holds — every one, when a vault's
+            // own export is restored into it — writes nothing and appends no
+            // chain record (ROADMAP O236), so the summary says how many were
+            // new rather than calling every record a creation.
             for (f, t, l) in &tunnel_batch {
-                store.create_tunnel(f, t, l)?;
+                if store.create_tunnel(f, t, l)?.created {
+                    tunnels_new += 1;
+                }
                 tunnels += 1;
             }
             outln!(
@@ -3792,7 +3799,9 @@ fn run(cli: Cli) -> Result<()> {
             if kg_facts + kg_entities + tunnels > 0 {
                 outln!(
                     "knowledge graph: {kg_facts} fact(s) (receipts re-keyed), \
-                     {kg_entities} entit(y/ies), {tunnels} tunnel(s)"
+                     {kg_entities} entit(y/ies), {tunnels} tunnel(s) \
+                     ({tunnels_new} new, {} already present)",
+                    tunnels - tunnels_new
                 );
             }
         }
@@ -4104,8 +4113,17 @@ fn run(cli: Cli) -> Result<()> {
             let mut store = open_store(&cli, vault)?;
             match action {
                 TunnelAction::Create { from, to, label } => {
-                    let id = store.create_tunnel(from, to, label)?;
-                    outln!("Tunnel {id}: {from} <-> {to} ({label})");
+                    // A repeated create writes nothing and appends no chain
+                    // record (ROADMAP O236); the line says which happened.
+                    let out = store.create_tunnel(from, to, label)?;
+                    if out.created {
+                        outln!("Tunnel {}: {from} <-> {to} ({label})", out.id);
+                    } else {
+                        outln!(
+                            "Tunnel {}: {from} <-> {to} ({label}) already exists — nothing was written",
+                            out.id
+                        );
+                    }
                 }
                 TunnelAction::List { wing } => {
                     let tunnels = store.list_tunnels(wing.as_deref())?;

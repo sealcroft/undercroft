@@ -1646,6 +1646,79 @@ PATCH inside the unreleased 1.7.0: the flag keeps the promise its help makes. A 
 `--read-only backup create` or a keygen under `--read-only` now exits 1, so `UPGRADING.md` carries an
 entry; `config check` cannot see it.
 
+### A tunnel create that wrote nothing no longer records a write, and every surface says it was a no-op (O236)
+
+A tunnel's id is derived from its two wings and its label, so creating a tunnel the vault already
+holds inserts nothing — the store's `ON CONFLICT DO NOTHING` — and then appended a `tunnel/{id}`
+audit-chain record anyway, tagged over a fresh `created_at` that no row carries: a record claiming a
+write that never happened. Every surface answered it as a creation — `tunnel {id} created` over MCP,
+the creation line on the CLI, the same 201 body on `/v1` — and restoring a vault's own export into it
+appended one such record per tunnel. It is why `verify`'s version leg (O234) can ask a tunnel only
+whether it was destroyed — and the record weakened even that question: once a deleted tunnel's row
+was written back offline, a repeat create appended its record ABOVE the `del/tunnel/{id}` tombstone,
+and the leg read the row as written after its destruction. Measured on a copy with the old append:
+`verify` failed with one finding before the repeat and answered OK after it, the resurrected tunnel
+still served. This fix closes that: a repeat appends nothing and the finding stands. **A vault a
+1.6.0 or 1.6.1 binary wrote may already hold such a hidden resurrection** — the records it appended
+stay, the trail being append-only — and today's `verify` does not see one; finding them is filed as
+O-NEW-O236-2, whose shape reads the laundered row's tag sitting only below its tombstone.
+
+Now the insert's own row count decides, inside the transaction that would append: a create that
+inserted nothing appends nothing and anchors nothing, and `create_tunnel` returns
+`TunnelOutcome { id, created }` so a caller can tell the two apart. MCP's `undercroft_create_tunnel`
+and `undercroft tunnel create` answer a repeat with `already exists — nothing was written` (still a
+success: exit 0, `isError: false`); `POST /v1/vaults/{id}/tunnels` adds `"created"` to its body and
+keeps its documented 201 — any other status for a repeat moves that documented answer, so it is
+filed as a 2.0.0 question, O-NEW-O236-1; and both imports say how many tunnels were new — `N
+tunnel(s) (k new, m already present)` on the CLI, an additive `tunnels_new` beside an unchanged
+`tunnels` on `/v1`, whose record count the orchestrator's migration still compares with the
+export's. "Already exists" is said only after the stored row verifies under the vault's key: a row
+edited offline is the integrity verdict (exit 2, 409 `integrity`, naming `tunnel/{id}`), with nothing
+written — never "nothing was written" over a tampered row. An import meeting one stops there; it
+does not yet repair it as it would a drawer (O-NEW-O236-3), and `tunnel delete` then the import
+again restores it. The name guard and the label screen still run first, so a repeat whose label the
+screen now flags is refused as before. The records 1.6.x appended stay where
+they are, because the trail is append-only, which is also why tunnels keep the version leg's
+destruction arm only.
+
+Gates. The store: a repeat appends nothing, moves neither the committed head nor the row, and leaves
+the tunnel's newest record carrying the row's tag (the entry's gate); a different label is a new
+tunnel, and a re-create after a delete is a real write that records — the arm a fix keyed on "a
+record already exists" fails. The version leg's tunnel test now plants a 1.6.x-shaped surplus record
+and holds the row clean over it. Through each surface: MCP and `/v1` unit tests over the chain height,
+the CLI binary over the `audit` rows, a self-restore and a fresh import, and four e2e arms (CLI, MCP,
+`history --subject` counting the tunnel's one record, `/v1`). Counterfactuals on a copy of the tree,
+each recompiled: restoring the unconditional append fails all five record-asserting tests; restoring
+an outcome that always says `created` fails the seven reply-asserting ones, the rotation gate's
+re-derived id included; the record-keyed wrong fix fails the store gate alone, at the re-create.
+**A real corpus**: the LoCoMo feed mined into 32 wings of a sealed vault (2,720 drawers), a ring of 32
+tunnels, then the whole ring again on the CLI and over one `serve-mcp`: 64 repeats, 64 replies naming
+the no-op, `tunnel/` records 32 → 32 and the `audit` table unchanged; the vault's own export restored
+into it, `32 tunnel(s) (0 new, 32 already present)` with no `tunnel/` record added; `/v1` answering
+`created: false` then `true` for a new chord; `verify` OK with `version replay: 0`. The same drive
+over a build with the old behaviour restored appended 97 records of writes that never happened
+(`tunnel/` records 32 → 130), and `verify` answered OK over every one of them.
+
+**An independent review of the build found the code correct, four things wrong in what it claimed and
+recorded and one gap, all mine, each fixed before this landed**: the security effect above, unstated, with its
+residual unfiled; "already exists" decided by the id alone — now the row check, held by a store test
+(an edited row is the integrity class, an untouched one the no-op) and a CLI arm (`tunnel create` and
+`import` exit 2 over an edited row, writing nothing); the record naming the wrong refusal class for a
+handle that no longer writes (`IntegrityFinding` for a retired-on-integrity or stale-keys handle,
+`StoreError::StaleUnlock` only for a deferred promote); the `/v1` status question filed as open work
+when a different status moves a documented answer, so it now sits under 2.0.0 beside the in-tree
+precedent `POST /v1/vaults` answering 409 for a vault that exists; and a note claiming a 1.7.0
+vault's newest tunnel record always carries the row's tag, which a key rotation's re-tag makes false.
+`o236_a_repeat_cannot_hide_a_resurrected_tunnel` holds the security half: on a recompiled copy with
+the repeat's append put back it fails with the finding gone, and with the row check removed instead
+the row-check store test and the CLI arm fail while it stays green; all GREEN here.
+
+PATCH inside the unreleased 1.7.0: the only observable change is that a defect is gone — a record of
+a write that never happened, a reply that called a no-op a creation, and a repeat that answered
+success over a tampered row. No documented contract moves (the `/v1` status is unchanged and both new
+fields are additive). A create or an import that met an edited tunnel row now exits 2 where it exited
+0, so `UPGRADING.md` carries an entry; only a vault `verify` already fails on meets it.
+
 ### A reader that leaves never turns a verdict into a panic: exit 141, an integrity verdict still exits 2, and no diagnostic can kill a server (O287, O328)
 
 Rust ignores `SIGPIPE`, so a write to a pipe whose reader has gone fails with `EPIPE`, and `println!`

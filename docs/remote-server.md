@@ -241,6 +241,10 @@ GET    /v1/vaults/{id}/index/status      remote mirror vs local counts. A read:
                                         null when NO mirror exists — which is
                                         not the same as a mirror holding zero
 POST   /v1/vaults/{id}/tunnels          connect two wings {from,to,label}
+                                         201 + {created:false} for a tunnel
+                                         already held: nothing written, no
+                                         chain record (O236); 409 integrity
+                                         if the held row fails its tag
 GET    /v1/vaults/{id}/tunnels          list tunnels (wing?)
 GET    /v1/vaults/{id}/tunnels/traverse wings reachable from start (start, depth?)
 DELETE /v1/vaults/{id}/tunnels/{tid}    remove one tunnel (404 if absent)

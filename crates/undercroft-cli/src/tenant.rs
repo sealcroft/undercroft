@@ -2695,8 +2695,9 @@ impl Tenancy {
     /// stands at the store's own choke point: `create_tunnel` validates both
     /// wing names and the label through `validate_name`, refuses the reserved
     /// review wing as either endpoint, runs the tier-1 screen over the label
-    /// via the shared `SCREENED_FIELDS` inventory (O29), appends its own chain
-    /// record and anchors the manifest. Re-implementing any of that here would
+    /// via the shared `SCREENED_FIELDS` inventory (O29), and — when it inserted
+    /// the row (O236) — appends its own chain record and anchors the manifest.
+    /// Re-implementing any of that here would
     /// be the second implementation of one decision this project keeps
     /// removing — the route's job is to parse and to answer.
     fn tunnel_create(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
@@ -2706,10 +2707,22 @@ impl Tenancy {
         let to = body_str(&body, "to")?;
         let label = body_str(&body, "label")?;
         let store = self.store_for(id)?;
-        let tid = store.create_tunnel(&from, &to, &label).map_err(store_err)?;
+        let out = store.create_tunnel(&from, &to, &label).map_err(store_err)?;
+        // `created` is additive (ROADMAP O236): `false` when this vault
+        // already held the tunnel and its row verified, so nothing was written
+        // and no chain record appended; a held row that fails its tag is 409
+        // `integrity` through `store_err`. The status stays the documented 201
+        // either way — any other status for a repeat moves a documented
+        // contract, so it is a 2.0.0 question, ROADMAP O-NEW-O236-1.
         Ok((
             201,
-            Body::Json(json!({ "id": tid, "from": from, "to": to, "label": label })),
+            Body::Json(json!({
+                "id": out.id,
+                "from": from,
+                "to": to,
+                "label": label,
+                "created": out.created,
+            })),
         ))
     }
 
@@ -3310,8 +3323,13 @@ impl Tenancy {
         for exp in &kg_records {
             store.kg_import(exp).map_err(store_err)?;
         }
+        // A tunnel this vault already holds writes nothing and appends no
+        // chain record (ROADMAP O236); `tunnels_new` says how many did.
+        let mut tunnels_new = 0u64;
         for (f, t, l) in &tunnel_records {
-            store.create_tunnel(f, t, l).map_err(store_err)?;
+            if store.create_tunnel(f, t, l).map_err(store_err)?.created {
+                tunnels_new += 1;
+            }
         }
         // Additive keys: a caller that ignores them sees the response this
         // route always returned.
@@ -3333,7 +3351,13 @@ impl Tenancy {
                 "quarantined": quarantined,
                 "kg_triples": kg_records.len(),
                 "kg_entities": entity_records.len(),
+                // Records processed, as always — the orchestrator's migration
+                // compares this with the export's declared count, so it must
+                // not start counting only rows written.
                 "tunnels": tunnel_records.len(),
+                // Additive (ROADMAP O236): how many of those were new to this
+                // vault. The rest were already held and wrote nothing.
+                "tunnels_new": tunnels_new,
                 "manifest": manifest.map(|m| json!({
                     "vault": m.vault,
                     "created_at": m.created_at,
@@ -5036,6 +5060,71 @@ mod tests {
             Some(0),
             "a lag already reported must not be re-announced on every later \
              call — `anchor_at_open` is never cleared: {body}"
+        );
+    }
+
+    /// **ROADMAP O236 on `/v1`: a repeated tunnel create, through either door
+    /// that reaches it, writes nothing and says so.** `POST …/tunnels` answered
+    /// the same body for a tunnel it wrote and one it already held, and both
+    /// appended a chain record; an import restoring a tunnel the vault holds
+    /// did the same and counted it among `tunnels` with nothing to tell them
+    /// apart.
+    #[test]
+    fn o236_a_repeated_tunnel_create_on_v1_writes_nothing_and_says_so() {
+        let mut s = surface(false);
+        let height = |s: &mut Surface| -> u64 {
+            let (code, body) = s.call("GET", "/v1/vaults/acme/stats", None);
+            assert_eq!(code, 200, "{body}");
+            let v: Value = serde_json::from_str(&body).unwrap();
+            v["chain_records"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("no chain_records: {body}"))
+        };
+        let create = r#"{"from":"ops","to":"notes","label":"see also"}"#;
+
+        let before = height(&mut s);
+        let (code, body) = s.call("POST", "/v1/vaults/acme/tunnels", Some(create));
+        assert_eq!(code, 201, "{body}");
+        let first: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(first["created"], json!(true), "premise: {body}");
+        let after_first = height(&mut s);
+        assert_eq!(after_first, before + 1, "premise: a create records itself");
+
+        let (code, body) = s.call("POST", "/v1/vaults/acme/tunnels", Some(create));
+        assert_eq!(code, 201, "the documented status is unchanged: {body}");
+        let again: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(again["id"], first["id"], "the same tunnel: {body}");
+        assert_eq!(
+            again["created"],
+            json!(false),
+            "and the reply says so: {body}"
+        );
+        assert_eq!(
+            height(&mut s),
+            after_first,
+            "a repeated create appended a chain record for a write that never happened"
+        );
+
+        // The import door: one tunnel the vault holds, one it does not.
+        let payload = concat!(
+            r#"{"tunnel":{"from_wing":"ops","to_wing":"notes","label":"see also"}}"#,
+            "\n",
+            r#"{"tunnel":{"from_wing":"ops","to_wing":"archive","label":"older"}}"#,
+            "\n"
+        );
+        let (code, body) = s.call("POST", "/v1/vaults/acme/import", Some(payload));
+        assert_eq!(code, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            v["tunnels"],
+            json!(2),
+            "records processed, as always: {body}"
+        );
+        assert_eq!(v["tunnels_new"], json!(1), "one was new: {body}");
+        assert_eq!(
+            height(&mut s),
+            after_first + 1,
+            "only the new tunnel recorded itself"
         );
     }
 
