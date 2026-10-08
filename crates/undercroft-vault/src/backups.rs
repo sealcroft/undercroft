@@ -49,16 +49,19 @@ pub struct Stage {
 
 impl Stage {
     /// Create a fresh stage under `backups`, sweeping stages a crash left
-    /// behind. `create_dir`, never `create_dir_all`, for the stage itself: a
-    /// path planted at its name is refused rather than written into.
+    /// behind. `.staging` is judged FIRST ([`staging_root`]): a symbolic link
+    /// there, or anything but a directory, is refused before the sweep reads
+    /// it or a stage is made in it (ROADMAP O273). `create_dir`, never
+    /// `create_dir_all`, for `.staging` and for the stage itself: a path
+    /// planted at either name is refused rather than written into.
     pub fn begin(backups: &Path) -> io::Result<Stage> {
-        let root = backups.join(STAGING_DIR);
-        sweep_stale(&root);
         let mut last = None;
         // A concurrent publish removes an EMPTY `.staging` behind itself, which
-        // can land between the two creates below; a second attempt meets it.
+        // can land between judging it and making the stage in it; a second
+        // attempt meets it.
         for _ in 0..3 {
-            fs::create_dir_all(&root)?;
+            let root = staging_root(backups)?;
+            sweep_stale(&root);
             let dir = root.join(nonce());
             match fs::create_dir(&dir) {
                 Ok(()) => {
@@ -135,6 +138,50 @@ fn nonce() -> String {
     let mut n = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut n);
     hex::encode(n)
+}
+
+/// `backups/.staging`, made if absent, and REFUSED when what sits at its name
+/// is not a directory — a symbolic link above all (ROADMAP O273). It is where
+/// the stage — the copied database — is built and where the sweep removes
+/// abandoned stages, so a link planted there aimed both wherever it pointed:
+/// the archive was built and published from there, and every 32-hex directory
+/// older than an hour there was removed. Judged by `symlink_metadata`, never
+/// followed, as the restore area is (ROADMAP O268). `backups/` itself is made
+/// when absent, as it always was.
+///
+/// What a stat cannot close, stated: a link swapped in at the name between
+/// this judgement and the sweep's read or the stage's `create_dir` is
+/// followed — the restore area's window, one directory over; closing it needs
+/// directory descriptors (`openat`), which `std` does not offer.
+fn staging_root(backups: &Path) -> io::Result<PathBuf> {
+    fs::create_dir_all(backups)?;
+    let root = backups.join(STAGING_DIR);
+    for _ in 0..3 {
+        match fs::symlink_metadata(&root) {
+            Ok(m) if m.is_dir() => return Ok(root),
+            Ok(m) => {
+                return Err(io::Error::other(format!(
+                    "{} is {}, not the directory a backup is built in. A backup never follows \
+                     a link there: the stage it copies the database into, and the sweep of \
+                     abandoned stages, would act wherever it points. Remove it (`backup \
+                     create` makes the directory itself), then back up again. Nothing was \
+                     archived (ROADMAP O273)",
+                    root.display(),
+                    crate::deletes::kind(&m)
+                )))
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => match fs::create_dir(&root) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e),
+            },
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::other(format!(
+        "{} kept disappearing while a backup made it; nothing was archived",
+        root.display()
+    )))
 }
 
 /// Remove the stages a crashed backup left: only entries named like a stage
@@ -420,5 +467,96 @@ mod tests {
         sweep_stale(&root);
         assert!(fresh.exists(), "a fresh stage may be a backup in progress");
         assert!(foreign.exists());
+    }
+
+    #[cfg(unix)]
+    fn mtime(p: &Path) -> std::time::SystemTime {
+        fs::symlink_metadata(p).unwrap().modified().unwrap()
+    }
+
+    /// **ROADMAP O273.** A `.staging` that is a symbolic link is refused
+    /// before the sweep or a create touches it: a crashed-backup-shaped
+    /// directory older than the sweep's hour, in the directory the link names,
+    /// survives; nothing is made there — its listing and its mtime, which any
+    /// create or removal inside it moves, are unchanged; and the link stays.
+    /// A regular file at the name is refused too. The control is the fix's own
+    /// behaviour: a real `.staging` is still swept and staged in, so the
+    /// refusal is the link's, not the directory's.
+    #[cfg(unix)]
+    #[test]
+    fn o273_a_linked_staging_refuses_the_stage_and_nothing_is_swept_or_made_through_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let b = dir.path().join("backups");
+        fs::create_dir(&b).unwrap();
+        let elsewhere = tempfile::TempDir::new().unwrap();
+        let victim = elsewhere.path().join("victim");
+        let shaped = victim.join("e".repeat(32));
+        fs::create_dir_all(&shaped).unwrap();
+        fs::write(shaped.join("keep.txt"), b"not a backup's").unwrap();
+        let old = std::time::SystemTime::now() - Duration::from_secs(2 * 60 * 60);
+        fs::File::open(&shaped).unwrap().set_modified(old).unwrap();
+        fs::File::open(&victim).unwrap().set_modified(old).unwrap();
+        assert!(
+            mtime(&shaped).elapsed().unwrap() > STALE_STAGE,
+            "premise: the sweep would take it if it reached it"
+        );
+        let victim_mtime = mtime(&victim);
+        std::os::unix::fs::symlink(&victim, b.join(STAGING_DIR)).unwrap();
+
+        let refused = Stage::begin(&b)
+            .err()
+            .expect("a linked .staging must be refused");
+        assert!(
+            refused.to_string().contains("ROADMAP O273")
+                && refused.to_string().contains("symbolic link"),
+            "{refused}"
+        );
+        assert!(
+            shaped.join("keep.txt").exists(),
+            "nothing was swept through the link"
+        );
+        assert_eq!(
+            fs::read_dir(&victim).unwrap().count(),
+            1,
+            "nothing was made there"
+        );
+        assert_eq!(
+            mtime(&victim),
+            victim_mtime,
+            "nothing was created or removed in the directory the link names"
+        );
+        assert!(fs::symlink_metadata(b.join(STAGING_DIR))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+
+        // A regular file at the name: refused, and left as it was.
+        fs::remove_file(b.join(STAGING_DIR)).unwrap();
+        fs::write(b.join(STAGING_DIR), b"a file").unwrap();
+        let refused = Stage::begin(&b)
+            .err()
+            .expect("a file at .staging must be refused");
+        assert!(refused.to_string().contains("ROADMAP O273"), "{refused}");
+        assert_eq!(fs::read(b.join(STAGING_DIR)).unwrap(), b"a file");
+
+        // The control: a real `.staging` holding an abandoned stage is swept,
+        // and the backup stages inside it.
+        fs::remove_file(b.join(STAGING_DIR)).unwrap();
+        let abandoned = b.join(STAGING_DIR).join("f".repeat(32));
+        fs::create_dir_all(&abandoned).unwrap();
+        fs::File::open(&abandoned)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let stage = Stage::begin(&b).unwrap();
+        assert!(!abandoned.exists(), "a real .staging is still swept");
+        assert!(stage.dir.starts_with(b.join(STAGING_DIR)) && stage.dir.is_dir());
+        drop(stage);
+        assert!(!b.join(STAGING_DIR).exists());
+
+        // And `backups/` itself is made when absent, as it always was.
+        let fresh = dir.path().join("fresh-backups");
+        let stage = Stage::begin(&fresh).unwrap();
+        assert!(stage.dir.is_dir());
     }
 }

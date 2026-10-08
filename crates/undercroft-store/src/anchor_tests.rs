@@ -2799,6 +2799,27 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     assert!(body_of(&archive, "drop").contains("fs::remove_dir_all("));
     assert!(body_of(&archive, "sweep_stale").contains("fs::remove_dir_all("));
     assert!(body_of(&archive, "prune").contains("fs::remove_dir_all("));
+    // ROADMAP O273: the stage's container is judged — a link or anything but a
+    // directory refused — before the sweep reads it or a stage is made in it.
+    let begin = body_of(&archive, "begin");
+    let (judged, swept, made) = (
+        begin
+            .find("staging_root(")
+            .expect("begin judges `.staging`"),
+        begin.find("sweep_stale(").expect("begin sweeps"),
+        begin
+            .find("fs::create_dir(")
+            .expect("begin makes the stage"),
+    );
+    assert!(
+        judged < swept && judged < made,
+        "`.staging` is judged before the sweep or the stage touches it"
+    );
+    assert!(
+        !begin.contains("create_dir_all(")
+            && body_of(&archive, "staging_root").contains("fs::symlink_metadata("),
+        "`.staging` is never made through a link"
+    );
     for w in [
         "fs::remove_file(",
         "File::create(",
@@ -3078,6 +3099,22 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     );
     assert_eq!(restores.matches("fs::remove_file(").count(), 1);
     assert!(body_of(&restores, "discard_unpromoted_staging").contains("fs::remove_file("));
+    // ROADMAP O301: what a live vault directory may hold when a restore
+    // replaces it is decided by ONE survey, the vault delete's — asked by the
+    // door before anything is staged and by the swap under the hold. O283's
+    // three-name check is gone, so no second rule can drift from the first.
+    assert!(
+        body_of(&restores, "irregular_target").contains("deletes::survey("),
+        "the restore asks the delete's survey"
+    );
+    assert!(
+        body_of(&restores, "swap<H>").contains("irregular_target("),
+        "the swap asks it again"
+    );
+    assert!(
+        !restores.contains("fn linked_target("),
+        "a second rule for what a vault directory may hold"
+    );
     for w in ["File::create(", "fs::write(", "fs::copy("] {
         assert_eq!(
             restores.matches(w).count(),
@@ -3108,6 +3145,13 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     assert!(
         verified < held && held < swapped,
         "verify, then hold, then swap"
+    );
+    let surveyed = door
+        .find("restores::irregular_target(")
+        .expect("the door asks what the live vault holds (ROADMAP O301)");
+    assert!(
+        surveyed < door.find("Stage::copy(").expect("the stage"),
+        "the live vault is surveyed before anything is staged"
     );
     let holds: usize = cli
         .iter()

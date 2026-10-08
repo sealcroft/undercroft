@@ -259,6 +259,17 @@ runs — it holds one read snapshot for its verify and copy, 0.7 s at 10⁵ draw
 — and shrink at the next checkpoint. `undercroft config check` cannot see any
 of this: it concerns the archives on disk, not a declaration.
 
+**And since O273, in the same release:** `backup create` exits 1 (`/v1` 500,
+no `class`) with nothing archived when `backups/.staging` — the directory every
+archive is built in before it is published — is a symbolic link or anything but
+a directory, naming it. It used to follow the link: the copied database was
+built and published from wherever it pointed, and the sweep of abandoned stages
+removed every 32-hex directory over an hour old there. No release creates that
+entry as a link, so a deployment meets this only if one was put there by hand:
+remove it (`backup create` makes the directory itself), then back up again.
+`undercroft config check` cannot see it: it is a state of the data directory,
+not a declaration.
+
 ### `backup restore` proves an archive before it touches the vault, and refuses one that does not verify (O268)
 
 **Symptom, one of:** a restore that used to print `Restored` now exits 2 (a
@@ -307,8 +318,16 @@ none of the rest.
 linked `vaults/<vault>`, or a linked database or manifest inside it — exits 1
 (`/v1` 400) with nothing changed, where it used to rename the LINK aside, orphan
 the directory it named and move the vault onto the palace's own filesystem: move
-the real directory into place, then restore (ROADMAP O283). A restore into a
-vault that does not exist exits 1 if a vault appears there while it runs, rather
+the real directory into place, then restore (ROADMAP O283). **Since O301 that
+covers every entry of the vault's directory**, by the rule a vault delete
+applies: a linked `vault.db-wal` (committed frames) or `vault.json.next`, a
+subdirectory, a FIFO — anything that is not a regular file — exits 1 (`/v1`
+400) naming it, where a linked `.next` or `-shm` used to be renamed aside with
+the vault and removed as a link, leaving what it named behind, a subdirectory
+was removed with the vault, its files included, and a linked `-wal` failed with
+a raw "unable to open database file" (`/v1` 500) after the archive was staged.
+Replace the link with what it names, or move the entry out, then restore. A
+restore into a vault that does not exist exits 1 if a vault appears there while it runs, rather
 than replacing it with nothing holding it (O282). The refusal for a held vault
 now prints the store's own words — *"… is open in another process, and
 replacing it beneath that process destroys it …"*, or that another restore

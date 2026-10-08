@@ -5517,4 +5517,123 @@ mod tests {
         assert_eq!(code, 200, "legacy import is unchanged: {body}");
         assert!(body.contains(r#""manifest":null"#), "{body}");
     }
+
+    // ---- ROADMAP O273 and O301: links under backups/ and in a live vault ----
+
+    /// **`POST …/backups` beside a `backups/.staging` that is a symbolic link
+    /// refuses through the store's one door** (ROADMAP O273), in the class the
+    /// restore area's identical refusal answers (O268's container: an I/O-class
+    /// 500, a state of the installation to fix, never a verdict about the
+    /// vault), with nothing swept or staged through the link and no archive.
+    /// The link removed, the same route archives.
+    #[cfg(unix)]
+    #[test]
+    fn o273_v1_backup_create_refuses_a_linked_staging() {
+        let mut s = surface(false);
+        let backups = s.dir.path().join(undercroft_vault::BACKUPS_DIR);
+        std::fs::create_dir_all(&backups).unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let shaped = elsewhere.path().join("ab".repeat(16));
+        std::fs::create_dir_all(&shaped).unwrap();
+        std::fs::write(shaped.join("vault.db"), b"shaped like a crashed stage").unwrap();
+        let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        std::fs::File::open(&shaped)
+            .unwrap()
+            .set_modified(two_hours_ago)
+            .unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), backups.join(".staging")).unwrap();
+        let names = |d: &std::path::Path| {
+            let mut v: Vec<String> = std::fs::read_dir(d)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        let (code, body) = s.call("POST", "/v1/vaults/acme/backups", None);
+        assert_eq!(code, 500, "{body}");
+        assert!(
+            body.contains("ROADMAP O273") && body.contains("symbolic link"),
+            "{body}"
+        );
+        assert!(
+            !body.contains("\"class\""),
+            "not a verdict about the vault: {body}"
+        );
+        assert_eq!(
+            names(elsewhere.path()),
+            ["ab".repeat(16)],
+            "nothing swept or staged through the link"
+        );
+        assert_eq!(
+            std::fs::read(shaped.join("vault.db")).unwrap(),
+            b"shaped like a crashed stage"
+        );
+        assert_eq!(names(&backups), [".staging"], "no archive");
+
+        std::fs::remove_file(backups.join(".staging")).unwrap();
+        let (code, body) = s.call("POST", "/v1/vaults/acme/backups", None);
+        assert_eq!(
+            code, 201,
+            "control: the link gone, the backup is taken: {body}"
+        );
+    }
+
+    /// **`POST …/backups/restore` refuses a live vault holding a linked `-wal`
+    /// or a linked staged manifest** (ROADMAP O301, the vault delete's survey on
+    /// O283's ruling): 400 in the store's words naming the entry, the link and
+    /// what it names unchanged. O283's check named three entries, so both were
+    /// renamed aside with the vault and removed as links. The archive is taken
+    /// through a handle of its own, so no request leaves this server holding the
+    /// vault — whose close would remove a `-wal` by its path, the link included.
+    #[cfg(unix)]
+    #[test]
+    fn o301_v1_restore_refuses_a_live_vault_holding_a_link() {
+        let mut s = surface(false);
+        let root = s.dir.path().to_path_buf();
+        let name = {
+            let m = VaultManager::open(&root, None).unwrap();
+            let store = VaultStore::open(m.unlock("acme").unwrap()).unwrap();
+            match store
+                .backup(&root.join(undercroft_vault::BACKUPS_DIR))
+                .unwrap()
+            {
+                undercroft_store::BackupOutcome::Created(r) => r.name,
+                undercroft_store::BackupOutcome::Refused(r) => panic!("premise: {r:?}"),
+            }
+        };
+        let vault = root.join("vaults").join("acme");
+        let elsewhere = TempDir::new().unwrap();
+        let body = format!("{{\"name\":\"{name}\"}}");
+        for entry in ["vault.db-wal", "vault.json.next"] {
+            if let Ok(m) = std::fs::symlink_metadata(vault.join(entry)) {
+                assert!(
+                    m.is_file() && m.len() == 0,
+                    "premise: no {entry} of its own"
+                );
+                std::fs::remove_file(vault.join(entry)).unwrap();
+            }
+            let named = elsewhere.path().join(entry);
+            std::fs::write(&named, format!("what {entry} names")).unwrap();
+            std::os::unix::fs::symlink(&named, vault.join(entry)).unwrap();
+            let (code, answer) = s.call("POST", "/v1/vaults/acme/backups/restore", Some(&body));
+            assert_eq!(code, 400, "{entry}: {answer}");
+            assert!(
+                answer.contains(&format!("{entry} is a symbolic link"))
+                    && answer.contains("ROADMAP O283, O301"),
+                "{entry}: {answer}"
+            );
+            assert!(std::fs::symlink_metadata(vault.join(entry))
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            assert_eq!(
+                std::fs::read(&named).unwrap(),
+                format!("what {entry} names").into_bytes()
+            );
+            std::fs::remove_file(vault.join(entry)).unwrap();
+        }
+        let (code, answer) = s.call("POST", "/v1/vaults/acme/backups/restore", Some(&body));
+        assert_eq!(code, 200, "control: nothing irregular left: {answer}");
+    }
 }
