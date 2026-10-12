@@ -4012,7 +4012,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**462** of the **477** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**463** of the **478** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -55358,6 +55358,86 @@ the maintainer's, asked with the cumulative figures this ruling makes every unit
 **Placement.** A pure decision with no code of its own, so the entry stays under `## Unversioned`, finished, with
 its row in the battery's `UNVERSIONED_CLOSED` roster (O101). O252's escalated question names this entry beside
 it.
+
+### O433 — CLOSED 2026-10-12 by the maintainer's ruling: `CLAUDE.md` is split into a core every agent reads on every turn and reference documents read when the work touches their area, and the split is the standard
+
+**Filed and closed 2026-10-12, as a pure decision about the agent guide.** `CLAUDE.md` is injected
+into every agent's every turn, the session agent's and every subagent's alike, and at 359,360 bytes
+it was the largest single cost of running an agent on this project, paid again on each turn whatever
+the turn was about. Most of it was text an agent needs only when its work touches one area: the
+Layout section (191 KB, of which the store crate's one bullet was 93 KB), the Build & test block and
+its lessons, and the long form of each invariant.
+
+#### RULED 2026-10-12 by the maintainer
+
+**The question**, as it was put to the maintainer: "Slim CLAUDE.md, or split it into a short core
+file plus reference documents agents read only when needed. … content should move to docs, not be
+deleted".
+
+**The maintainer's answer, verbatim:** "1 -> split and 2 also let that be the standard".
+
+**Decided:** split, moving content and deleting none, and the split is the standard from here on, so
+the core does not grow back. **The search for a prior ruling** — `rul(ed|ing)` over this file for the
+guide's size or form — found none: O173 rules how a question is decided and where its ruling is
+recorded, which this entry follows, and says nothing about the guide's shape.
+
+#### BUILT 2026-10-12
+
+- **The core**, `CLAUDE.md`: 359,360 → 46,487 bytes, about 89,800 → 11,600 tokens. The byte figures
+  are measured (`wc -c`); the token figures are an ESTIMATE, bytes ÷ 4 — the ratio the question's
+  own "359 KB ≈ 90k tokens" implies — and no tokenizer was run. The core keeps the project identity
+  and the current-release paragraph, the role statement with every binding consequence and the
+  ruling procedure verbatim, the suite commands and the build essentials, every invariant in one
+  line (five of them verbatim), the definition of done (items 1, 3, 5 and 6 verbatim, 2, 4 and 7 in
+  one line each), session-end hygiene, the conventions (the semantic-versioning test verbatim, the
+  configuration classes and the release flow in brief), and an index naming every reference
+  document and when to read it.
+- **Eighteen reference documents** under `docs/agent-guide/`, 350,811 bytes: nine `layout-*` by
+  crate and area (`layout-store.md` alone is 94,796 bytes, the store crate's bullet), then
+  `build-and-test.md`, `build-pitfalls.md`, `ci-and-release.md`, `invariants-storage.md`,
+  `invariants-retrieval.md`, `invariants-surfaces.md`, `definition-of-done.md`,
+  `session-end-hygiene.md` and `config-classes.md`. Each opens with a header saying what it holds,
+  when to read it, that it governs over the core's one-line form, and which gate reads a figure in
+  it; the core's organisation section says that "this file", in any part of the guide, means the
+  whole guide.
+- **Nothing was deleted, and that is measured rather than asserted.** A checker split the old file
+  into 136 units — blank-line paragraphs, cut again at every top-level list item, the finest cut
+  the split made — and found every one byte-for-byte in exactly one file of the new set, after a
+  premise that a one-word change to a unit is NOT found. The only new text is the core's
+  organisation section, its one-line statements and index, and each reference document's header.
+- **Gates re-pointed, each premise still firing.** The suite and cargo figure readers read
+  `FIGURES_DOC`, `docs/agent-guide/build-and-test.md`: `declare_suite_counts`,
+  `declare_cargo_counts`, and the post-run `integration tests (N run` and `= N compiled` reads, now
+  one `declare_test_totals`; `tests/house-figures.sh` reads its cargo figure there too. Fourteen
+  `PROSE_FIGURES` rows read the reference document their sentence moved to; the workspace crate
+  count stayed in the core, and so did the `Current release` sentence the `version surfaces`
+  preflight reads.
+- **Three checks added, none of them a new preflight**, because the preflight count is itself a
+  gated figure: the cargo figures, which had no premise of their own, must be readable from
+  `FIGURES_DOC` before any suite runs; the core must republish no suite figure, asked through the
+  same readers; and, in the `prose figures` preflight, the core must stay within the limit its own
+  organisation sentence states and its index must name exactly the files under `docs/agent-guide/`
+  in both directions, behind a probe that plants a size, an unindexed and a dangling finding and
+  requires nothing of a clean fixture. `bash tests/battery.sh --preflight-only` exits 0 at the final
+  tree.
+
+**Applied backwards**, as a rule here must be: the standard reclassifies nothing, because the guide
+has never been split before — it is untested by history, and this is its first application. What
+it changes is where a unit writes: a layout or a lesson goes to the reference document that owns the
+area, and a moved suite figure is updated in `FIGURES_DOC`.
+
+**What remains.** The moved paragraphs still say "this file" and, in places, "`CLAUDE.md`
+publishes"; they were moved unchanged on purpose, and each document's header says how to read them.
+Comments in `crates/` and `tests/` that cite "the CLAUDE.md invariant" or recount history still
+resolve, since the core names every invariant and its document. The two briefs under
+`.handover/rulings-2026-10-07/` tell an agent to read `CLAUDE.md` in full and to update its Build &
+test block; they are gitignored and outside this unit's worktree, and the session agent updates
+them. No gate can see a reference document going stale beside the code it describes — no more than
+one saw the Layout section do it — so the audit after an engine change still reads the document that
+names the thing changed.
+
+**Placement.** A pure decision with no engine code, so the entry stays under `## Unversioned`,
+finished, with its row in the battery's `UNVERSIONED_CLOSED` roster (O101).
 
 ## Beyond 2.0.0 — the competitive track
 

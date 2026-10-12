@@ -764,7 +764,8 @@ fi
 # counterfactual fired on schema pages. It was re-run after the fix.)
 #
 # Deliberately NOT a subshell: PASS/FAIL are compared against the figure
-# CLAUDE.md publishes for this suite, and a subshell's increments are lost.
+# the agent guide publishes for this suite (`docs/agent-guide/build-and-test.md`),
+# and a subshell's increments are lost.
 E2E_HOME="$UNDERCROFT_HOME"
 export UNDERCROFT_HOME=/tmp/o91-wal
 rm -rf "$UNDERCROFT_HOME"; mkdir -p "$UNDERCROFT_HOME"

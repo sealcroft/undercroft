@@ -685,7 +685,8 @@ candidate slice, so IDF and `avgdl` are **pool-shaped** — they described
 neither the vault before the per-wing tier nor the wing after it. The
 conclusion is unchanged and the reason is now the true one; the cost of
 the pool shaping is recorded under the poison-resistance invariant in
-CLAUDE.md (df-flooding is cheaper than a corpus-wide count by roughly
+the agent guide, `docs/agent-guide/invariants-retrieval.md` (df-flooding
+is cheaper than a corpus-wide count by roughly
 corpus/pool).
 
 ### What was filed, and closed: recall leaks with corpus size

@@ -144,10 +144,13 @@ rate_limit() {
 # Both are read the way the tree's own gates read them, never from prose.
 TRUE_MCP=$(awk '/pub const MCP_TOOLS/,/^\];/' crates/undercroft-cli/src/parity.rs \
            | grep -cE '^\s*"undercroft_[a-z_]+",' || true)
-# The cargo test count as CLAUDE.md publishes it, which `tests/battery.sh`
-# already compares against a real run — so this reads the published figure
-# rather than re-deriving it, and the battery is what keeps that honest.
-TRUE_TESTS=$(grep -oE 'cargo unit \+ integration tests \([0-9]+ run' CLAUDE.md \
+# The cargo test count as the agent guide publishes it, which
+# `tests/battery.sh` already compares against a real run — so this reads the
+# published figure rather than re-deriving it, and the battery is what keeps
+# that honest. It sat in `CLAUDE.md` until the guide was split (ROADMAP O433);
+# the file below is the battery's `FIGURES_DOC`, and the premise beneath
+# refuses an empty read, so a figure that moves again fails here loudly.
+TRUE_TESTS=$(grep -oE 'cargo unit \+ integration tests \([0-9]+ run' docs/agent-guide/build-and-test.md \
              | grep -oE '[0-9]+' | head -1)
 
 if [ -z "${TRUE_TESTS:-}" ] || [ "${TRUE_MCP:-0}" -lt 10 ]; then
