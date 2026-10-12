@@ -2453,6 +2453,116 @@ fn o212_read_only_keygen_and_sign_keygen_create_nothing() {
     assert!(fresh.join("bundle-sign.key").is_file());
 }
 
+/// **A link at an identity's path is refused, never followed** (ROADMAP
+/// O321, probe P-Q3e). `write_identity` asked `exists()`, which follows a
+/// link, so a DANGLING link planted at `<data_dir>/bundle.key` read as
+/// absent and the secret was written through it, wherever it pointed, at
+/// exit 0. Both keygens now refuse it at exit 1 with the overwrite refusal,
+/// write nothing through it and leave no temp file; the default path and
+/// `--out` take the same door. A fresh identity is owner-only, and holds
+/// exactly what `bundle recipient` and `bundle sender` read.
+#[cfg(unix)]
+#[test]
+fn o321_keygen_refuses_a_link_at_the_identity_path_and_writes_nothing_through_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = TempDir::new().unwrap();
+    let elsewhere = TempDir::new().unwrap();
+    for (keygen, file) in [("keygen", "bundle.key"), ("sign-keygen", "bundle-sign.key")] {
+        let target = elsewhere.path().join(format!("{file}.planted"));
+        std::os::unix::fs::symlink(&target, home.path().join(file)).unwrap();
+        let out = elsewhere.path().join(format!("out-{file}"));
+        std::os::unix::fs::symlink(&target, &out).unwrap();
+        for args in [
+            vec!["bundle", keygen],
+            vec!["bundle", keygen, "--out", out.to_str().unwrap()],
+        ] {
+            cmd(&home)
+                .args(&args)
+                .assert()
+                .failure()
+                .code(1)
+                .stderr(predicate::str::contains("refusing to overwrite"))
+                .stderr(predicate::str::contains("nothing was written"));
+            assert!(!target.exists(), "{args:?} wrote through the link");
+        }
+        for dir in [home.path(), elsewhere.path()] {
+            let names: Vec<String> = std::fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            assert!(
+                names.iter().all(|n| !n.contains(".tmp.")),
+                "a temp file was left: {names:?}"
+            );
+        }
+        // The control: with the link gone the same command writes the
+        // identity, owner-only, and it reads back.
+        std::fs::remove_file(home.path().join(file)).unwrap();
+        cmd(&home).args(["bundle", keygen]).assert().success();
+        let path = home.path().join(file);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "{file} is owner-only");
+        let reader = if keygen == "keygen" {
+            "recipient"
+        } else {
+            "sender"
+        };
+        cmd(&home)
+            .args(["bundle", reader, path.to_str().unwrap()])
+            .assert()
+            .success();
+    }
+}
+
+/// **A torn master key is refused by name, and a crash's leftover before the
+/// publish never stops a start** (ROADMAP O210, through the binary). The
+/// writer before 1.7.0 created `master.key` itself, so a crash between the
+/// create and the write left it short and every later command failed with
+/// a message naming neither the file nor its length. A short `master.key`
+/// now refuses at exit 1 naming both, and is never rewritten; a temp file a
+/// crash left BEFORE the publish — a partial key that no name points at —
+/// does not stop `init` from writing a whole key, and is left where it is.
+#[test]
+fn o210_a_torn_master_key_is_refused_by_name_and_a_crash_leftover_is_ignored() {
+    let home = TempDir::new().unwrap();
+    std::fs::write(home.path().join("master.key"), [7u8; 11]).unwrap();
+    cmd(&home)
+        .args(["init"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "master.key is 11 bytes where 32 are expected",
+        ));
+    assert_eq!(
+        std::fs::read(home.path().join("master.key")).unwrap(),
+        [7u8; 11],
+        "never rewritten"
+    );
+
+    let fresh = TempDir::new().unwrap();
+    let leftover = fresh
+        .path()
+        .join("master.key.tmp.0123456789abcdef0123456789abcdef");
+    std::fs::write(&leftover, [1u8; 5]).unwrap();
+    cmd(&fresh).args(["init"]).assert().success();
+    assert_eq!(
+        std::fs::read(fresh.path().join("master.key"))
+            .unwrap()
+            .len(),
+        32
+    );
+    assert_eq!(
+        std::fs::read(&leftover).unwrap(),
+        [1u8; 5],
+        "left, not swept"
+    );
+    cmd(&fresh)
+        .args(["remember", "the harbour ledger names the cargo"])
+        .assert()
+        .success();
+}
+
 /// **`--read-only backup create` refuses before any effect** (ROADMAP O212,
 /// probe P-Q3a). It used to archive the vault, PRUNE this vault's oldest
 /// archive once ten existed — perhaps the one taken before an incident — and

@@ -18,7 +18,16 @@ modification: every read verifies, `verify` audits everything.
   never on disk, against a digest of the passphrase and the salt bytes it came
   from, and only across the opens of a command that makes several (`vault
   list`, `vault rotate`, a `serve-http` start); every open still classifies the
-  key files and reads the salt.
+  key files and reads the salt. A key file is
+  written under a temp name, fsynced, and only then hard-linked to its own
+  name, owner-only from its creation, so a crash never leaves a short key
+  under that name; a short one already there is refused by name. Only on a
+  filesystem without hard links (FAT, exFAT) is it created in place, with a
+  warning, as before 1.7.0; any other link error refuses and keeps the temp
+  (ROADMAP O210). `bundle keygen` and
+  `bundle sign-keygen` write their identities the same way, and refuse an
+  existing path — a link included, dangling or not — before a byte is
+  written (ROADMAP O321).
 - **Per-vault keys**: `HKDF-SHA256(master, vault_salt, "undercroft.v1/vault/<id>/<label>")`
   for enc / mac / manifest / sample / chain labels. `sample` keys the PQ
   training-sample rank and is deliberately rotation-sensitive, because

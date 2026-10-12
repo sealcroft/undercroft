@@ -587,6 +587,51 @@ holds such a row can still be restored by the binary that took it; then delete
 the row with this one. `undercroft config check` cannot detect this: it opens no
 vault database. Run the new binary's `verify --read-only` before the upgrade.
 
+### `bundle keygen` and `bundle sign-keygen` refuse a link at the identity's path (O321), and a key file is published whole (O210)
+
+**Symptom:** `undercroft bundle keygen` or `bundle sign-keygen` — at the
+default `<data-dir>/bundle.key` / `bundle-sign.key` or at `--out` — exits 1 with
+*"… already exists — refusing to overwrite an identity key … a link there
+counts, followed or not, and nothing was written"* where a symbolic link sits
+at that path. Before 1.7.0 a link to an existing file was refused the same way,
+but a DANGLING link read as absent and the secret was written through it to
+wherever it pointed, at exit 0. Two smaller observables move: a `master.key` or
+`kdf.salt` of the wrong length is refused with *"master.key is N bytes where 32
+are expected …"* (still exit 1) where the message named neither the file nor
+its length; on a filesystem without hard links (FAT, exFAT) the first start,
+and a keygen writing there, print one warning that the file was created in
+place. And three that can stop a first start or a keygen which worked before:
+where creating the key's hard link fails for any reason other than "this
+filesystem has no hard links" — a full disk, an I/O error — the command exits 1
+naming the error and the temp file that holds the whole secret, where the old
+writer would have tried to create the key in place; a failed write of that
+in-place key now keeps it, and the temp, and names both; and an `--out` file
+name longer than 218 bytes is refused, naming the temp it could not create.
+
+**Cause:** the keygens asked whether the path existed — which follows a link —
+then wrote, then narrowed the mode, so the secret also sat under the umask's
+permissions until the chmod (ROADMAP O321). And a crash between creating
+`master.key` and writing it left a short file every later start refused (ROADMAP
+O210). Both now write through one publisher: an existing entry refused before a
+byte is written, the bytes in a temp file owner-only from its creation, fsynced,
+then hard-linked to the name — which fails if the name exists, so nothing is
+replaced and no link is followed. A crash before the link leaves no key file,
+so the next start creates a whole one; a crash can leave a
+`<name>.tmp.<32 hex digits>` file beside it, which nothing removes, since it may
+hold the only copy of a key.
+
+**Fix:** to write an identity where a link points, pass the link's target as
+`--out`, or remove the link first. A short key file left by a crash under an
+earlier release keys nothing when the refusal says no vault or backup refers to
+a key yet; otherwise restore it from a copy of the data directory. The
+in-place fallback's warning needs no action. A refused link: clear the cause it
+names and run the command again; the kept temp file holds a secret nothing was
+sealed under, and the engine never removes it. A kept in-place key after a failed
+write may already have been loaded by another start: keep it. A long `--out`
+name: choose a shorter one. `undercroft config check` cannot detect any of
+this: a keygen's path is a flag on one command, the check reads which key files
+exist, never their length, and a link error happens only when a key is written.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

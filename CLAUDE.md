@@ -424,7 +424,23 @@ Consequences that are binding, not advisory:
   present loads, the OTHER file alone is `SourceMismatch`, neither under any
   `vaults/` or `backups/` entry is `MaterialMissing`, both exit 1 as no
   `KeyError` is an integrity verdict — and only then is a key read, derived
-  or written, by one private exclusive writer. With BOTH files present the
+  or written, by one private exclusive writer. **That writer publishes
+  through the private `publish_new_secret` (O210)**, whose only other door,
+  `write_new_identity`, is how the CLI's two keygens write (O321): an
+  existing name refused by `symlink_metadata` before a byte is written, the
+  bytes into a `create_new` temp owner-only from the open, fsync, then a
+  HARD LINK to the name — which fails if it exists, so nothing is replaced
+  and no link followed — and a directory fsync before the temp goes. A crash
+  before the link leaves no key file, so the next start makes a whole one; a
+  short file already there is `CorruptKeyFile` naming it and its length. Only
+  where the link error reads as "unsupported" (measured `EPERM` on vfat,
+  `ENOSYS` on a FUSE exFAT) does it fall back to O204's exclusive in-place
+  create, warning — never to a rename, which replaces; which writer a
+  linkless filesystem should get is open (O-NEW-O210-3). Every other link
+  error refuses with the temp kept and named, and the fallback removes
+  nothing, because a name it created may already have been loaded (the
+  review of its first build found both). Nothing sweeps a crash's leftover
+  temp, which may be the last copy of a key. With BOTH files present the
   declared one is used and every open warns; the undeclared key is never
   tried, because a file an offline writer can plant proves nothing and the
   trial would steer a passphrase deployment towards it. `VaultManager::open_as`
@@ -3617,7 +3633,8 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   wrote, so anything reporting the chain still reads `chain_meta`.
 - Durability is pinned, not assumed: SQLite runs WAL + `synchronous=FULL`
   on both binaries, the manifest anchor is fsynced through an atomic
-  rename (+ dir sync), and key material is fsynced at creation. The
+  rename (+ dir sync), and key material is fsynced at creation, under a
+  temp name that a hard link publishes only once whole (O210). The
   anchor must never run **ahead** of the database — that combination is
   what makes a power loss reconcile as a crash instead of a tamper alarm.
   **And ONE door writes it (ROADMAP O254)**: `VaultStore::anchor()`, the only

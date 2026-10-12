@@ -4499,7 +4499,6 @@ HIER_ALLOW=(
   "Plugs into the ${HIER_W}::the engine as a whole"
   ">P${HIER_W#p}<::the console tab label, in its own markup"
   "Initialize the ${HIER_W}::init creates the installation: master key + a default vault"
-  "like the ${HIER_W}::wrapped: \"...permissions (like the ... master key)\""
   "different ${HIER_W} per::the installation follows the home directory"
   "existing ${HIER_W}::moving HOME would move the installation"
   "creates a ${HIER_W} on local disk::bootstrapping the installation is not a remote act"

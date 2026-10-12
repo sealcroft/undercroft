@@ -1042,26 +1042,29 @@ enum BundleAction {
     },
 }
 
-/// Write a secret to `path` with owner-only permissions (like the palace
-/// master key). Refuses to overwrite an existing identity.
+/// Write a NEW identity secret to `path` through the vault crate's identity
+/// door, which shares the master key's publisher (ROADMAP O321, O210):
+/// owner-only from the open, the bytes fsynced under a temp name and
+/// published by a hard link, and an existing entry refused — a link
+/// included, dangling or not — before a byte is written. It used to ask
+/// `exists()`, which follows a link, then write through it, then narrow the
+/// mode: a dangling link planted at the default path under the data
+/// directory was followed, and the secret sat under the umask until the
+/// chmod.
 fn write_identity(path: &std::path::Path, secret_hex: &str) -> Result<()> {
-    if path.exists() {
-        bail!(
-            "{} already exists — refusing to overwrite an identity key \
-             (bundles sealed to it would become unreadable)",
-            path.display()
-        );
-    }
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, secret_hex.as_bytes())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    match undercroft_vault::keys::write_new_identity(path, secret_hex.as_bytes()) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => bail!(
+            "{} already exists — refusing to overwrite an identity key \
+             (bundles sealed to it would become unreadable); a link there counts, \
+             followed or not, and nothing was written",
+            path.display()
+        ),
+        Err(e) => Err(e).with_context(|| format!("writing identity {}", path.display())),
     }
-    Ok(())
 }
 
 /// Build the full export payload: a manifest line, then typed records —
@@ -5323,6 +5326,104 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
     use tempfile::TempDir;
+
+    /// **Every secret file in the workspace is written by the one publisher**
+    /// (ROADMAP O321, O210). `write_identity` asked `exists()` — which follows
+    /// a link — then wrote, then narrowed the mode; it now hands the bytes to
+    /// `keys::write_new_identity`, a door onto the key writer's own private
+    /// publisher. Held from the source, across every crate's production code:
+    /// no mode is narrowed after a file exists (`set_permissions`); the
+    /// publisher is private and called only in `keys.rs` (the witness-taking
+    /// key writer's two arms and the identity door), and the identity door
+    /// only from here. Needles split so they do not match themselves; the walk
+    /// is proved to read the tree before any zero is believed.
+    #[test]
+    fn o321_every_secret_file_is_written_by_the_one_publisher() {
+        let body = |src: &str, name: &str| -> String {
+            let at = src
+                .find(&format!("fn {name}("))
+                .unwrap_or_else(|| panic!("premise: fn {name}"));
+            let end = src[at..].find("\n}\n").expect("premise: it closes");
+            src[at..at + end].to_string()
+        };
+        let main = include_str!("main.rs");
+        let identity = body(main, "write_identity");
+        assert!(
+            identity.contains(concat!("keys::write_new_", "identity(")),
+            "{identity}"
+        );
+        for gone in [
+            concat!(".exi", "sts()"),
+            concat!("fs::wri", "te("),
+            concat!("set_permi", "ssions("),
+        ] {
+            assert!(!identity.contains(gone), "write_identity calls {gone}");
+        }
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let (mut files, mut calls, mut chmods) = (0usize, Vec::new(), Vec::new());
+        let mut public_publisher = Vec::new();
+        let mut stack = vec![crates];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let p = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if p.is_dir() {
+                    if name != "target" && !name.starts_with('.') {
+                        stack.push(p);
+                    }
+                    continue;
+                }
+                if p.extension().and_then(|e| e.to_str()) != Some("rs")
+                    || name.ends_with("_tests.rs")
+                    || p.components().any(|c| c.as_os_str() == "tests")
+                {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&p).unwrap();
+                // Production code only: up to a file's unit-test module.
+                let prod = text
+                    .split_once(concat!("#[cfg(test)]\nmod ", "tests"))
+                    .map_or(text.as_str(), |(head, _)| head);
+                files += 1;
+                for needle in [
+                    concat!("publish_new_", "secret("),
+                    concat!("write_new_", "identity("),
+                ] {
+                    let n = prod.matches(needle).count();
+                    if n > 0 {
+                        calls.push((name.clone(), needle, n));
+                    }
+                }
+                if prod.contains(concat!("pub fn publish_new_", "secret")) {
+                    public_publisher.push(name.clone());
+                }
+                if prod.contains(concat!("set_permi", "ssions(")) {
+                    chmods.push(name);
+                }
+            }
+        }
+        // A floor, not a figure: 84 production files when this was written.
+        assert!(files > 60, "premise: the walk read {files} source files");
+        calls.sort();
+        assert_eq!(
+            calls,
+            vec![
+                ("keys.rs".to_string(), concat!("publish_new_", "secret("), 4),
+                ("keys.rs".to_string(), concat!("write_new_", "identity("), 1),
+                ("main.rs".to_string(), concat!("write_new_", "identity("), 1),
+            ],
+            "the publisher: its definition, the key writer's two calls and the identity \
+             door's one; the identity door: its definition and write_identity's call"
+        );
+        assert!(
+            public_publisher.is_empty(),
+            "the publisher is private: {public_publisher:?}"
+        );
+        assert!(
+            chmods.is_empty(),
+            "a mode narrowed after the bytes exist: {chmods:?}"
+        );
+    }
 
     /// **`config check`'s OK-set and the opener's arms cannot disagree**
     /// (ROADMAP O81).
