@@ -1243,6 +1243,7 @@ UNVERSIONED_CLOSED=(
   "O241|closed by RULING: a manifest census cannot authenticate a point question over an unbounded key space"
   "O244|closed by RULING: audit compaction refused; the replacement gate was met by O250 and the witness it was sequenced behind built by O245"
   "O313|two GitHub settings — up-to-date branches on main and a v* tag ruleset with no bypass — applied and observed to block"
+  "O340|closed by RULING, the maintainer's: O234's read budget is a per-unit landing gate, the cumulative figure reported beside it"
 )
 ROADMAP_DRIFT=$(roadmap_scan ROADMAP.md)
 # The premise BEFORE the roster (ROADMAP O162). It used to run after it, so a
