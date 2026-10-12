@@ -50,12 +50,14 @@ use std::sync::{Mutex, PoisonError};
 /// the pipe, so a reader that dies after the last write leaves the run at 0.
 /// Only an export's payload digest, checked at import, sees that.
 pub const EXIT_SUCCESS: u8 = 0;
-/// Exit 1 — the run itself failed: bad arguments, a missing file, an
-/// unreadable vault, or a standard output that could not be written for any
+/// Exit 1 — the run itself failed: bad arguments, a missing file, a vault
+/// unreachable for a reason outside its bytes (permissions, a lock, a missing
+/// path, an I/O error), or a standard output that could not be written for any
 /// reason other than its reader leaving. A script may retry it.
 pub const EXIT_FAILURE: u8 = 1;
-/// Exit 2 — an INTEGRITY VERDICT: stored evidence does not verify. Reserved
-/// for that and nothing else, and it outranks every other class.
+/// Exit 2 — an INTEGRITY VERDICT: stored evidence does not verify, or a
+/// database whose bytes do not hold together (ROADMAP O269). Reserved for
+/// that and nothing else, and it outranks every other class.
 pub const EXIT_INTEGRITY: u8 = 2;
 /// Exit 141 — the reader of standard output went away before the output was
 /// complete. The command ran to its own end, and found no integrity verdict

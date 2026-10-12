@@ -716,7 +716,10 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-store/src/lib.rs",
         "VerifyReport",
         "undercroft-cli/src/main.rs",
-        "Command::Verify",
+        // Was `Command::Verify` until ROADMAP O269 item 6 gave a refused
+        // `backup restore` the same projection: ONE function both print
+        // through, so the anchor follows the fields.
+        "fn print_verify_report",
     ),
     (
         "undercroft-store/src/lib.rs",
@@ -1461,6 +1464,9 @@ mod tests {
                     [
                         "\n        Command::",
                         "\n    fn ",
+                        // A top-level function's sibling (ROADMAP O269: the
+                        // CLI's `VerifyReport` projection is one).
+                        "\nfn ",
                         concat!("\n        \"under", "croft_"),
                         // `ui.html`'s sibling construct. Without it the
                         // window runs from `runVerify` to end of file — every

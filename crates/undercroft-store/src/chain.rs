@@ -817,13 +817,24 @@ pub(crate) fn prefix_range(ns: Namespace) -> LabelRange {
 }
 
 /// Every distinct label a namespace's records carry, by the same selection.
+///
+/// Read by its type (ROADMAP O269 item 2): a label that is TEXT and not
+/// UTF-8 sits inside a namespace's range and made every caller — `verify`'s
+/// policy leg, the trust floor, the sweep — fail with a conversion error. It
+/// is skipped here: it can name no policy key, and `verify`'s orphan-label
+/// leg names it by `seq`. (A BLOB label sorts after every TEXT value, so no
+/// range selects one.)
 pub(crate) fn chain_keys(conn: &Connection, ns: Namespace) -> Result<Vec<String>, StoreError> {
     let (clause, ps) = prefix_range(ns).clause(1);
     let sql = format!("SELECT DISTINCT record_id FROM audit WHERE {clause} ORDER BY record_id");
     let mut stmt = conn.prepare(&sql)?;
-    let keys = stmt
-        .query_map(rusqlite::params_from_iter(ps.iter()), |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
+    let mut rows = stmt.query(rusqlite::params_from_iter(ps.iter()))?;
+    let mut keys = Vec::new();
+    while let Some(r) = rows.next()? {
+        if let Some(k) = crate::text_of(&r.get_ref(0)?) {
+            keys.push(k.to_string());
+        }
+    }
     Ok(keys)
 }
 

@@ -854,20 +854,25 @@ fn call_tool(store: &mut VaultStore, name: &str, args: &Value) -> Result<String>
                 )
             };
             // ROADMAP O231: `bad_records` by COUNT, split the way the CLI
-            // splits it — a failed HMAC, and a drawer whose HMAC verifies over
-            // covered meta that does not parse — with no `_`, so a new reason
-            // is placed before it compiles. Counts only, as every leg on this
-            // transport is; the named lines are the CLI's and `/v1`'s.
+            // splits it — a failed HMAC, and a record whose HMAC verifies over
+            // covered meta that does not parse or over columns no read takes
+            // (O269 item 2) — with no `_`, so a new reason is placed before it
+            // compiles. Counts only, as every leg on this transport is; the
+            // named lines are the CLI's and `/v1`'s.
             let hmac_failures = report
                 .bad_records
                 .iter()
                 .filter(|b| match b.reason {
                     undercroft_store::BadReason::TagFailed => true,
-                    undercroft_store::BadReason::MetaUnparseable => false,
+                    undercroft_store::BadReason::MetaUnparseable
+                    | undercroft_store::BadReason::Undecodable => false,
                 })
                 .count();
+            // ROADMAP O269: the storage leg by COUNT too — its rows name
+            // objects by the names the file's writer chose, and this
+            // transport hands its text to an agent.
             let text = format!(
-                "records checked: {}\nhmac failures: {}\nunreadable: {}\naudit chain: {}\naudit labels: {}\norphan labels: {}\nmirror drift: {}\npolicy drift: {}\nversion replay: {}{}{}\nresult: {}",
+                "records checked: {}\nhmac failures: {}\nunreadable: {}\naudit chain: {}\naudit labels: {}\norphan labels: {}\nmirror drift: {}\npolicy drift: {}\nversion replay: {}\nstorage: {}{}{}\nresult: {}",
                 report.records_checked,
                 hmac_failures,
                 report.bad_records.len() - hmac_failures,
@@ -877,6 +882,7 @@ fn call_tool(store: &mut VaultStore, name: &str, args: &Value) -> Result<String>
                 report.mirror_drift.len(),
                 report.policy_drift.len(),
                 report.version_replay.len(),
+                report.storage.len(),
                 sup_line,
                 rec_line,
                 if report.ok() {

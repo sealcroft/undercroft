@@ -667,18 +667,47 @@ pub(crate) const ADDED_DRAWERS_COLUMNS: &[&str] = &[
     "supersedes_receipt BLOB",
 ];
 
-pub(crate) fn wing_trust_canonical(wing: &str, trust: &str, assigned_at: &str) -> Vec<u8> {
-    format!("wingtrust\x1f{wing}\x1f{trust}\x1f{assigned_at}").into_bytes()
+/// `domain‖0x1f‖part‖0x1f‖…` over bytes — the shape the wing-trust, tunnel and
+/// retention canonicals share, taken as BYTES so `verify` checks a tag over a
+/// column that does not decode through the one builder (ROADMAP O269 item 2).
+/// Byte for byte the `format!` strings it replaces.
+pub(crate) fn joined(domain: &[u8], parts: &[&[u8]]) -> Vec<u8> {
+    let mut out = domain.to_vec();
+    for p in parts {
+        out.push(0x1f);
+        out.extend_from_slice(p);
+    }
+    out
+}
+
+pub(crate) fn wing_trust_canonical(
+    wing: impl AsRef<[u8]>,
+    trust: impl AsRef<[u8]>,
+    assigned_at: impl AsRef<[u8]>,
+) -> Vec<u8> {
+    joined(
+        b"wingtrust",
+        &[wing.as_ref(), trust.as_ref(), assigned_at.as_ref()],
+    )
 }
 
 pub(crate) fn tunnel_canonical(
-    id: &str,
-    from: &str,
-    to: &str,
-    label: &str,
-    created: &str,
+    id: impl AsRef<[u8]>,
+    from: impl AsRef<[u8]>,
+    to: impl AsRef<[u8]>,
+    label: impl AsRef<[u8]>,
+    created: impl AsRef<[u8]>,
 ) -> Vec<u8> {
-    format!("tunnel\x1f{id}\x1f{from}\x1f{to}\x1f{label}\x1f{created}").into_bytes()
+    joined(
+        b"tunnel",
+        &[
+            id.as_ref(),
+            from.as_ref(),
+            to.as_ref(),
+            label.as_ref(),
+            created.as_ref(),
+        ],
+    )
 }
 
 /// A tunnel row's tag, verified under the handle's key — the ONE decision
@@ -887,18 +916,75 @@ impl VaultStore {
     /// while its target was absent, so nothing was ever bound). Drawers
     /// with no link are skipped.
     pub fn verify_supersessions(&self) -> Result<Vec<crate::kg::SupersessionStatus>, StoreError> {
+        self.supersession_links(None)
+    }
+
+    /// [`VaultStore::verify_supersessions`]'s walk, and `verify`'s leg when
+    /// `named` carries the records the walks named (ROADMAP O269 item 2).
+    ///
+    /// With `named`, nothing in a link aborts the walk: a link whose drawer
+    /// id or `supersedes` does not decode is left out — the drawer walk names
+    /// that drawer (its id before the tag, `supersedes` as mirror drift) —
+    /// a fingerprint or receipt column of the wrong class is `Tampered`, a
+    /// binding this engine never writes, and a cited drawer that cannot be
+    /// read and IS named leaves its one link out, its receipt having already
+    /// verified (`Tampered`, the leg's one failing verdict, is decided before
+    /// that read). Without `named` — the public walk — those reads return
+    /// their errors, as they always have.
+    pub(crate) fn supersession_links(
+        &self,
+        named: Option<&std::collections::HashSet<String>>,
+    ) -> Result<Vec<crate::kg::SupersessionStatus>, StoreError> {
+        use crate::{decodes, text_of, Want};
         let mut stmt = self.conn.prepare(
             "SELECT id, supersedes, supersedes_fp, supersedes_receipt
              FROM drawers WHERE supersedes IS NOT NULL ORDER BY seq",
         )?;
-        // (drawer id, superseded id, fingerprint, receipt)
-        type LinkRow = (String, String, Option<Vec<u8>>, Option<Vec<u8>>);
-        let rows: Vec<LinkRow> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-            .collect::<Result<_, _>>()?;
+        // (drawer id, superseded id, fingerprint, receipt), or a link whose
+        // binding columns hold what this engine never writes there.
+        enum Link {
+            Read(String, String, Option<Vec<u8>>, Option<Vec<u8>>),
+            Retyped(String, String),
+        }
+        let mut rows: Vec<Link> = Vec::new();
+        {
+            let mut q = stmt.query([])?;
+            while let Some(r) = q.next()? {
+                let (id_v, old_v, fp_v, rc_v) =
+                    (r.get_ref(0)?, r.get_ref(1)?, r.get_ref(2)?, r.get_ref(3)?);
+                if named.is_none()
+                    || (decodes(&id_v, Want::Text)
+                        && decodes(&old_v, Want::Text)
+                        && decodes(&fp_v, Want::OptBlob)
+                        && decodes(&rc_v, Want::OptBlob))
+                {
+                    rows.push(Link::Read(r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?));
+                    continue;
+                }
+                // An id or link that does not decode: the drawer walk names
+                // the row, and there is no link to state.
+                if let (Some(id), Some(old)) = (text_of(&id_v), text_of(&old_v)) {
+                    rows.push(Link::Retyped(id.to_string(), old.to_string()));
+                }
+            }
+        }
+        drop(stmt);
         let mut out = Vec::with_capacity(rows.len());
         let secret = self.kg_secret()?;
-        for (id, old_id, fp, receipt) in rows {
+        for link in rows {
+            let (id, old_id, fp, receipt) = match link {
+                Link::Read(id, old, fp, receipt) => (id, old, fp, receipt),
+                // The binding holds what no write produces: tampering, stated
+                // as such rather than read through (O269 item 2).
+                Link::Retyped(id, old) => {
+                    out.push(crate::kg::SupersessionStatus {
+                        drawer_id: id,
+                        supersedes: old,
+                        verdict: crate::kg::ReceiptVerdict::Tampered,
+                    });
+                    continue;
+                }
+            };
             let verdict = match (fp, receipt) {
                 (Some(fp), Some(receipt)) => {
                     if self
@@ -911,18 +997,20 @@ impl VaultStore {
                         match self.get(
                             &old_id,
                             crate::Read::Internal(crate::InternalRead::Verification),
-                        )? {
-                            None => crate::kg::ReceiptVerdict::Dangling,
+                        ) {
+                            Ok(None) => crate::kg::ReceiptVerdict::Dangling,
                             // Shape-aware (U12): a pre-U12 row opened
                             // read-only still holds the bare digest, and
                             // comparing it under the keyed recipe would call
                             // an intact vault changed.
-                            Some(d)
+                            Ok(Some(d))
                                 if crate::kg::fp_matches(&self.vault, &secret, &d.content, &fp) =>
                             {
                                 crate::kg::ReceiptVerdict::Verified
                             }
-                            Some(_) => crate::kg::ReceiptVerdict::SourceChanged,
+                            Ok(Some(_)) => crate::kg::ReceiptVerdict::SourceChanged,
+                            Err(e) if crate::unreadable_and_named(&e, named, &old_id) => continue,
+                            Err(e) => return Err(e),
                         }
                     }
                 }
@@ -2082,6 +2170,17 @@ impl VaultStore {
     fn repair_stmts(&mut self, sent: &mut u64) -> Result<(u64, String, u64), StoreError> {
         // Re-embedding below bypasses upsert; drop any warmed cache.
         *self.emb_cache.borrow_mut() = None;
+        // **Every index rebuilt FROM ITS TABLE, first** (ROADMAP O269 item
+        // 11). The remedy the ruling names for damage `verify`'s storage leg
+        // reports in an index assumed the closing VACUUM rebuilt each index
+        // from its table; measured, it does not — VACUUM's transfer copies an
+        // index's b-tree as it stands, and `row N missing from index` survived
+        // `repair` unchanged. REINDEX does rebuild, so damage confined to an
+        // index is repaired — and, by the same mechanism, damage on the TABLE
+        // side of an indexed column is conformed rather than repaired, which
+        // is why `UPGRADING.md` names a restore as the alternative. First, so
+        // the fingerprint backfill below finds every row through `fp`'s index.
+        self.conn.execute_batch("REINDEX;")?;
         let missing: Vec<String> = self
             .conn
             .prepare("SELECT id FROM drawers WHERE fp IS NULL")?
@@ -2431,30 +2530,44 @@ impl VaultStore {
         Ok(n as u64)
     }
 
-    pub(crate) fn tunnels_verify(&self) -> Result<Vec<String>, StoreError> {
+    /// Every tunnel row's tag, each column read by its value type and the tag
+    /// checked over the BYTES (ROADMAP O269 item 2), as `kg_verify` does: a
+    /// row of the wrong storage class made `verify` fail rather than name it.
+    pub(crate) fn tunnels_verify(&self) -> Result<Vec<crate::BadRecord>, StoreError> {
+        use crate::{first_undecodable, text_of, value_bytes, BadRecord, Want};
         let mut bad = Vec::new();
         let mut stmt = self.conn.prepare(
-            "SELECT id, from_wing, to_wing, label, tag, created_at FROM tunnels ORDER BY seq",
+            "SELECT id, from_wing, to_wing, label, tag, created_at, seq FROM tunnels ORDER BY seq",
         )?;
-        let rows: Vec<TunnelRow> = stmt
-            .query_map([], |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                ))
-            })?
-            .collect::<Result<_, _>>()?;
-        for (id, from, to, label, tag, created) in rows {
-            if self
-                .vault
-                .verify_tag(&tunnel_canonical(&id, &from, &to, &label, &created), &tag)
-                .is_err()
-            {
-                bad.push(format!("tunnel/{id}"));
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let seq: i64 = r.get(6)?;
+            let c: Vec<rusqlite::types::ValueRef<'_>> =
+                (0..6).map(|i| r.get_ref(i)).collect::<Result<_, _>>()?;
+            let name = match text_of(&c[0]) {
+                Some(id) => format!("tunnel/{id}"),
+                None => format!("tunnels seq {seq}"),
+            };
+            let why = first_undecodable(&[
+                ("id", c[0], Want::Text),
+                ("from_wing", c[1], Want::Text),
+                ("to_wing", c[2], Want::Text),
+                ("label", c[3], Want::Text),
+                ("tag", c[4], Want::Blob),
+                ("created_at", c[5], Want::Text),
+            ]);
+            let b = |i: usize| value_bytes(&c[i]);
+            let verified = match (b(0), b(1), b(2), b(3), b(4), b(5)) {
+                (Some(id), Some(from), Some(to), Some(label), Some(tag), Some(created)) => self
+                    .vault
+                    .verify_tag(&tunnel_canonical(id, from, to, label, created), tag)
+                    .is_ok(),
+                _ => false,
+            };
+            match (verified, why) {
+                (false, _) => bad.push(BadRecord::tag_failed(name)),
+                (true, Some(why)) => bad.push(BadRecord::undecodable(name, why)),
+                (true, None) => {}
             }
         }
         Ok(bad)

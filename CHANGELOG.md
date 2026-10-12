@@ -2317,6 +2317,51 @@ PATCH inside the unreleased 1.7.0: a crash no longer leaves a short key, and a k
 exits 1 where it wrote through a dangling one. `UPGRADING.md` carries the entry; `config check`
 cannot detect it.
 
+### `verify` checks the file its rows live in, names a row no read can take, and a database that does not hold together is an integrity verdict (O269)
+
+`verify` walked tags and the chain and never the structure the rows live in, so one flipped byte in an
+index page passed it while SQLite's `integrity_check` named the missing rows — and an index hides a row from
+every read that finds one through it: a scoped search, the dedup probe, `forget`'s lookup by id, and the
+policy check that finds a trust row's newest assignment by its label, so a replayed policy row behind one
+damaged index entry read as current and a rotation then made it authentic. Where `verify` did trip over
+damage it answered SQLite's own error — exit 1, a 500 — the class a script retries, on a file whose answer
+never changes. Three changes, two panels' ruling and the maintainer's:
+
+- **A tenth leg, `storage`, run first**: SQLite's FULL `PRAGMA integrity_check` inside `verify`'s one
+  snapshot, so inside `backup create`'s pin, the rotation's exclusive hold and `repair`'s closing verify
+  too. Every row it returns that is not `ok` is a finding (`STORAGE: integrity_check: row 11 missing from
+  index idx_drawers_room`), on the CLI, as a count on MCP, as `"storage"` on `/v1` and in the console. It
+  fails `ok()`, so `backup create` refuses such a vault, and it blocks a key rotation, whose every phase-3
+  re-key now also asserts it changed exactly one row. Never `quick_check`, which passed all seven of the
+  filing's index flips. `backup restore`'s second check of the same thing is gone, and both surfaces now
+  print a refused archive's whole verification — the CLI after `What its verification found:`, `/v1` as
+  `report` beside its 409.
+- **No row aborts `verify`.** Every column its walks read — drawers, facts, entities, tunnels, the policy
+  rows, the audit labels — is read by its value type and the tag checked over the BYTES: a value of the
+  wrong storage class or TEXT that is not UTF-8 is `UNREADABLE: <id>: column meta_json holds a BLOB …`
+  (`drawers seq N` where the id does not decode), mirror drift, an orphan label or policy drift, in the leg
+  that owns the read, and a rotation blocker where the rotation could not read it. O406's later-0x1f move
+  is one of them. A corruption code a later leg trips over is the storage leg's finding
+  (`STORAGE: the drawer walk not run: database disk image is malformed`), and a replay that did not run
+  claims no chain.
+- **A database whose bytes do not hold together is an integrity verdict** (the maintainer's option B):
+  SQLite's `SQLITE_CORRUPT` and `SQLITE_NOTADB` at the open's first statement, the writable schema batch and
+  the read-only open's first content read, on a handle that is not `immutable=1`, are `the vault's database
+  is damaged: …` — exit 2 on every command, 409 `class: "integrity"` on `/v1`. A read-only open no longer
+  reopens such a file with `immutable=1`. Corruption met partway through another command stays exit 1, and
+  the next `verify` gives the verdict.
+
+`repair` runs `REINDEX` first: the ruling's remedy for index damage assumed its VACUUM rebuilt each index
+from its table, and measured, it copies the index as it stands. One fix was this build's own: FTS5's integrity pass reuses the index structure a connection cached, so a long-lived hmac-only handle beside another connection's writes reported its FTS table malformed on an intact vault; the leg reads each FTS5 table in its snapshot first.
+
+Measured on the LoCoMo feed mined into 64 wings (5,440 sealed drawers): `verify` 117–141 ms against 86–113 ms; one index flip that the previous binary verified as OK now exits 2 and refuses the backup, and `repair` mends it; O406's later-0x1f move, made on 3,154 drawers by one keyless statement, exits 1 on the previous binary and names all 3,154 here. On realistic chunks the check is linear in the file and NOT cheap: at 102,000 drawers it adds 4.0–4.5 s to `verify` on a 218 MB sealed vault and 2.4–3.0 s on a 369 MB hmac-only one, and `backup create`'s pin and a rotation's hold grow by as much (ROADMAP O269 has the table; O258 the scheduling question). Gates: fourteen store tests — R3 on a live vault at both levels, a freelist, a table page and an `audit` page flipped, the retypes and a property gate over every TEXT column, the index-hidden policy replay, ten refused backups, a lost autoindex entry under a rotation, O406's move, and a writer beside a long-lived handle — each red with its arm reverted; and twenty-one `e2e` checks through the CLI, MCP and `/v1`, seventeen of which fail against the previous binary.
+
+PATCH inside the unreleased 1.7.0, by the 2026-09-08 ruling (the leg reports an existing silent defect) and
+the maintainer's of 2026-10-08 (exit 1's "an unreadable vault" means unreachable for a reason outside the
+file's bytes). `UPGRADING.md` carries the entry: a vault with such damage, which the previous binary
+verified, now fails `verify` and stops `backup create` and `vault rotate`; `config check` opens no vault
+database, and the new binary's `verify --read-only` is the pre-flight.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

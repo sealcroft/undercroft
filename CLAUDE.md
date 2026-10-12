@@ -899,10 +899,29 @@ Consequences that are binding, not advisory:
   anchor is read BEFORE the snapshot everywhere, because read after the pin
   it names heads the rows never produced (counterfactual: false refusals at
   exactly the pinning statement)),
-  verify (**`VerifyReport` is the whole verdict and it has NINE legs**: record
+  verify (**`VerifyReport` is the whole verdict and it has TEN legs**: record
   HMACs, the chain replay, the label commitment (O233), drawer supersession
   receipts, **KG fact receipts**, orphan graph labels, mirror drift,
-  **declared-policy drift**, **version replay (O234)**.
+  **declared-policy drift**, **version replay (O234)**, **storage (O269)**.
+  **The tenth runs FIRST and reads the FILE, not the rows**: SQLite's full
+  `PRAGMA integrity_check` inside `verify_in`'s one snapshot — so inside
+  `backup create`'s pin, the rotation's hold and `repair`'s closing verify —
+  because every other leg reads rows and their tags and an index flip passed
+  all nine (R3) while hiding rows from every read that finds one through it.
+  Never `quick_check` (blind on seven of seven R3 flips) and never a scoped
+  check; a rotation blocker, and every phase-3 re-key asserts it changed
+  exactly one row. **No row aborts `verify` (O269 item 2)**: every column its
+  walks read is read by value type, the tag checked over the BYTES, a value
+  no read takes named in the leg that owns the read (`BadReason::Undecodable`
+  before a tag, a blocker; mirror drift; an orphan label by `seq`); and
+  SQLite's corruption codes met by a later leg — or by the snapshot's own end
+  — are the storage leg's finding, never `verify`'s error (`leg`,
+  `report_despite_the_end`). A database whose bytes do not hold together is
+  `StoreError::StorageCorrupt`, the integrity family, at the open's named
+  doors on a handle that is not `immutable=1` (the maintainer's option B);
+  met partway through any other command it stays exit 1. `repair` REINDEXes
+  first: its VACUUM copies an index as it stands, so it never rebuilt one,
+  which the ruling had assumed.
   **The first leg is `bad_records`, a `Vec<BadRecord>` since O231**: a record
   id and a `BadReason` — a failed HMAC, or a drawer whose HMAC VERIFIES over
   covered meta that does not parse, which `verify` counted and reported in no
@@ -910,7 +929,8 @@ Consequences that are binding, not advisory:
   string (a bare id for a failed HMAC, `"<id>: <reason>"` otherwise), the CLI
   prints them as `hmac failures:` and `unreadable:`, and
   `rotation_blockers()` matches every reason with no `_` and blocks on a
-  failed HMAC alone (O232's ruling: "never on … an O231 row"). Such a row needs
+  failed HMAC and on O269's undecodable row, never on an unparseable meta
+  (O232's ruling: "never on … an O231 row"). Such a row needs
   no key: the drawer canonical joins id, meta and content with a 0x1f and no
   lengths, so the meta/content boundary moves with the tag intact
   (O406).
@@ -1127,9 +1147,11 @@ Consequences that are binding, not advisory:
   anything is removed), opened WRITABLE with the surface's one embedder
   factory (`EmbedderFor` — what is swapped in is the verified post-migration
   state; a read-only open refuses every older schema), verified over all
-  nine legs, checked with `PRAGMA integrity_check` (`verify` reads no index:
-  a flipped index byte passed it on four of seven pages, and `quick_check`
-  on all seven), closed, and held to a post-condition (exactly two files, an
+  ten legs — `PRAGMA integrity_check` among them as the storage leg since
+  O269, which deleted the second check this door ran beside it (`verify` read
+  no index: a flipped index byte passed it on four of seven pages, and
+  `quick_check` on all seven) — so a refused archive's report, printed on
+  both surfaces, names the damage, closed, and held to a post-condition (exactly two files, an
   `immutable=1` head and height EQUAL to the verified ones) — and only then
   is O69's hold taken, with `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` read back so
   its drop never folds a dead writer's `-wal` into the live vault (measured:

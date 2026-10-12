@@ -75,6 +75,8 @@ mod rotate_pause;
 mod rotation_state_tests;
 #[cfg(test)]
 mod snapshot_tests;
+#[cfg(test)]
+mod storage_tests;
 mod sweep_pause;
 #[cfg(test)]
 mod unlock_state_tests;
@@ -1033,6 +1035,121 @@ pub(crate) fn held_if_busy(e: rusqlite::Error, what: &str) -> StoreError {
     }
 }
 
+/// Whether SQLite refused because the database's BYTES do not hold together:
+/// `SQLITE_CORRUPT` or `SQLITE_NOTADB` (ROADMAP O269). Classified only where
+/// a ruling names the read — `verify`'s own snapshot and the open's named
+/// doors — and never remapped at large: the same code from a handle opened
+/// `immutable=1` beside a writer can be a torn read of an intact vault.
+pub(crate) fn is_storage_corrupt(e: &rusqlite::Error) -> bool {
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(f, _)
+            if matches!(
+                f.code,
+                rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase
+            )
+    )
+}
+
+/// **One `verify` leg's result, with corruption folded into the storage leg**
+/// (ROADMAP O269 item 3): SQLite's corruption codes, raised inside `verify`'s
+/// own snapshot, are a finding naming the leg they stopped (`"<leg> not run:
+/// <error>"`) and the leg takes its empty value (`None`) — unconditionally,
+/// because a conditional fold would return an error exactly where
+/// `integrity_check`'s coverage happens to stop. Every other error, a
+/// conversion failure included (a code defect raises those too), is returned.
+pub(crate) fn leg<T>(
+    storage: &mut Vec<String>,
+    name: &str,
+    r: Result<T, StoreError>,
+) -> Result<Option<T>, StoreError> {
+    match r {
+        Ok(v) => Ok(Some(v)),
+        Err(StoreError::Sqlite(e)) if is_storage_corrupt(&e) => {
+            storage.push(format!("{name} not run: {e}"));
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// **A report survives the end of the snapshot it was read in** (ROADMAP
+/// O269 item 3). Once a leg has met a corruption code, SQLite keeps it on the
+/// connection and the snapshot's own `COMMIT` answers it again — measured: a
+/// damaged `audit` page made `verify` return `SQLITE_CORRUPT` after every leg
+/// had folded it into the report. The end is inside the snapshot, so its
+/// corruption is the same finding: the report stands, and says so if no leg
+/// had. Any other error, or no report, is returned as it is.
+pub(crate) fn report_despite_the_end(
+    ended: Result<(), StoreError>,
+    report: Option<VerifyReport>,
+) -> Result<VerifyReport, StoreError> {
+    match (ended, report) {
+        (Ok(()), Some(r)) => Ok(r),
+        (Err(StoreError::Sqlite(e)), Some(mut r)) if is_storage_corrupt(&e) => {
+            if r.storage.is_empty() {
+                r.storage.push(format!("ending the snapshot: {e}"));
+            }
+            Ok(r)
+        }
+        (Err(e), _) => Err(e),
+        (Ok(()), None) => Err(StoreError::Invalid(
+            "verify's snapshot ended without a report".into(),
+        )),
+    }
+}
+
+/// Whether a receipt leg's read of the drawer it cites failed because that
+/// drawer cannot be read AND `verify`'s walk already named it (ROADMAP O269
+/// item 2): a failed HMAC (`Integrity`), covered meta that does not parse
+/// (`CorruptRow`, O231), or a column no read takes. The one link is then left
+/// out of the leg, where the leg used to return the error — or empty itself.
+/// Never a corruption code, which is the storage leg's (item 3), and never a
+/// drawer no walk named, whose error is returned.
+pub(crate) fn unreadable_and_named(
+    e: &StoreError,
+    named: Option<&std::collections::HashSet<String>>,
+    id: &str,
+) -> bool {
+    if !named.is_some_and(|n| n.contains(id)) {
+        return false;
+    }
+    matches!(
+        e,
+        StoreError::Integrity(_)
+            | StoreError::CorruptRow { .. }
+            | StoreError::Sqlite(
+                rusqlite::Error::FromSqlConversionFailure(..)
+                    | rusqlite::Error::InvalidColumnType(..),
+            )
+    )
+}
+
+/// **An open door meeting a database whose bytes do not hold together**
+/// (ROADMAP O269, the maintainer's ruling of 2026-10-08, option B): SQLite's
+/// corruption codes as [`StoreError::StorageCorrupt`], an integrity verdict,
+/// at the doors that ruling names — the connector's probe and first locking
+/// statement, the writable schema batch, and the read-only open's first
+/// content read — and ONLY on a handle that is not `immutable=1`, whose
+/// torn reads beside a writer are not evidence about the file. Any other
+/// error is itself, `held_if_busy`'s answer included.
+pub(crate) fn storage_corrupt_at(
+    e: rusqlite::Error,
+    door: &str,
+    path: &std::path::Path,
+) -> StoreError {
+    if !is_storage_corrupt(&e) {
+        return e.into();
+    }
+    StoreError::StorageCorrupt(format!(
+        "{} could not be read at {door}: SQLite answered \"{e}\", which says the file's own \
+         bytes do not hold together — a retry only meets them again. Nothing was written. \
+         Restore the newest backup whose restore is accepted; `undercroft repair` mends only \
+         damage confined to an index (UPGRADING.md, ROADMAP O269)",
+        path.display()
+    ))
+}
+
 /// **The key rotation's fence (ROADMAP O257)**: an EXCLUSIVE hold on the
 /// store's own connection, from before the rotation's checks until after its
 /// promote.
@@ -1909,7 +2026,7 @@ pub(crate) fn parse_fusion(raw: Option<&str>) -> Result<Fusion, String> {
 const BM25_K1: f32 = 1.2;
 const BM25_B: f32 = 0.75;
 
-/// Everything the store can refuse. The integrity family — `Integrity`, `Attestation`, `DatabaseMissing`, `DatabaseAmbiguous`, a tampered or corrupt manifest — exits 2 on the CLI and answers 409 with `class: "integrity"` on `/v1`, the two sets kept identical by a cross-surface test.
+/// Everything the store can refuse. The integrity family — `Integrity`, `IntegrityFinding`, `Attestation`, `DatabaseMissing`, `DatabaseAmbiguous`, `StorageCorrupt`, a tampered or corrupt manifest — exits 2 on the CLI and answers 409 with `class: "integrity"` on `/v1`, the two sets kept identical by a cross-surface test.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     /// SQLite refused.
@@ -2033,6 +2150,23 @@ pub enum StoreError {
     /// code `verify` and `repair` reserve for an integrity finding.
     #[error("attestation failed: {0}")]
     Attestation(String),
+    /// The vault's database file is damaged: SQLite answered `SQLITE_CORRUPT`
+    /// or `SQLITE_NOTADB` at one of the open's named doors — the connector's
+    /// probe and first locking statement, the writable schema batch, the
+    /// read-only open's first content read — on a handle that is not
+    /// `immutable=1` (ROADMAP O269, the maintainer's ruling of 2026-10-08,
+    /// option B).
+    ///
+    /// **An integrity verdict, worded as damage rather than tampering** (O235):
+    /// exit 2 on the CLI and 409 with `class: "integrity"` on `/v1`, the same
+    /// set as [`Self::DatabaseMissing`], because a file whose bytes do not hold
+    /// together never heals on a retry, exactly as an absent one does not. It
+    /// was the run failure — exit 1, a 500 — the class `docs/AGENTS.md` tells a
+    /// script to retry. Corruption met PARTWAY through a command other than
+    /// `verify` keeps that class, a residual stated: the next `verify` gives
+    /// the verdict, through its storage leg ([`VerifyReport::storage`]).
+    #[error("the vault's database is damaged: {0}")]
+    StorageCorrupt(String),
     /// The named record does not exist. Kept apart from [`Self::Invalid`]
     /// so "you asked about something that is not here" has ONE answer
     /// across the surfaces: `forget` and `admission` raised it as
@@ -2199,9 +2333,13 @@ pub(crate) fn claimed_site(meta_json: &str) -> (Option<String>, Option<String>) 
     (pick("wing"), pick("room"))
 }
 
-pub(crate) fn canonical(id: &str, meta_json: &[u8], content_at_rest: &[u8]) -> Vec<u8> {
+/// A drawer's canonical bytes. The id is taken as BYTES so `verify` can
+/// check a tag over an id that does not decode (ROADMAP O269 item 2) through
+/// this one builder.
+pub(crate) fn canonical(id: impl AsRef<[u8]>, meta_json: &[u8], content_at_rest: &[u8]) -> Vec<u8> {
+    let id = id.as_ref();
     let mut out = Vec::with_capacity(id.len() + meta_json.len() + content_at_rest.len() + 2);
-    out.extend_from_slice(id.as_bytes());
+    out.extend_from_slice(id);
     out.push(0x1f);
     out.extend_from_slice(meta_json);
     out.push(0x1f);
@@ -3090,6 +3228,86 @@ pub(crate) enum CoveredRow {
     /// [`BadReason::MetaUnparseable`] finding in `verify` (ROADMAP O231) and
     /// an `unverifiable` row in the retention sweep.
     MetaUnparseable { id: String },
+    /// The tag verified over the bytes, and a column it covers holds a value
+    /// no read takes — a [`BadReason::Undecodable`] finding in `verify`
+    /// (ROADMAP O269 item 2) and an `unverifiable` row in the retention sweep.
+    /// `id` is the drawer id, or `drawers seq N` where the id does not decode.
+    Undecodable { id: String, why: String },
+}
+
+/// What a value read by its storage class is, in a finding's words (ROADMAP
+/// O269 item 2): a column every read takes by a typed `get` and which holds
+/// something else made `verify` itself fail, exit 1, with no leg reported.
+pub(crate) fn value_kind(v: &rusqlite::types::ValueRef<'_>) -> &'static str {
+    use rusqlite::types::ValueRef;
+    match v {
+        ValueRef::Null => "NULL",
+        ValueRef::Integer(_) => "an INTEGER",
+        ValueRef::Real(_) => "a REAL",
+        ValueRef::Text(t) if std::str::from_utf8(t).is_err() => "TEXT that is not UTF-8",
+        ValueRef::Text(_) => "TEXT",
+        ValueRef::Blob(_) => "a BLOB",
+    }
+}
+
+/// The storage class a column's every read expects (ROADMAP O269 item 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Want {
+    /// UTF-8 TEXT.
+    Text,
+    /// A BLOB.
+    Blob,
+    /// UTF-8 TEXT or NULL.
+    OptText,
+    /// A BLOB or NULL.
+    OptBlob,
+    /// A REAL (an INTEGER reads as one too).
+    Real,
+    /// An INTEGER.
+    Int,
+}
+
+/// Whether `v` is what a read expecting `want` takes.
+pub(crate) fn decodes(v: &rusqlite::types::ValueRef<'_>, want: Want) -> bool {
+    use rusqlite::types::ValueRef;
+    match (want, v) {
+        (Want::Text | Want::OptText, ValueRef::Text(t)) => std::str::from_utf8(t).is_ok(),
+        (Want::Blob | Want::OptBlob, ValueRef::Blob(_)) => true,
+        (Want::OptText | Want::OptBlob, ValueRef::Null) => true,
+        (Want::Real, ValueRef::Real(_) | ValueRef::Integer(_)) => true,
+        (Want::Int, ValueRef::Integer(_)) => true,
+        _ => false,
+    }
+}
+
+/// A TEXT or BLOB value's bytes, `None` for anything else — what a tag is
+/// checked over when a column does not decode ("the tag is verified over the
+/// bytes", ROADMAP O269 item 2).
+pub(crate) fn value_bytes<'a>(v: &rusqlite::types::ValueRef<'a>) -> Option<&'a [u8]> {
+    use rusqlite::types::ValueRef;
+    match *v {
+        ValueRef::Text(b) | ValueRef::Blob(b) => Some(b),
+        _ => None,
+    }
+}
+
+/// The first of `cols` that does not decode, as `"column <name> holds <kind>"`.
+pub(crate) fn first_undecodable(
+    cols: &[(&str, rusqlite::types::ValueRef<'_>, Want)],
+) -> Option<String> {
+    cols.iter()
+        .find(|(_, v, w)| !decodes(v, *w))
+        .map(|(name, v, _)| format!("column {name} holds {}", value_kind(v)))
+}
+
+/// A UTF-8 TEXT value as text, `None` for anything else — the test for
+/// whether an id decodes, which decides whether a finding names the row by
+/// its id or by its place in its table (ROADMAP O269 item 2).
+pub(crate) fn text_of<'a>(v: &rusqlite::types::ValueRef<'a>) -> Option<&'a str> {
+    match *v {
+        rusqlite::types::ValueRef::Text(t) => std::str::from_utf8(t).ok(),
+        _ => None,
+    }
 }
 
 /// What `verify` found about the audit labels a chain held when it switched
@@ -3152,8 +3370,30 @@ pub enum BadReason {
     /// first content byte): a move to a later 0x1f in ciphertext leaves bytes
     /// that are not UTF-8, `covered_row` fails reading them before the tag is
     /// checked, and `verify` returns that error without naming the row —
-    /// ROADMAP O269 item 2's arm, recorded under O406.
+    /// ROADMAP O269 item 2's arm, recorded under O406: [`Self::Undecodable`].
     MetaUnparseable,
+    /// A column the record is verified over holds a value this build never
+    /// writes there — the wrong storage class, or TEXT that is not UTF-8 — so
+    /// every read refuses the row (ROADMAP O269 item 2). Named by its `seq`
+    /// (or `rowid`) where the id itself does not decode.
+    ///
+    /// `verify` used to READ such a row with a typed `get` and fail: exit 1, a
+    /// 500, and no other leg reported. Every row its walks read is read by
+    /// value type now, and the tag is checked over the BYTES — so a row whose
+    /// bytes changed is [`Self::TagFailed`], and this reason means the bytes
+    /// the tag covers are intact and stored as something no read can take.
+    /// It needs no key: one `UPDATE drawers SET meta_json = CAST(meta_json AS
+    /// BLOB)` produces it, and so does moving a drawer's meta/content boundary
+    /// to a LATER 0x1f in its content (O406), which leaves `meta_json` bytes
+    /// that are not UTF-8 under a tag that still verifies.
+    ///
+    /// **One arm for every table's undecodable covered field** — drawers,
+    /// facts, entities and tunnels here, and O406's leg (d), a sealed fact or
+    /// entity field that does not open under its own AAD, when that leg lands:
+    /// one name, one blocker status. A rotation blocker, by O269 item 2 —
+    /// unlike [`Self::MetaUnparseable`], whose exemption rests on a rotation
+    /// re-tagging the same bytes, which it cannot do for a row it cannot read.
+    Undecodable,
 }
 
 /// One record `verify` could not take as written: which record, and why.
@@ -3166,10 +3406,15 @@ pub enum BadReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BadRecord {
     /// The record's id in the namespace its own chain record uses: a drawer
-    /// id, `kg/{id}`, `kg-entity/{id}` or `tunnel/{id}`.
+    /// id, `kg/{id}`, `kg-entity/{id}` or `tunnel/{id}` — or, where the id
+    /// itself does not decode (ROADMAP O269), the row's place in its table:
+    /// `drawers seq 12`, `kg_entities rowid 3`.
     pub record: String,
     /// Why it is here.
     pub reason: BadReason,
+    /// What did not decode, for [`BadReason::Undecodable`]: the column and
+    /// what it holds. Empty for every other reason.
+    pub detail: String,
 }
 
 impl BadRecord {
@@ -3178,6 +3423,26 @@ impl BadRecord {
         Self {
             record: record.into(),
             reason: BadReason::TagFailed,
+            detail: String::new(),
+        }
+    }
+
+    /// A record whose tag verifies over covered meta that does not parse.
+    pub(crate) fn meta_unparseable(record: impl Into<String>) -> Self {
+        Self {
+            record: record.into(),
+            reason: BadReason::MetaUnparseable,
+            detail: String::new(),
+        }
+    }
+
+    /// A record a column of which holds what no read can take (ROADMAP
+    /// O269 item 2), `detail` saying which.
+    pub(crate) fn undecodable(record: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            record: record.into(),
+            reason: BadReason::Undecodable,
+            detail: detail.into(),
         }
     }
 }
@@ -3192,6 +3457,11 @@ impl std::fmt::Display for BadRecord {
                  refuses it",
                 self.record
             ),
+            BadReason::Undecodable => write!(
+                f,
+                "{}: {} — a value this build never writes there, so every read refuses it",
+                self.record, self.detail
+            ),
         }
     }
 }
@@ -3202,7 +3472,7 @@ impl serde::Serialize for BadRecord {
     }
 }
 
-/// The whole verdict, nine legs: record HMACs (with the drawers whose HMAC verifies over covered meta that does not parse, O231), the chain replay, the label commitment, supersession receipts, fact receipts, orphan labels, mirror drift, policy drift and version replay. Hand-projected on four renderers (`parity::HAND_PROJECTED`), so a new leg must reach all of them.
+/// The whole verdict, ten legs: record HMACs (with the drawers whose HMAC verifies over covered meta that does not parse, O231, and the rows a column of which no read takes, O269), the chain replay, the label commitment, supersession receipts, fact receipts, orphan labels, mirror drift, policy drift, version replay and storage (O269). Hand-projected on four renderers (`parity::HAND_PROJECTED`), so a new leg must reach all of them.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VerifyReport {
     /// How many records had their HMAC checked.
@@ -3413,6 +3683,40 @@ pub struct VerifyReport {
     /// above it are: the row is not corrupt. Its tag verifies. What it is
     /// not is current.
     pub version_replay: Vec<String>,
+    /// SQLite's own check of the file the rows live in: every row `PRAGMA
+    /// integrity_check` returned that is not `ok`, and every leg a
+    /// corruption code stopped (ROADMAP O269).
+    ///
+    /// **The tenth leg, and the first one run** — inside `verify_in`'s one
+    /// snapshot, so inside `backup create`'s pin, the rotation's exclusive hold
+    /// and `repair`'s closing verify too. Every other leg reads rows and their
+    /// tags, so none of them could see damage to the structure the rows live
+    /// in: one flipped byte in an index page passed `verify` on four of seven
+    /// pages tried while `integrity_check` named the missing rows (O268's R3) —
+    /// and an index hides rows from every read that finds a row through it:
+    /// `forget` answered that a drawer every scan serves does not exist, and a
+    /// replayed policy row behind a damaged `idx_audit_record_id` entry read as
+    /// current, which a rotation then laundered for good.
+    ///
+    /// The FULL check, never `quick_check` (blind on seven of seven R3 flips:
+    /// it does not compare an index with its table) and never a table-scoped
+    /// one (it skips the freelist, page accounting and FTS5's own pass); every
+    /// row is read, up to SQLite's default of 100 findings. A corruption code
+    /// the pragma itself raises is a finding here, never an error, and so is
+    /// one a LATER leg trips over (`"<leg> not run: <error>"`) — that leg then
+    /// takes its empty value, and `chain_ok` is false when the replay could
+    /// not run, since a positive claim must not survive a leg that did not.
+    ///
+    /// **A rotation blocker** (O232's own reason, read as the ruling applied
+    /// it): a rotation rewrites every row through the indexes this leg checks
+    /// — a zero-row re-key leaves a row under the retired key, and an
+    /// index-hidden replay comes out of it authentic — and a whole-vault
+    /// rewrite over a damaged freelist spreads the damage.
+    ///
+    /// Kept apart from O263's schema leg, whose rotation answer differs. Its
+    /// rows name objects by the names in the file, chosen by whoever wrote it:
+    /// renderers print them as text, never as markup, and MCP prints a count.
+    pub storage: Vec<String>,
 }
 
 impl VerifyReport {
@@ -3427,6 +3731,7 @@ impl VerifyReport {
             && self.tampered_receipts() == 0
             && self.policy_drift.is_empty()
             && self.version_replay.is_empty()
+            && self.storage.is_empty()
     }
 
     /// Supersession links whose keyed receipt failed its HMAC. The other
@@ -3461,8 +3766,10 @@ impl VerifyReport {
     /// the next key and re-folds the chain over whatever `audit` holds, so a
     /// finding in a leg it rewrites comes out of the rotation authentic and
     /// the evidence is gone: record HMACs (drawers, facts, entities, tunnels,
-    /// and on an hmac-only vault the content itself), the chain, both receipt
-    /// kinds, and the policy rows. Mirror drift, orphan labels and the label
+    /// and on an hmac-only vault the content itself), a row the rotation could
+    /// not read by its type (ROADMAP O269 item 2), the chain, both receipt
+    /// kinds, the policy rows, and the storage leg, whose indexes every re-key
+    /// reads through (O269 item 4). Mirror drift, orphan labels and the label
     /// commitment are NOT here: a rotation rewrites none of them — the mirror
     /// columns, the row deletion an orphan label reports, and the unkeyed
     /// commitment with the rows before it all survive it verbatim — so each
@@ -3494,6 +3801,13 @@ impl VerifyReport {
             // authentic tag, and the chain record that disagreed with it is
             // the only evidence there was.
             version_replay,
+            // ROADMAP O269 item 4. A rotation rewrites every row through the
+            // indexes this leg checks: a key whose index entry is missing is
+            // re-keyed in ZERO rows and stays under the retired key, a replay
+            // an index hides comes out of it authentic and stays so once the
+            // rotation's own record is the policy boundary, and a whole-vault
+            // rewrite over a damaged freelist spreads the damage.
+            storage,
         } = self;
         let tampered = crate::kg::ReceiptVerdict::Tampered;
         let mut out: Vec<String> = bad_records
@@ -3506,8 +3820,18 @@ impl VerifyReport {
                 // already verifies, and a rotation re-tags the same bytes
                 // without parsing them, so it launders nothing here.
                 BadReason::MetaUnparseable => None,
+                // ROADMAP O269 item 2: "before a tag, `bad_records` (a
+                // blocker)". O232's premise for the reason above — the rotation
+                // re-tags the SAME bytes, so the row is exactly as detectable
+                // afterwards — does not hold here: the rotation reads every
+                // column it re-keys by its type and cannot take this row at all
+                // (a conversion error on hmac-only, a refused re-seal on a
+                // sealed vault, both mid-transaction). As a blocker it is
+                // refused before any work, naming the row.
+                BadReason::Undecodable => Some(format!("record {b}")),
             })
             .collect();
+        out.extend(storage.iter().map(|s| format!("storage {s}")));
         if !chain_ok {
             out.push("audit chain: replaying it does not reproduce the committed head".to_string());
         }
@@ -5113,9 +5437,16 @@ impl VaultStore {
                 // another process holds the vault EXCLUSIVELY — a key rotation
                 // or a backup restore — and an open must say so rather than
                 // answer a bare "database is locked", which `/v1` classes as a
-                // 500 (ROADMAP O257).
-                conn.pragma_update(None, "journal_mode", "WAL")
-                    .map_err(|e| held_if_busy(e, OPEN_HELD))
+                // 500 (ROADMAP O257). Corrupt bytes here are an integrity
+                // verdict (ROADMAP O269, option B): measured, a truncated
+                // `vault.db` and a zeroed header both surface at this
+                // statement, as exit 1 until now.
+                conn.pragma_update(None, "journal_mode", "WAL").map_err(
+                    |e| match is_storage_corrupt(&e) {
+                        true => storage_corrupt_at(e, "the writable open's first statement", &path),
+                        false => held_if_busy(e, OPEN_HELD),
+                    },
+                )
             },
         );
         let conn = match opened {
@@ -5336,7 +5667,10 @@ impl VaultStore {
              -- 2,040-drawer corpus: verify 14 ms clean, 21 ms after 60
              -- deletions unindexed.
              CREATE INDEX IF NOT EXISTS idx_audit_record_id ON audit(record_id);",
-        )?;
+        )
+        // A named door of ROADMAP O269's option B: the schema batch reads
+        // every page `sqlite_schema` names before it creates anything.
+        .map_err(|e| storage_corrupt_at(e, "the writable open's schema batch", &vault.db_path()))?;
         // A refused reconcile closes its connection rather than dropping it
         // (O284's convention; ROADMAP O290 made the licence refuse here).
         let (vault, reseeded) = match Self::reconcile_rotation(&conn, vault) {
@@ -5565,7 +5899,7 @@ impl VaultStore {
                 path: vault.db_path().display().to_string(),
             });
         }
-        let (conn, opened_by) = Self::connect_read_only(&vault)?;
+        let (conn, opened_by, immutable) = Self::connect_read_only(&vault)?;
         // Before the keycheck read and `reconcile_read_only` (O284).
         if let Err(e) = Self::unlock_state_holds(&vault) {
             Self::close_refused(conn);
@@ -5575,7 +5909,10 @@ impl VaultStore {
         // A busy database is said (ROADMAP O257); any other failure reads as
         // "no marker", which the schema check below then names properly — a
         // legacy vault's missing `meta` is `ReadOnlyUnmigrated`, not a raw
-        // SQLite error.
+        // SQLite error. **Except corrupt bytes on a handle that is not
+        // `immutable=1`** (ROADMAP O269, option B): this is the open's first
+        // content read, a named door, and "no marker" there would carry a
+        // damaged vault on to a later step's raw error, exit 1.
         let db_kc: Option<String> = match conn
             .query_row("SELECT value FROM meta WHERE key = 'keycheck'", [], |r| {
                 r.get(0)
@@ -5584,6 +5921,14 @@ impl VaultStore {
         {
             Ok(kc) => kc,
             Err(e) if is_busy(&e) => return Err(StoreError::VaultHeld(OPEN_HELD.into())),
+            Err(e) if !immutable && is_storage_corrupt(&e) => {
+                Self::close_refused(conn);
+                return Err(storage_corrupt_at(
+                    e,
+                    "the read-only open's first content read",
+                    &vault.db_path(),
+                ));
+            }
             Err(_) => None,
         };
         let mut vault = vault;
@@ -5669,9 +6014,15 @@ impl VaultStore {
     /// the file and not only about us — pointing it at a live vault on a
     /// writable mount would read torn pages, which is why it is reached only
     /// after the ordinary open has failed.
+    ///
+    /// The third value says whether the handle escalated to `immutable=1`,
+    /// which decides whether SQLite's corruption codes read at the open's
+    /// first content read are an integrity verdict (ROADMAP O269, option B:
+    /// never on an `immutable=1` handle, whose torn reads beside a writer say
+    /// nothing about the file).
     fn connect_read_only(
         vault: &Vault,
-    ) -> Result<(Connection, undercroft_vault::DbLayout), StoreError> {
+    ) -> Result<(Connection, undercroft_vault::DbLayout, bool), StoreError> {
         use rusqlite::OpenFlags;
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         let probe = |conn: &mut Connection| -> Result<(), StoreError> {
@@ -5716,10 +6067,26 @@ impl VaultStore {
             false,
             probe,
         ) {
-            Ok(vault_db::Opened::Here(conn, ())) => return Ok((conn, layout)),
+            Ok(vault_db::Opened::Here(conn, ())) => return Ok((conn, layout, false)),
             Ok(vault_db::Opened::Moved) => return Err(vault_db::moved(&path)),
             Err(StoreError::Sqlite(e)) if is_busy(&e) => {
                 return Err(StoreError::VaultHeld(OPEN_HELD.into()))
+            }
+            // **Nor are bytes that do not hold together (ROADMAP O269, item
+            // 8).** The escalation takes the main file WITHOUT its WAL, so a
+            // vault whose pages are damaged was reopened onto the posture whose
+            // reads are least trustworthy and announced as an unwritable
+            // directory — measured: a truncated `vault.db` escalated and then
+            // failed there with the same raw code. Answered as itself, an
+            // integrity verdict on this non-immutable handle (option B). A
+            // deny-list, carved out as busy was: what a write-protected mount
+            // returns is unmeasured (O286), so everything else still escalates.
+            Err(StoreError::Sqlite(e)) if is_storage_corrupt(&e) => {
+                return Err(storage_corrupt_at(
+                    e,
+                    "the read-only open's first statement",
+                    &path,
+                ))
             }
             // Nor is a vault DELETED since the unlock (ROADMAP O291): escalating
             // onto a missing directory answered a raw "unable to open".
@@ -5753,7 +6120,7 @@ impl VaultStore {
              process is still writing to it",
             path.display()
         );
-        Ok((conn, layout))
+        Ok((conn, layout, true))
     }
 
     /// Refuse a schema this build would have had to migrate, naming what is
@@ -10798,7 +11165,7 @@ impl VaultStore {
         mut visit: impl FnMut(CoveredRow) -> Result<(), StoreError>,
     ) -> Result<(), StoreError> {
         let mut stmt = self.conn.prepare(concat!(
-            "SELECT id, meta_json, content, tag, wing, room, kind, supersedes ",
+            "SELECT id, meta_json, content, tag, wing, room, kind, supersedes, seq ",
             "FROM drawers ORDER BY seq",
         ))?;
         let mut rows = stmt.query([])?;
@@ -10818,7 +11185,7 @@ impl VaultStore {
         id: &str,
     ) -> Result<Option<CoveredRow>, StoreError> {
         let mut stmt = conn.prepare(concat!(
-            "SELECT id, meta_json, content, tag, wing, room, kind, supersedes ",
+            "SELECT id, meta_json, content, tag, wing, room, kind, supersedes, seq ",
             "FROM drawers WHERE id = ?1",
         ))?;
         let mut rows = stmt.query(params![id])?;
@@ -10829,38 +11196,54 @@ impl VaultStore {
     }
 
     /// The covered decision for one row of `id, meta_json, content, tag,
-    /// wing, room, kind, supersedes` — the ONE implementation the walk and
-    /// the single-row read share.
+    /// wing, room, kind, supersedes, seq` — the ONE implementation the walk
+    /// and the single-row read share.
+    ///
+    /// **Every column is read by its value type, never by a typed `get`
+    /// that can fail** (ROADMAP O269 item 2). It read the id with `get` and
+    /// the rest as `&str`/`&[u8]`, so one value of the wrong storage class —
+    /// or TEXT that is not UTF-8, which a flipped byte or a keyless `UPDATE`
+    /// produces — made `verify`, `backup create` and the retention sweep
+    /// return a conversion error, exit 1, naming nothing and reporting no
+    /// other leg. Now the tag is checked over the BYTES first: bytes that
+    /// changed fail it (`TagFailed`); bytes the tag covers stored as what no
+    /// read takes are `Undecodable`; a mirror column that does not decode
+    /// after a verified tag is mirror drift. A row whose id does not decode is
+    /// named by its `seq`.
     fn covered_row(&self, r: &rusqlite::Row<'_>) -> Result<CoveredRow, StoreError> {
-        // A borrowed column of the wrong type fails exactly as `r.get` would.
-        fn typed(
-            i: usize,
-            t: rusqlite::types::Type,
-            e: rusqlite::types::FromSqlError,
-        ) -> StoreError {
-            rusqlite::Error::FromSqlConversionFailure(i, t, Box::new(e)).into()
-        }
-        use rusqlite::types::Type;
-        let id: String = r.get(0)?;
-        let meta_json = r
-            .get_ref(1)?
-            .as_str()
-            .map_err(|e| typed(1, Type::Text, e))?;
-        let content_rest = r
-            .get_ref(2)?
-            .as_blob()
-            .map_err(|e| typed(2, Type::Blob, e))?;
-        let tag = r
-            .get_ref(3)?
-            .as_blob()
-            .map_err(|e| typed(3, Type::Blob, e))?;
-        if self
-            .vault
-            .verify_tag(&canonical(&id, meta_json.as_bytes(), content_rest), tag)
-            .is_err()
-        {
+        let seq: i64 = r.get(8)?;
+        let (id_v, meta_v, content_v, tag_v) =
+            (r.get_ref(0)?, r.get_ref(1)?, r.get_ref(2)?, r.get_ref(3)?);
+        let id = match text_of(&id_v) {
+            Some(id) => id.to_string(),
+            None => format!("drawers seq {seq}"),
+        };
+        // The tag over the bytes, whatever storage class holds them. A value
+        // with no bytes at all (an INTEGER, a REAL) cannot carry a canonical,
+        // so no tag verifies over it.
+        let verified = match (
+            value_bytes(&id_v),
+            value_bytes(&meta_v),
+            value_bytes(&content_v),
+            value_bytes(&tag_v),
+        ) {
+            (Some(i), Some(m), Some(c), Some(t)) => {
+                self.vault.verify_tag(&canonical(i, m, c), t).is_ok()
+            }
+            _ => false,
+        };
+        if !verified {
             return Ok(CoveredRow::TagFailed { id });
         }
+        if let Some(why) = first_undecodable(&[
+            ("id", id_v, Want::Text),
+            ("meta_json", meta_v, Want::Text),
+            ("content", content_v, Want::Blob),
+            ("tag", tag_v, Want::Blob),
+        ]) {
+            return Ok(CoveredRow::Undecodable { id, why });
+        }
+        let meta_json = text_of(&meta_v).unwrap_or_default();
         // The tag verified, so `meta_json` is authentic — which makes any
         // disagreement with a mirror column an offline edit of the
         // mirror. Reported separately from a tag failure: the record
@@ -10869,18 +11252,29 @@ impl VaultStore {
         let Ok(meta) = serde_json::from_str::<undercroft_core::DrawerMeta>(meta_json) else {
             return Ok(CoveredRow::MetaUnparseable { id });
         };
-        let wing: String = r.get(4)?;
-        let room: String = r.get(5)?;
-        let kind: Option<String> = r.get(6)?;
-        let supersedes: Option<String> = r.get(7)?;
         let mut drift = Vec::new();
-        let mut compare = |field: &str, column: &str, covered: &str| {
-            if column != covered {
-                drift.push(format!(
-                    "{id}: column {field}={column:?} but the covered meta says {covered:?}"
+        // A mirror column read by its type too: one that does not decode is
+        // drift like any other offline edit of the mirror (O269 item 2) — one
+        // line saying so, and no comparison of a value nothing can read.
+        let mut compare =
+            |i: usize, field: &str, want: Want, covered: &str| -> Result<(), StoreError> {
+                let v = r.get_ref(i)?;
+                if !decodes(&v, want) {
+                    drift.push(format!(
+                    "{id}: column {field} holds {}, which no read takes; the covered meta says \
+                     {covered:?}",
+                    value_kind(&v)
                 ));
-            }
-        };
+                    return Ok(());
+                }
+                let column = text_of(&v).unwrap_or_default();
+                if column != covered {
+                    drift.push(format!(
+                        "{id}: column {field}={column:?} but the covered meta says {covered:?}"
+                    ));
+                }
+                Ok(())
+            };
         // **`filed_at` is NOT in this list, and that is a correction to
         // this leg's first version rather than an omission.** The other
         // four columns are bound straight from `drawer.meta.*` at write
@@ -10892,18 +11286,20 @@ impl VaultStore {
         // it made eight healthy tests report a tampered vault. The column
         // is storage metadata; the covered field is the declared value,
         // which is exactly why retention reads the covered one.
-        compare("wing", &wing, &meta.wing);
-        compare("room", &room, &meta.room);
+        compare(4, "wing", Want::Text, &meta.wing)?;
+        compare(5, "room", Want::Text, &meta.room)?;
         compare(
+            6,
             "kind",
-            kind.as_deref().unwrap_or_default(),
+            Want::OptText,
             meta.kind.as_deref().unwrap_or_default(),
-        );
+        )?;
         compare(
+            7,
             "supersedes",
-            supersedes.as_deref().unwrap_or_default(),
+            Want::OptText,
             meta.supersedes.as_deref().unwrap_or_default(),
-        );
+        )?;
         Ok(CoveredRow::Verified { id, meta, drift })
     }
 
@@ -10913,7 +11309,9 @@ impl VaultStore {
     /// check every drawer supersession receipt and every graph fact receipt,
     /// resolve every graph audit label, compare every mirror column against
     /// the covered meta, re-tag every declared policy row, and match every
-    /// tagged row to the chain record that last wrote it. **All NINE legs
+    /// tagged row to the chain record that last wrote it, and — FIRST —
+    /// check the file those rows live in with SQLite's `integrity_check`
+    /// (`storage`, ROADMAP O269). **All TEN legs
     /// are in the one report** — it was three until 2026-08-06, and each
     /// addition is there because it covers a mutation the others structurally
     /// cannot see (`label_commitment`: the labels a chain held when it
@@ -10947,7 +11345,12 @@ impl VaultStore {
     pub fn verify(&self) -> Result<VerifyReport, StoreError> {
         self.kg_secret()?;
         let anchor = self.vault.anchored_head()?;
-        self.snapshot(|snap| self.verify_in(snap, &anchor))
+        let mut report = None;
+        let ended = self.snapshot(|snap| {
+            report = Some(self.verify_in(snap, &anchor)?);
+            Ok(())
+        });
+        report_despite_the_end(ended, report)
     }
 
     /// [`verify`](Self::verify)'s legs, read in `snap` against `anchor` — the
@@ -10958,6 +11361,10 @@ impl VaultStore {
         snap: &chain::Snapshot<'_>,
         anchor: &str,
     ) -> Result<VerifyReport, StoreError> {
+        // ── The tenth leg FIRST: the file the rows live in (ROADMAP O269).
+        // Run before any leg reads a row, so a leg that trips over damage
+        // below meets a storage leg that has already looked.
+        let mut storage = self.storage_check_in(snap)?;
         // The first two legs ride the covered-copy walk, which the retention
         // sweep shares (ROADMAP O206): one implementation of "which rows
         // verify, and where does a mirror disagree with the covered meta".
@@ -10971,40 +11378,57 @@ impl VaultStore {
         // reason, because its HMAC verifies and calling it a failed one would
         // misname what happened — and so the rotation, which blocks on a
         // failed HMAC, can tell the two apart (O232's ruling exempts this
-        // one).
+        // one). **And so is a row no read can TAKE (ROADMAP O269 item 2)**:
+        // every column is read by its value type, so a row holding the wrong
+        // storage class or TEXT that is not UTF-8 is named where it used to
+        // make this function return a conversion error.
+        //
+        // **Every leg below runs through `leg`** (O269 item 3): SQLite's
+        // corruption codes met inside this snapshot are this report's storage
+        // finding, never its error — the leg that met them takes its empty
+        // value and the storage leg says which leg did not run.
         let mut bad = Vec::new();
         let mut mirror_drift = Vec::new();
         let mut checked = 0u64;
-        self.walk_covered(|row| {
-            checked += 1;
-            match row {
-                CoveredRow::TagFailed { id } => bad.push(BadRecord::tag_failed(id)),
-                CoveredRow::MetaUnparseable { id } => bad.push(BadRecord {
-                    record: id,
-                    reason: BadReason::MetaUnparseable,
-                }),
-                CoveredRow::Verified { drift, .. } => mirror_drift.extend(drift),
-            }
-            Ok(())
-        })?;
+        let walked = leg(
+            &mut storage,
+            "the drawer walk",
+            self.walk_covered(|row| {
+                checked += 1;
+                match row {
+                    CoveredRow::TagFailed { id } => bad.push(BadRecord::tag_failed(id)),
+                    CoveredRow::MetaUnparseable { id } => bad.push(BadRecord::meta_unparseable(id)),
+                    CoveredRow::Undecodable { id, why } => {
+                        bad.push(BadRecord::undecodable(id, why))
+                    }
+                    CoveredRow::Verified { drift, .. } => mirror_drift.extend(drift),
+                }
+                Ok(())
+            }),
+        )?;
+        if walked.is_none() {
+            bad.clear();
+            mirror_drift.clear();
+            checked = 0;
+        }
         // Knowledge-graph and tunnel rows are integrity-tagged too.
-        checked += self.kg_count()?;
-        bad.extend(self.kg_verify()?.into_iter().map(BadRecord::tag_failed));
-        checked += self.tunnel_count()?;
-        bad.extend(
-            self.tunnels_verify()?
-                .into_iter()
-                .map(BadRecord::tag_failed),
-        );
-        // The two receipt legs below read the cited drawer through `get`,
-        // which refuses a row whose HMAC fails, and they swallow that refusal
-        // only while such a row is already reported. **"Reported" means a
-        // FAILED HMAC, not any entry here** (ROADMAP O231): an unparseable
-        // meta does not block a rotation, so letting it license the swallow
-        // could empty a leg whose tampered receipt DOES block one, and the
-        // rotation would re-key the forgery. Before O231 every entry was a
-        // failed HMAC and the two conditions were one.
-        let tag_failed = bad.iter().any(|b| b.reason == BadReason::TagFailed);
+        let graph = (|| -> Result<_, StoreError> { Ok((self.kg_count()?, self.kg_verify()?)) })();
+        if let Some((n, rows)) = leg(&mut storage, "the graph walk", graph)? {
+            checked += n;
+            bad.extend(rows);
+        }
+        let tunnels =
+            (|| -> Result<_, StoreError> { Ok((self.tunnel_count()?, self.tunnels_verify()?)) })();
+        if let Some((n, rows)) = leg(&mut storage, "the tunnel walk", tunnels)? {
+            checked += n;
+            bad.extend(rows);
+        }
+        // Every record the walks above named, by the name they used — the
+        // receipt legs below skip one link whose cited drawer is among them
+        // and cannot be read, rather than return that read's error or empty
+        // the leg (ROADMAP O269 item 2; O231 pinned the abort).
+        let named: std::collections::HashSet<String> =
+            bad.iter().map(|b| b.record.clone()).collect();
         // Two-part chain check. (1) The audit rows must reproduce exactly
         // the committed head in chain_meta — they advanced in the same
         // transactions, so any mismatch is corruption, not timing — which
@@ -11019,160 +11443,56 @@ impl VaultStore {
         // not see a `vault.json` swapped underneath a long-lived server
         // until a fresh open, which is the one deployment its own doctrine
         // is written for. Read by the caller, before `snap` (ROADMAP O253).
-        let (chain_ok, label_commitment) = self.chain_verdict_in(snap, anchor)?;
+        //
+        // A replay that could not run claims nothing (O269 item 3): `chain_ok`
+        // false, and the label commitment `pending` — the one value that
+        // asserts no binding.
+        let (chain_ok, label_commitment) = leg(
+            &mut storage,
+            "the chain replay",
+            self.chain_verdict_in(snap, anchor),
+        )?
+        .unwrap_or((false, LabelCommitment::Pending));
         // Not folded into `records_checked`: that count is HMAC-covered
         // *records*, and a supersession link is a relation between two of
         // them, reported with its own verdicts.
         //
         // The link walk reads each superseded drawer through `get`, which
-        // refuses to hand back a row whose own HMAC fails. Such a row is
-        // already in `bad_records` — the drawer walk above covers every
-        // row — so no alarm is lost by continuing; and a `verify` that
-        // returns an ERROR instead of a verdict is precisely the failure
-        // this function exists to prevent (`backup create` and
-        // `/v1/verify` both read the verdict, not the error). The swallow
-        // is conditional on the alarm already standing.
-        //
-        // An unparseable drawer that a link cites was never swallowed and is
-        // not now: `get` refuses it as `CorruptRow`, which the `Integrity`
-        // arm below does not match, so `verify` returns that error rather
-        // than a verdict — never OK, and turning it into a verdict is ROADMAP
-        // O269's "no row aborts `verify`". That is also why
-        // `o231_a_link_citing_the_row_answers_an_error_never_ok` cannot
-        // exercise the `tag_failed` condition: it pins the error, not the
-        // swallow. The condition is unobservable today — the only `Integrity`
-        // these legs raise is a `get` over a row the walk already named as a
-        // failed HMAC — and it is kept so that no future reason in
-        // `bad_records` that blocks no rotation can license emptying a leg.
-        let supersessions = match self.verify_supersessions() {
-            Ok(links) => links,
-            Err(StoreError::Integrity(_)) if tag_failed => Vec::new(),
-            Err(e) => return Err(e),
-        };
+        // refuses a row whose own HMAC fails, whose covered meta does not
+        // parse (`CorruptRow`), or which no read can take. Every such row is
+        // already in `bad_records` — the drawer walk above covers every row —
+        // so the ONE link citing it is left out of the leg and no alarm is
+        // lost: its receipt's own verdict, the only failing one, `Tampered`,
+        // is decided before that read. This replaces a swallow that emptied
+        // the WHOLE leg while a failed HMAC stood, and an abort (`CorruptRow`,
+        // exit 1) otherwise — O231 pinned the second as O269's; a link no
+        // walk names still returns its error.
+        let supersessions = leg(
+            &mut storage,
+            "the supersession receipts",
+            self.supersession_links(Some(&named)),
+        )?
+        .unwrap_or_default();
         // The KG-receipt leg, on the same terms as the supersession leg
-        // directly above: the
-        // receipt binding a distilled FACT to its verbatim source is keyed,
-        // and it lives in `kg_triples` columns that no drawer HMAC and no
-        // chain step covers. `kg_verify_receipts` reads each cited drawer
-        // through `get`, so it raises `Integrity` on a row whose own HMAC
-        // fails — a row the drawer walk has already put in `bad_records`,
-        // which is why the swallow is conditional on that alarm standing.
-        // A `verify` that returns an ERROR instead of a verdict is the
-        // failure this function exists to prevent.
-        let receipts = match self.kg_verify_receipts() {
-            Ok(rs) => rs,
-            Err(StoreError::Integrity(_)) if tag_failed => Vec::new(),
-            Err(e) => return Err(e),
-        };
+        // directly above: the receipt binding a distilled FACT to its
+        // verbatim source is keyed, and it lives in `kg_triples` columns that
+        // no drawer HMAC and no chain step covers.
+        let receipts = leg(
+            &mut storage,
+            "the fact receipts",
+            self.receipt_links(Some(&named)),
+        )?
+        .unwrap_or_default();
         // The fourth leg: every graph label resolves to a live record. See
-        // `VerifyReport::orphan_labels` for why only these namespaces.
-        let mut orphan_labels = Vec::new();
-        {
-            let mut stmt = self.conn.prepare(
-                "SELECT DISTINCT record_id FROM audit \
-                 WHERE record_id LIKE 'kg/%' OR record_id LIKE 'kg-entity/%' \
-                    OR record_id NOT LIKE '%/%'",
-            )?;
-            let labels: Vec<String> = stmt
-                .query_map([], |r| r.get::<_, String>(0))?
-                .collect::<Result<_, _>>()?;
-            drop(stmt);
-            for label in labels {
-                // **A label with no `/` is a DRAWER id**, and it is the only
-                // bare namespace this store mints — every other label carries
-                // a prefix. That is `Namespace::Drawer`, whose `prefix()` is
-                // the empty string, and the vocabulary beside it is the whole
-                // set; this comment used to enumerate the twelve by hand.
-                //
-                // Worth recording, because it is what O80 cost: that hand
-                // list was CORRECT and included `tunnel/`, while `MINTED` one
-                // file over — the inventory whose stated job was to classify
-                // every minted namespace — listed eleven and did not. Two
-                // enumerations of one fact, disagreeing, with nothing
-                // comparing them. It also described its own method as
-                // "enumerated from every `chain_append` call site", which
-                // could not have produced `rotate/`: that one is minted by
-                // `rotate.rs`'s own `INSERT INTO audit`, and a scan of
-                // `chain_append` callers cannot see it.
-                //
-                // The leg used to stop at the graph, and the reason on file
-                // was that "every other namespace has a legitimate path to an
-                // absent subject". True of the prefixed ones, and NOT true of
-                // this one — which nobody separated out. A drawer label is
-                // discriminating because deletion is a choke point:
-                // `destroy_in` holds the only `DELETE FROM drawers WHERE id`
-                // in the crate (ROADMAP O255) and appends `del/{id}` in the
-                // SAME transaction, and all four of its callers (the public
-                // delete, the whole-source delete, the allow's removal of its
-                // queue row, and the attested destruction `forget`, the
-                // retention sweep and admission deny share) inherit it.
-                //
-                // So: no live row AND no tombstone is not ordinary operation.
-                // It is a relabel onto a drawer that was never destroyed —
-                // and `record_id` is the one part of an audit row the chain
-                // does not authenticate, which is why this leg exists at all.
-                if !label.contains('/') {
-                    // Resolved in ONE set-based query below, not here — see
-                    // the note on that statement for why the obvious
-                    // per-label loop is a performance defect on a real
-                    // corpus.
-                    continue;
-                }
-                let (table, id) = match label.strip_prefix("kg-entity/") {
-                    Some(id) => ("kg_entities", id.to_string()),
-                    None => (
-                        "kg_triples",
-                        label
-                            .strip_prefix("kg/")
-                            .unwrap_or_default()
-                            .trim_end_matches("/authority")
-                            .to_string(),
-                    ),
-                };
-                if id.is_empty() {
-                    continue;
-                }
-                let live: i64 = self.conn.query_row(
-                    &format!("SELECT COUNT(*) FROM {table} WHERE id = ?1"),
-                    params![id],
-                    |r| r.get(0),
-                )?;
-                if live == 0 {
-                    orphan_labels.push(label);
-                }
-            }
-            // **The drawer half, as ONE query rather than a loop, and that is
-            // a correctness-of-cost decision rather than style.** A bare
-            // label exists per drawer WRITE, so the loop above would issue at
-            // least one round trip per drawer on every `verify` — invisible
-            // on a test fixture and O(N) on a real corpus. `audit` has an
-            // index on `record_id` (`idx_audit_record_id`), so each tombstone
-            // probe is indexed, but N probes are still N round trips over a
-            // table that grows with every write, read and export. One scan
-            // of `audit` plus an indexed probe of `drawers` and of `audit`
-            // per candidate is what that costs set-based, and
-            // SQLite resolves the first `NOT EXISTS` on the `drawers`
-            // primary key, so the second runs only for labels whose drawer is
-            // already gone.
-            //
-            // Found by loading a real corpus rather than by reading, which is
-            // the only reason it is not in this commit as a defect.
-            {
-                let mut stmt = self.conn.prepare(
-                    "SELECT DISTINCT a.record_id FROM audit a \
-                     WHERE a.record_id NOT LIKE '%/%' \
-                       AND NOT EXISTS (SELECT 1 FROM drawers d WHERE d.id = a.record_id) \
-                       AND NOT EXISTS (SELECT 1 FROM audit t \
-                                        WHERE t.record_id = 'del/' || a.record_id)",
-                )?;
-                let bare: Vec<String> = stmt
-                    .query_map([], |r| r.get::<_, String>(0))?
-                    .collect::<Result<_, _>>()?;
-                drop(stmt);
-                orphan_labels.extend(bare);
-            }
-            orphan_labels.sort();
-        }
+        // `VerifyReport::orphan_labels` for why only these namespaces — and,
+        // since ROADMAP O269 item 2, every label of EVERY namespace that does
+        // not decode, named by its `seq`: the leg that owns a label's read.
+        let orphan_labels = leg(
+            &mut storage,
+            "the orphan-label leg",
+            self.orphan_labels_in(),
+        )?
+        .unwrap_or_default();
 
         // ── The seventh leg: declared policy vs the chain that recorded it.
         //
@@ -11181,9 +11501,13 @@ impl VaultStore {
         // `verify`, the trust floor and the retention sweep cannot disagree
         // about a policy row. Every lookup is an indexed equality or range
         // on `record_id`, and there is one per declared key.
-        let mut policy_drift = self.trust_policy_drift(snap)?;
-        policy_drift.extend(self.retention_policy_drift(snap)?);
-        policy_drift.sort();
+        let policy = (|| -> Result<Vec<String>, StoreError> {
+            let mut drift = self.trust_policy_drift(snap)?;
+            drift.extend(self.retention_policy_drift(snap)?);
+            drift.sort();
+            Ok(drift)
+        })();
+        let policy_drift = leg(&mut storage, "the policy leg", policy)?.unwrap_or_default();
 
         // ── The ninth leg: the corpus's own rows against the chain that
         // recorded them (ROADMAP O234). The seventh leg's question, asked of
@@ -11191,7 +11515,12 @@ impl VaultStore {
         // whose rows carry a tag the chain holds and whose tag is then
         // recomputed in place on the next write. One statement per table,
         // short-circuiting on a single indexed probe for a row that agrees.
-        let version_replay = self.version_replay_drift(snap)?;
+        let version_replay = leg(
+            &mut storage,
+            "the version leg",
+            self.version_replay_drift(snap),
+        )?
+        .unwrap_or_default();
 
         Ok(VerifyReport {
             records_checked: checked,
@@ -11204,7 +11533,188 @@ impl VaultStore {
             receipts,
             policy_drift,
             version_replay,
+            storage,
         })
+    }
+
+    /// **The storage leg (ROADMAP O269 item 1)**: `PRAGMA integrity_check`,
+    /// the FULL check, every row it returns read, `ok` recorded as no
+    /// finding — run in `snap`, so it reads the pages the other legs read.
+    ///
+    /// A corruption code the pragma itself raises is the leg's finding, never
+    /// an error: a file whose header does not parse cannot be checked at all,
+    /// and that is the finding.
+    fn storage_check_in(&self, snap: &chain::Snapshot<'_>) -> Result<Vec<String>, StoreError> {
+        let read = (|| -> Result<Vec<String>, rusqlite::Error> {
+            // **Every FTS5 table READ first, in this snapshot.** FTS5 caches
+            // its index structure on the connection and its integrity pass
+            // reuses that cache: measured, a long-lived handle whose last FTS
+            // read predated another connection's FTS write reported
+            // `malformed inverted index for FTS5 table main.drawers_fts` on an
+            // intact hmac-only vault — every `verify` and `backup create`
+            // beside a legitimate writer failed — while a fresh connection,
+            // or the same one after one ordinary read of the table, reported
+            // `ok`. A read through the table's own scan reloads the structure
+            // this snapshot holds; it skips no part of the check. Every
+            // FTS5 table the file names, whoever made it.
+            let fts: Vec<String> = {
+                let mut q = snap.conn().prepare(
+                    "SELECT name FROM sqlite_schema WHERE type = 'table' \
+                     AND sql LIKE 'CREATE VIRTUAL TABLE%USING fts5%'",
+                )?;
+                let mut rows = q.query([])?;
+                let mut names = Vec::new();
+                while let Some(r) = rows.next()? {
+                    if let Some(n) = text_of(&r.get_ref(0)?) {
+                        names.push(n.to_string());
+                    }
+                }
+                names
+            };
+            for name in fts {
+                let quoted = name.replace('"', "\"\"");
+                snap.conn()
+                    .prepare(&format!("SELECT rowid FROM \"{quoted}\" LIMIT 1"))?
+                    .query([])?
+                    .next()?;
+            }
+            let mut stmt = snap.conn().prepare("PRAGMA integrity_check")?;
+            let mut rows = stmt.query([])?;
+            let mut out = Vec::new();
+            while let Some(r) = rows.next()? {
+                // The text SQLite chose, read by its type: an index or table
+                // name in a row is whatever the file's writer named it.
+                let v = r.get_ref(0)?;
+                out.push(match v {
+                    rusqlite::types::ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
+                    other => value_kind(&other).to_string(),
+                });
+            }
+            Ok(out)
+        })();
+        match read {
+            Ok(rows) if rows == ["ok"] => Ok(Vec::new()),
+            Ok(rows) => Ok(rows
+                .into_iter()
+                .map(|r| format!("integrity_check: {r}"))
+                .collect()),
+            Err(e) if is_storage_corrupt(&e) => Ok(vec![format!("integrity_check: {e}")]),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// The orphan-label leg (`VerifyReport::orphan_labels`), read in the
+    /// caller's snapshot.
+    fn orphan_labels_in(&self) -> Result<Vec<String>, StoreError> {
+        let mut orphan_labels = Vec::new();
+        // **Every label, read by its type, in one pass (ROADMAP O269 item
+        // 2).** A label is read with a typed `get` nowhere in this leg any
+        // more: one that is a BLOB, or TEXT that is not UTF-8, made the whole
+        // `verify` fail with a conversion error. Such a label is this leg's
+        // finding by `seq`, whatever its namespace — no Undercroft write
+        // produces one — and every other reader of labels skips it
+        // (`chain::chain_keys`). The pass replaces the `LIKE` scan the graph
+        // half made, which read every row of `audit` too.
+        let mut graph: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT seq, record_id FROM audit ORDER BY seq")?;
+            let mut rows = stmt.query([])?;
+            while let Some(r) = rows.next()? {
+                let seq: i64 = r.get(0)?;
+                let v = r.get_ref(1)?;
+                match text_of(&v) {
+                    None => orphan_labels.push(format!(
+                        "audit seq {seq}: its label holds {}, which no read takes",
+                        value_kind(&v)
+                    )),
+                    Some(l) if l.starts_with("kg/") || l.starts_with("kg-entity/") => {
+                        graph.insert(l.to_string());
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        for label in graph {
+            let (table, id) = match label.strip_prefix("kg-entity/") {
+                Some(id) => ("kg_entities", id.to_string()),
+                None => (
+                    "kg_triples",
+                    label
+                        .strip_prefix("kg/")
+                        .unwrap_or_default()
+                        .trim_end_matches("/authority")
+                        .to_string(),
+                ),
+            };
+            if id.is_empty() {
+                continue;
+            }
+            let live: i64 = self.conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE id = ?1"),
+                params![id],
+                |r| r.get(0),
+            )?;
+            if live == 0 {
+                orphan_labels.push(label);
+            }
+        }
+        // **A label with no `/` is a DRAWER id**, and it is the only bare
+        // namespace this store mints — every other label carries a prefix.
+        // That is `Namespace::Drawer`, whose `prefix()` is the empty string,
+        // and the vocabulary beside it is the whole set.
+        //
+        // Worth recording, because it is what O80 cost: a hand list of the
+        // namespaces in this comment was CORRECT and included `tunnel/`,
+        // while `MINTED` one file over — the inventory whose stated job was to
+        // classify every minted namespace — listed eleven and did not. Two
+        // enumerations of one fact, disagreeing, with nothing comparing them.
+        // It also described its own method as "enumerated from every
+        // `chain_append` call site", which could not have produced `rotate/`:
+        // that one is minted by `rotate.rs`'s own `INSERT INTO audit`, and a
+        // scan of `chain_append` callers cannot see it.
+        //
+        // The leg used to stop at the graph, and the reason on file was that
+        // "every other namespace has a legitimate path to an absent subject".
+        // True of the prefixed ones, and NOT true of this one. A drawer label
+        // is discriminating because deletion is a choke point: `destroy_in`
+        // holds the only `DELETE FROM drawers WHERE id` in the crate (ROADMAP
+        // O255) and appends `del/{id}` in the SAME transaction, and all four
+        // of its callers (the public delete, the whole-source delete, the
+        // allow's removal of its queue row, and the attested destruction
+        // `forget`, the retention sweep and admission deny share) inherit it.
+        // So: no live row AND no tombstone is not ordinary operation. It is a
+        // relabel onto a drawer that was never destroyed.
+        //
+        // **As ONE query rather than a loop, and that is a correctness-of-cost
+        // decision rather than style.** A bare label exists per drawer WRITE,
+        // so a per-label loop would issue at least one round trip per drawer
+        // on every `verify` — invisible on a test fixture and O(N) on a real
+        // corpus. `audit` has an index on `record_id` (`idx_audit_record_id`),
+        // and SQLite resolves the first `NOT EXISTS` on the `drawers` primary
+        // key, so the second runs only for labels whose drawer is already
+        // gone. Found by loading a real corpus rather than by reading.
+        //
+        // A label that does not decode is the pass above's finding, and is
+        // skipped here.
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT DISTINCT a.record_id FROM audit a \
+                 WHERE a.record_id NOT LIKE '%/%' \
+                   AND NOT EXISTS (SELECT 1 FROM drawers d WHERE d.id = a.record_id) \
+                   AND NOT EXISTS (SELECT 1 FROM audit t \
+                                    WHERE t.record_id = 'del/' || a.record_id)",
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(r) = rows.next()? {
+                if let Some(l) = text_of(&r.get_ref(0)?) {
+                    orphan_labels.push(l.to_string());
+                }
+            }
+        }
+        orphan_labels.sort();
+        Ok(orphan_labels)
     }
 
     /// Decrypted export of every drawer (for backup / migration).

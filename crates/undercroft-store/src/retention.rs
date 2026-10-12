@@ -142,8 +142,23 @@ fn now_rfc3339() -> String {
         .expect("rfc3339 now")
 }
 
-pub(crate) fn retention_canonical(wing: &str, room: &str, days: u32, at: &str) -> Vec<u8> {
-    format!("retention\x1f{wing}\x1f{room}\x1f{days}\x1f{at}").into_bytes()
+pub(crate) fn retention_canonical(
+    wing: impl AsRef<[u8]>,
+    room: impl AsRef<[u8]>,
+    days: u32,
+    at: impl AsRef<[u8]>,
+) -> Vec<u8> {
+    // Over bytes (ROADMAP O269 item 2): `manage::joined`, byte for byte the
+    // `format!` it replaces.
+    crate::manage::joined(
+        b"retention",
+        &[
+            wing.as_ref(),
+            room.as_ref(),
+            days.to_string().as_bytes(),
+            at.as_ref(),
+        ],
+    )
 }
 
 impl VaultStore {
@@ -593,18 +608,80 @@ impl VaultStore {
             self.labels_authenticated(snap)?;
         }
         let boundary = self.rotation_boundary(snap, on)?;
-        let mut stmt = snap.conn().prepare(concat!(
-            "SELECT wing, room, max_age_days, tag, assigned_at ",
-            "FROM retention_policy ORDER BY wing, room",
-        ))?;
-        let rows: Vec<(String, String, u32, Vec<u8>, String)> = stmt
-            .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-            })?
-            .collect::<Result<_, _>>()?;
-        let mut kept = Vec::with_capacity(rows.len());
         let mut findings = Vec::new();
         let mut seen = std::collections::HashSet::new();
+        // Read by type (ROADMAP O269 item 2): a row no read takes is a
+        // finding of this leg, checked over its bytes, never this scan's
+        // error — `verify` and every reader that decides from the policy
+        // shared that error.
+        let rows: Vec<(String, String, u32, Vec<u8>, String)> = {
+            use crate::{first_undecodable, text_of, value_bytes, Want};
+            let mut stmt = snap.conn().prepare(concat!(
+                "SELECT wing, room, max_age_days, tag, assigned_at, rowid ",
+                "FROM retention_policy ORDER BY wing, room",
+            ))?;
+            let mut q = stmt.query([])?;
+            let mut rows = Vec::new();
+            while let Some(r) = q.next()? {
+                let rowid: i64 = r.get(5)?;
+                let c: Vec<rusqlite::types::ValueRef<'_>> =
+                    (0..5).map(|i| r.get_ref(i)).collect::<Result<_, _>>()?;
+                let days = match c[2] {
+                    rusqlite::types::ValueRef::Integer(n) => u32::try_from(n).ok(),
+                    _ => None,
+                };
+                let why = first_undecodable(&[
+                    ("wing", c[0], Want::Text),
+                    ("room", c[1], Want::Text),
+                    ("max_age_days", c[2], Want::Int),
+                    ("tag", c[3], Want::Blob),
+                    ("assigned_at", c[4], Want::Text),
+                ])
+                .or_else(|| {
+                    days.is_none()
+                        .then(|| "column max_age_days is out of range".into())
+                });
+                let Some(why) = why else {
+                    rows.push((
+                        r.get(0)?,
+                        r.get(1)?,
+                        days.unwrap_or_default(),
+                        r.get(3)?,
+                        r.get(4)?,
+                    ));
+                    continue;
+                };
+                let verified = match (
+                    value_bytes(&c[0]),
+                    value_bytes(&c[1]),
+                    days,
+                    value_bytes(&c[3]),
+                    value_bytes(&c[4]),
+                ) {
+                    (Some(w), Some(rm), Some(d), Some(tag), Some(at)) => self
+                        .vault
+                        .verify_tag(&retention_canonical(w, rm, d, at), tag)
+                        .is_ok(),
+                    _ => false,
+                };
+                let key = match (text_of(&c[0]), text_of(&c[1])) {
+                    (Some(w), Some("")) => Some(Namespace::Retention.record(w)),
+                    (Some(w), Some(rm)) => Some(Namespace::Retention.record(&format!("{w}/{rm}"))),
+                    _ => None,
+                };
+                let name = key
+                    .clone()
+                    .unwrap_or_else(|| format!("retention_policy rowid {rowid}"));
+                seen.extend(key);
+                findings.push(PolicyFinding {
+                    tag_fails: !verified,
+                    gone: false,
+                    text: format!("{name}: {why}, which no read takes"),
+                });
+            }
+            rows
+        };
+        let mut kept = Vec::with_capacity(rows.len());
         for (wing, room, days, tag, at) in rows {
             let rest = if room.is_empty() {
                 wing.clone()
@@ -676,15 +753,55 @@ impl VaultStore {
             self.labels_authenticated(snap)?;
         }
         let boundary = self.rotation_boundary(snap, on)?;
-        let mut stmt = snap
-            .conn()
-            .prepare("SELECT wing, trust, tag, assigned_at FROM wing_trust ORDER BY wing")?;
-        let rows: Vec<(String, String, Vec<u8>, String)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-            .collect::<Result<_, _>>()?;
-        let mut kept = Vec::with_capacity(rows.len());
         let mut findings = Vec::new();
         let mut seen = std::collections::HashSet::new();
+        // Read by type, as the retention scan is (ROADMAP O269 item 2).
+        let rows: Vec<(String, String, Vec<u8>, String)> = {
+            use crate::{first_undecodable, text_of, value_bytes, Want};
+            let mut stmt = snap.conn().prepare(
+                "SELECT wing, trust, tag, assigned_at, rowid FROM wing_trust ORDER BY wing",
+            )?;
+            let mut q = stmt.query([])?;
+            let mut rows = Vec::new();
+            while let Some(r) = q.next()? {
+                let rowid: i64 = r.get(4)?;
+                let c: Vec<rusqlite::types::ValueRef<'_>> =
+                    (0..4).map(|i| r.get_ref(i)).collect::<Result<_, _>>()?;
+                let Some(why) = first_undecodable(&[
+                    ("wing", c[0], Want::Text),
+                    ("trust", c[1], Want::Text),
+                    ("tag", c[2], Want::Blob),
+                    ("assigned_at", c[3], Want::Text),
+                ]) else {
+                    rows.push((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?));
+                    continue;
+                };
+                let verified = match (
+                    value_bytes(&c[0]),
+                    value_bytes(&c[1]),
+                    value_bytes(&c[2]),
+                    value_bytes(&c[3]),
+                ) {
+                    (Some(w), Some(t), Some(tag), Some(at)) => self
+                        .vault
+                        .verify_tag(&crate::manage::wing_trust_canonical(w, t, at), tag)
+                        .is_ok(),
+                    _ => false,
+                };
+                let key = text_of(&c[0]).map(|w| Namespace::Trust.record(w));
+                let name = key
+                    .clone()
+                    .unwrap_or_else(|| format!("wing_trust rowid {rowid}"));
+                seen.extend(key);
+                findings.push(PolicyFinding {
+                    tag_fails: !verified,
+                    gone: false,
+                    text: format!("{name}: {why}, which no read takes"),
+                });
+            }
+            rows
+        };
+        let mut kept = Vec::with_capacity(rows.len());
         for (wing, trust, tag, at) in rows {
             let key = Namespace::Trust.record(&wing);
             let verifies = self
@@ -816,6 +933,14 @@ fn classify(
             return Member::Unverifiable(RetentionUnverifiable {
                 id,
                 reason: "its HMAC-covered meta does not parse; `verify` names it".into(),
+            });
+        }
+        // ROADMAP O269 item 2: never destroyed — a row no read can take has
+        // no scope or clock this sweep can trust, and `verify` names it.
+        crate::CoveredRow::Undecodable { id, why } => {
+            return Member::Unverifiable(RetentionUnverifiable {
+                id,
+                reason: format!("{why}, so no read takes it; `verify` names it"),
             });
         }
         crate::CoveredRow::Verified { id, meta, drift } => (id, meta, drift),

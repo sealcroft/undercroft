@@ -216,6 +216,11 @@ pub(crate) struct RestError {
     /// (`ReadOnlyUnmigrated`), which are not integrity verdicts and must not
     /// page anyone.
     class: Option<&'static str>,
+    /// A verdict travelling WITH a refusal: the refused `VerifyReport` of a
+    /// `backup restore`, projected as `verify` projects it (ROADMAP O269 item
+    /// 6). Rendered as `"report"` beside `error` and `class`; `None` on every
+    /// other refusal.
+    report: Option<Value>,
 }
 
 impl RestError {
@@ -224,6 +229,15 @@ impl RestError {
             code,
             message: message.into(),
             class: None,
+            report: None,
+        }
+    }
+
+    /// Carry a verdict's findings with this refusal (ROADMAP O269 item 6).
+    fn with_report(self, report: Value) -> Self {
+        Self {
+            report: Some(report),
+            ..self
         }
     }
 
@@ -1408,10 +1422,11 @@ impl Tenancy {
         ))
     }
 
-    /// `POST /v1/vaults/{id}/verify` — the whole `VerifyReport`, all eight
+    /// `POST /v1/vaults/{id}/verify` — the whole `VerifyReport`, all ten
     /// legs: every record's HMAC, the chain replay, the label commitment
     /// (ROADMAP O233), drawer supersession receipts, KG fact receipts, orphan
-    /// graph labels, mirror drift and declared-policy drift. Read-only despite the verb (POST because it is
+    /// graph labels, mirror drift, declared-policy drift, version replay
+    /// (O234) and storage (O269). Read-only despite the verb (POST because it is
     /// an expensive action, not a resource read).
     ///
     /// `ok` is the vault's whole verdict, the same one CLI `verify` exits
@@ -1536,6 +1551,10 @@ impl Tenancy {
             // chain last recorded — a replayed older version, or a row
             // present after its destruction was recorded.
             "version_replay": report.version_replay,
+            // ROADMAP O269: SQLite's own check of the file — every row
+            // `integrity_check` returned that is not `ok`, and every leg a
+            // corruption code stopped.
+            "storage": report.storage,
             "supersessions": {
                 "verified": count(V::Verified),
                 "source_changed": count(V::SourceChanged),
@@ -2428,15 +2447,20 @@ impl Tenancy {
                 .map_err(store_err)?;
         let report = match outcome {
             undercroft_store::RestoreOutcome::Restored(report) => report,
-            undercroft_store::RestoreOutcome::Refused(_) => {
+            undercroft_store::RestoreOutcome::Refused(report) => {
+                // ROADMAP O269 item 6: the refused report's findings, every
+                // leg, through `verify`'s own projection — the only diagnostic
+                // about an archive that cannot be verified any other way.
                 return Err(RestError::new(
                     409,
                     format!(
                         "refusing to restore backup '{name}': it fails integrity verification, \
-                         so nothing was restored and the live vault was not changed"
+                         so nothing was restored and the live vault was not changed; `report` \
+                         says what its verification found"
                     ),
                 )
-                .integrity());
+                .integrity()
+                .with_report(Self::verify_report_json(&report)));
             }
         };
         let mut body =
@@ -3283,6 +3307,7 @@ impl Tenancy {
             // tampered record is still an integrity verdict, and adding the
             // record's position must not launder it into a plain refusal.
             class: e.class,
+            report: e.report,
             message: format!(
                 "record {} ({}): {}",
                 n + 1,
@@ -3943,6 +3968,11 @@ fn store_err(e: StoreError) -> RestError {
         StoreError::DatabaseMissing { .. }
         | StoreError::DatabaseAmbiguous { .. }
         | StoreError::ReadOnlyUnmigrated { .. } => 409,
+        // A database whose BYTES do not hold together, met at one of the
+        // open's named doors (ROADMAP O269, option B): integrity, as an absent
+        // one has been since A33 — a retry only meets the same bytes again. It
+        // was a 500, the one class that tells an operator to retry.
+        StoreError::StorageCorrupt(_) => 409,
         // Two conditions of the vault's CURRENT state rather than of the
         // request, and neither a verdict about stored evidence (ROADMAP
         // O257): another process holds the vault (a rotation refused beside a
@@ -3987,6 +4017,7 @@ fn store_err(e: StoreError) -> RestError {
         | StoreError::Attestation(_)
         | StoreError::DatabaseMissing { .. }
         | StoreError::DatabaseAmbiguous { .. }
+        | StoreError::StorageCorrupt(_)
         | StoreError::Vault(
             undercroft_vault::VaultError::ManifestTampered
             | undercroft_vault::VaultError::CorruptManifest(_)
@@ -4046,10 +4077,13 @@ fn parse_vector(body: &Value, key: &str) -> Result<Option<Vec<f32>>, RestError> 
 /// tells "the vault contradicts itself" from "that request was not allowed
 /// here", both of which are 409.
 pub(crate) fn respond_err(req: Request, e: RestError) {
-    let payload = match e.class {
+    let mut payload = match e.class {
         Some(c) => json!({ "error": e.message, "class": c }),
         None => json!({ "error": e.message }),
     };
+    if let Some(report) = e.report {
+        payload["report"] = report;
+    }
     respond(req, e.code, &payload.to_string(), "application/json")
 }
 
@@ -4253,6 +4287,13 @@ mod tests {
                     current: "/vaults/acme/vault.db".into(),
                     legacy: "/vaults/acme/palace.db".into(),
                 },
+                true,
+            ),
+            // ROADMAP O269, the maintainer's option B: a database whose bytes
+            // do not hold together, met at the open's named doors.
+            (
+                "StorageCorrupt",
+                || S::StorageCorrupt("database disk image is malformed".into()),
                 true,
             ),
             // Its neighbour, and the reason the set is not "everything that

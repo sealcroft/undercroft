@@ -11,8 +11,9 @@
 //! stage under `vaults/` (the vault crate's `restores.rs`); the stage unlocked
 //! — its manifest's MAC, keyed by the very id it names — opened writable with
 //! the surface's own embedder, so what is swapped in is the verified
-//! post-migration state; `verify` over every leg and SQLite's `integrity_check`,
-//! because `verify` never reads an index; the store closed and the stage
+//! post-migration state; `verify` over every leg, SQLite's `integrity_check`
+//! among them as the storage leg since ROADMAP O269 (it was a second check
+//! here, because `verify` never read an index); the store closed and the stage
 //! required to hold exactly the database and the manifest, at the verified head
 //! and height. Only THEN is the live vault held, and swapped by two renames. A
 //! refusal caused by the archive never reaches the live vault: it changes no
@@ -100,9 +101,12 @@ const UNCHANGED: &str = "nothing was restored and the live vault was not changed
 /// Class an error raised while proving the STAGE: anything that says the
 /// archive's own bytes do not hold together is an integrity verdict about the
 /// archive — including SQLite's corruption codes and a column that does not
-/// decode, which are NOT integrity verdicts anywhere else in the tree (ROADMAP
-/// O269). That is sound here and only here: the stage is a private copy this
-/// process just wrote, so its corruption is the archive's.
+/// decode raised anywhere in proving the stage. Elsewhere the corruption codes
+/// are an integrity verdict only at the open's named doors on a handle that is
+/// not `immutable=1`, and inside `verify`'s own snapshot as its storage leg
+/// (ROADMAP O269); here they are at every step, which is sound here and only
+/// here: the stage is a private copy this process just wrote, so its
+/// corruption is the archive's.
 fn archive_verdict(e: StoreError, archive: &str, step: Step) -> StoreError {
     let why = match &e {
         // `ManifestTampered` has two sources and they mean different things:
@@ -126,6 +130,10 @@ fn archive_verdict(e: StoreError, archive: &str, step: Step) -> StoreError {
         | StoreError::Attestation(_)
         | StoreError::DatabaseMissing { .. }
         | StoreError::DatabaseAmbiguous { .. }
+        // The stage's open meeting damaged bytes at a named door (ROADMAP
+        // O269, option B) — already the integrity class; worded here as the
+        // archive's, like every other arm.
+        | StoreError::StorageCorrupt(_)
         | StoreError::CorruptRow { .. }
         | StoreError::Sqlite(rusqlite::Error::FromSqlConversionFailure(..)) => Some(e.to_string()),
         StoreError::Sqlite(rusqlite::Error::SqliteFailure(f, _))
@@ -153,27 +161,6 @@ fn archived_state(vault: &Vault) -> Option<(String, u64)> {
     let head = chain::require_head(&conn).ok()?.head;
     let writes = chain::writes(&conn).ok()?;
     Some((head, writes))
-}
-
-impl VaultStore {
-    /// SQLite's own check of the database's structure — every b-tree, every
-    /// index against its table. `verify` walks tags and the chain and never an
-    /// index: one flipped byte in an index page passed `verify` on four of seven
-    /// pages tried while `integrity_check` named the missing rows, and
-    /// `quick_check` passed all seven (ROADMAP O268, R3).
-    fn storage_check(&self) -> Result<(), StoreError> {
-        let mut stmt = self.conn.prepare("PRAGMA integrity_check")?;
-        let found: Vec<String> = stmt
-            .query_map([], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
-        if found == ["ok"] {
-            return Ok(());
-        }
-        Err(StoreError::IntegrityFinding(format!(
-            "SQLite's integrity_check fails: {}",
-            found.iter().take(5).cloned().collect::<Vec<_>>().join("; ")
-        )))
-    }
 }
 
 /// **Restore the archive at `archive_dir` over its vault, proving it first**
@@ -262,15 +249,18 @@ pub fn restore_archive(
     let embedder = embedder(&vault)?;
     let store = VaultStore::open_with_embedder(vault, embedder)
         .map_err(|e| archive_verdict(e, &name, Step::Open))?;
+    // ONE check of the archive's storage, and it is `verify`'s own (ROADMAP
+    // O269 item 6): the stage's report carries the storage leg, so an index
+    // `verify` used to pass refuses here as `Refused(report)` — and both
+    // surfaces print that report's findings, the only diagnostic about an
+    // archive the operator cannot verify any other way. `storage_check`, a
+    // second implementation of the same decision run beside it, is gone.
     let report = store
         .verify()
         .map_err(|e| archive_verdict(e, &name, Step::Verify))?;
     if !report.ok() {
         return Ok(RestoreOutcome::Refused(Box::new(report)));
     }
-    store
-        .storage_check()
-        .map_err(|e| archive_verdict(e, &name, Step::Verify))?;
     pause::fire(root, Phase::Verified);
     let (chain_head, writes) = store.chain_state()?;
     let unhealed = store.unhealed().to_vec();

@@ -360,12 +360,15 @@ silently. The REST gate sits **in front of dispatch**, not at the top
 of each mutating handler, and it **fails closed**: every non-GET is
 refused unless it is on a four-entry allowlist (`POST …/search`,
 `POST …/verify-forgetting` — a caller-supplied attestation that has to
-travel in a body — and `POST …/verify` — which walks every record's HMAC,
+travel in a body — and `POST …/verify` — which checks the database file
+itself with SQLite's full `integrity_check`, walks every record's HMAC,
 replays the whole
 audit chain, checks every supersession receipt, checks every
 knowledge-graph fact receipt, resolves every graph and drawer audit
-label, compares four of the five mirror columns (`wing`, `room`, `kind`, `supersedes`; `filed_at` is deliberately excluded — the column takes the write path's own clock while the covered field was stamped at construction, so they differ by a clock read in normal operation and checking it reported healthy vaults as tampered) against the covered meta, checks every wing-trust and retention row against the chain record that assigned it in both directions — a row that does not verify or was never recorded, and a recorded assignment whose row is gone with no later clear — and matches every drawer, fact, entity and tunnel row against the chain record that last wrote it, so an older version written back offline, or a row present after its recorded destruction, is a finding (**nine** legs
-since 1.6.0, when O233 added the label commitment and O234 the version check; seven from 1.3.0, when O94
+label, compares four of the five mirror columns (`wing`, `room`, `kind`, `supersedes`; `filed_at` is deliberately excluded — the column takes the write path's own clock while the covered field was stamped at construction, so they differ by a clock read in normal operation and checking it reported healthy vaults as tampered) against the covered meta, checks every wing-trust and retention row against the chain record that assigned it in both directions — a row that does not verify or was never recorded, and a recorded assignment whose row is gone with no later clear — and matches every drawer, fact, entity and tunnel row against the chain record that last wrote it, so an older version written back offline, or a row present after its recorded destruction, is a finding (**ten** legs since 1.7.0, when O269 added the storage leg — an
+index page flipped offline passed every row leg while hiding rows from every read
+that finds one through it; **nine**
+from 1.6.0, when O233 added the label commitment and O234 the version check; seven from 1.3.0, when O94
 added declared-policy drift; six from 1.1.0; five
 from 2026-08-06 — the fact-receipt leg arrived in 1.1.0, and until it did, a forged citation answered `VERIFY OK` on every surface while
 `backup create` archived it as clean), and is a POST for cost, not for effect: it takes `&self`
@@ -632,8 +635,12 @@ had changed — a flipped trust class, an edited drawer, a deleted audit row, an
 hmac-only vault's content — came out of a routine rotation validly tagged,
 with `verify` green and the evidence destroyed. A rotation now runs one
 `verify` inside its own transaction and refuses (an integrity verdict) on a
-tag that fails, a broken chain, a tampered receipt or a policy finding;
-mirror drift and orphan labels, which it does not rewrite, do not block it.
+tag that fails, a broken chain, a tampered receipt or a policy finding —
+and, since 1.7.0, on a storage finding or a row it cannot read (ROADMAP
+O269: a re-key finds each row through the table's indexes, so an index
+missing an entry left that row under the retired key, and a replay an index
+hid came out authentic); mirror drift and orphan labels, which it does not
+rewrite, do not block it.
 **Residual, stated**: whatever was tampered when a rotation by an earlier
 binary ran is authentic now, because the old key was the only witness.
 

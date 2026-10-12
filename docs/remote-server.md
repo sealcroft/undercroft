@@ -267,7 +267,9 @@ POST   /v1/vaults/{id}/backups          snapshot exactly the state it verified (
 GET    /v1/vaults/{id}/backups          this vault's snapshots
 POST   /v1/vaults/{id}/backups/restore  {name}; the archive is verified before the
                                         vault is touched (409 + class integrity if
-                                        it does not verify, the vault unchanged);
+                                        it does not verify, the vault unchanged,
+                                        the refused verification as `report`,
+                                        O269);
                                         400 if the backup holds another vault or
                                         the vault is a symbolic link (O283) or
                                         holds any entry that is not a regular
@@ -299,7 +301,7 @@ POST   /v1/vaults/{id}/verify-forgetting  check an attestation this vault
 
 ── maintenance / portability ────────────────────────────────────────────
 POST   /v1/vaults/{id}/refine           LLM distillation → KG
-POST   /v1/vaults/{id}/verify           (HMAC + audit-chain report)
+POST   /v1/vaults/{id}/verify           (storage + HMAC + audit-chain report, O269)
 POST   /v1/vaults/{id}/repair           (the REMEDIATION half of verify; a write)
 POST   /v1/vaults/{id}/anchor           (tighten the manifest rollback anchor; a write)
 POST   /v1/vaults/{id}/rotate           (re-key the vault; refused 409 while anything else holds it)

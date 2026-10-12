@@ -332,6 +332,39 @@ pub(crate) fn triple_canonical(
     extractor: Option<&[u8]>,
     terms: Option<&[u8]>,
 ) -> Vec<u8> {
+    triple_canonical_bytes(
+        id.as_bytes(),
+        subject.as_bytes(),
+        predicate.as_bytes(),
+        object_at_rest,
+        valid_from.as_deref().map(str::as_bytes),
+        valid_to.as_deref().map(str::as_bytes),
+        confidence,
+        support_at_rest,
+        authority,
+        extractor,
+        terms,
+    )
+}
+
+/// [`triple_canonical`]'s ONE body, over the stored BYTES, so `verify` can
+/// check a fact's tag over a column that does not decode (ROADMAP O269 item
+/// 2). The typed entry point above is an adapter onto it, never a second
+/// recipe.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn triple_canonical_bytes(
+    id: &[u8],
+    subject: &[u8],
+    predicate: &[u8],
+    object_at_rest: &[u8],
+    valid_from: Option<&[u8]>,
+    valid_to: Option<&[u8]>,
+    confidence: f64,
+    support_at_rest: Option<&[u8]>,
+    authority: Option<&[u8]>,
+    extractor: Option<&[u8]>,
+    terms: Option<&[u8]>,
+) -> Vec<u8> {
     let mut out = Vec::new();
     // `unwrap_or("")`: an absent bound and an empty one are ONE byte string
     // here, so a tag cannot tell a NULL `valid_to` from `''` — and the two do
@@ -341,10 +374,10 @@ pub(crate) fn triple_canonical(
         id,
         subject,
         predicate,
-        valid_from.as_deref().unwrap_or(""),
-        valid_to.as_deref().unwrap_or(""),
+        valid_from.unwrap_or(b""),
+        valid_to.unwrap_or(b""),
     ] {
-        out.extend_from_slice(part.as_bytes());
+        out.extend_from_slice(part);
         out.push(0x1f);
     }
     out.extend_from_slice(&confidence.to_le_bytes());
@@ -400,9 +433,14 @@ pub(crate) fn triple_canonical(
 /// column fails `verify_tag` on read, exactly like a flipped
 /// `review_state`.
 pub(crate) fn extractor_ext(extractor: Option<&str>) -> Option<Vec<u8>> {
+    extractor_ext_bytes(extractor.map(str::as_bytes))
+}
+
+/// [`extractor_ext`]'s one body, over bytes (ROADMAP O269 item 2).
+pub(crate) fn extractor_ext_bytes(extractor: Option<&[u8]>) -> Option<Vec<u8>> {
     extractor.map(|e| {
         let mut out = vec![0x1f];
-        out.extend_from_slice(e.as_bytes());
+        out.extend_from_slice(e);
         out
     })
 }
@@ -420,17 +458,30 @@ pub(crate) fn authority_ext(
     review_state: Option<&str>,
     canonical_key: Option<&str>,
 ) -> Option<Vec<u8>> {
+    authority_ext_bytes(
+        authority_class.map(str::as_bytes),
+        review_state.map(str::as_bytes),
+        canonical_key.map(str::as_bytes),
+    )
+}
+
+/// [`authority_ext`]'s one body, over bytes (ROADMAP O269 item 2).
+pub(crate) fn authority_ext_bytes(
+    authority_class: Option<&[u8]>,
+    review_state: Option<&[u8]>,
+    canonical_key: Option<&[u8]>,
+) -> Option<Vec<u8>> {
     if authority_class.is_none() && review_state.is_none() && canonical_key.is_none() {
         return None;
     }
     let mut out = Vec::new();
     for part in [
-        authority_class.unwrap_or(""),
-        review_state.unwrap_or(""),
-        canonical_key.unwrap_or(""),
+        authority_class.unwrap_or(b""),
+        review_state.unwrap_or(b""),
+        canonical_key.unwrap_or(b""),
     ] {
         out.push(0x1f);
-        out.extend_from_slice(part.as_bytes());
+        out.extend_from_slice(part);
     }
     Some(out)
 }
@@ -455,13 +506,30 @@ pub(crate) fn authority_ext(
 /// blob exists, so an hmac-only vault and any entity written before A10 keep
 /// byte-identical canonical bytes and are not re-tagged by this existing.
 pub(crate) fn entity_canonical(
-    id: &str,
-    name: &str,
-    etype: &str,
-    created_at: &str,
+    id: impl AsRef<[u8]>,
+    name: impl AsRef<[u8]>,
+    etype: impl AsRef<[u8]>,
+    created_at: impl AsRef<[u8]>,
     name_rest: Option<&[u8]>,
 ) -> Vec<u8> {
-    let mut out = format!("{id}\x1f{name}\x1f{etype}\x1f{created_at}").into_bytes();
+    // Over BYTES, so `verify` checks a tag over a column that does not decode
+    // through this one builder (ROADMAP O269 item 2); byte for byte the
+    // `format!` it replaces.
+    let mut out = Vec::new();
+    for (i, part) in [
+        id.as_ref(),
+        name.as_ref(),
+        etype.as_ref(),
+        created_at.as_ref(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if i > 0 {
+            out.push(0x1f);
+        }
+        out.extend_from_slice(part);
+    }
     if let Some(blob) = name_rest {
         out.push(0x1b);
         out.extend_from_slice(blob);
@@ -2396,6 +2464,20 @@ impl VaultStore {
     /// the same walk one level down — had always selected on the link for
     /// exactly this reason.
     pub fn kg_verify_receipts(&self) -> Result<Vec<ReceiptStatus>, StoreError> {
+        self.receipt_links(None)
+    }
+
+    /// [`VaultStore::kg_verify_receipts`]'s walk, and `verify`'s leg when
+    /// `named` carries the records the walks named (ROADMAP O269 item 2) —
+    /// [`VaultStore::supersession_links`]'s terms one table up: a fact whose
+    /// id does not decode is left out (the graph walk names it), a cited id,
+    /// fingerprint or receipt of the wrong class is `Tampered`, and a cited
+    /// drawer that cannot be read and IS named leaves its one fact out.
+    pub(crate) fn receipt_links(
+        &self,
+        named: Option<&std::collections::HashSet<String>>,
+    ) -> Result<Vec<ReceiptStatus>, StoreError> {
+        use crate::{decodes, text_of, Want};
         let mut stmt = self.conn.prepare(
             "SELECT id, source_drawer_id, source_fp, receipt_tag
              FROM kg_triples WHERE receipt_tag IS NOT NULL OR source_drawer_id IS NOT NULL
@@ -2405,10 +2487,35 @@ impl VaultStore {
         // The tag is optional since the walk stopped selecting on it: a
         // citation with no binding is a state to report, not one to hide.
         type ReceiptRow = (String, Option<String>, Option<Vec<u8>>, Option<Vec<u8>>);
-        let rows: Vec<ReceiptRow> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-            .collect::<Result<_, _>>()?;
-        let mut out = Vec::with_capacity(rows.len());
+        let mut rows: Vec<ReceiptRow> = Vec::new();
+        let mut out = Vec::new();
+        {
+            let mut q = stmt.query([])?;
+            while let Some(r) = q.next()? {
+                let (id_v, did_v, fp_v, rc_v) =
+                    (r.get_ref(0)?, r.get_ref(1)?, r.get_ref(2)?, r.get_ref(3)?);
+                if named.is_none()
+                    || (decodes(&id_v, Want::Text)
+                        && decodes(&did_v, Want::OptText)
+                        && decodes(&fp_v, Want::OptBlob)
+                        && decodes(&rc_v, Want::OptBlob))
+                {
+                    rows.push((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?));
+                    continue;
+                }
+                // A binding of the wrong class is tampering, stated rather
+                // than read through; a fact id that does not decode is the
+                // graph walk's finding.
+                if let Some(id) = text_of(&id_v) {
+                    out.push(ReceiptStatus {
+                        triple_id: id.to_string(),
+                        source_drawer_id: text_of(&did_v).unwrap_or_default().to_string(),
+                        verdict: ReceiptVerdict::Tampered,
+                    });
+                }
+            }
+        }
+        drop(stmt);
         let secret = self.kg_secret()?;
         for (id, drawer_id, fp, receipt_tag) in rows {
             let (verdict, drawer_id) = match (drawer_id, fp, receipt_tag) {
@@ -2428,15 +2535,19 @@ impl VaultStore {
                         match self.get(
                             &did,
                             crate::Read::Internal(crate::InternalRead::Verification),
-                        )? {
-                            None => ReceiptVerdict::Dangling,
+                        ) {
+                            Ok(None) => ReceiptVerdict::Dangling,
                             // Recomputed under the SAME recipe the write path
                             // used, so a legacy row the migration refused to
                             // launder still compares against what is stored.
-                            Some(d) if fp_matches(&self.vault, &secret, &d.content, &fp) => {
+                            Ok(Some(d)) if fp_matches(&self.vault, &secret, &d.content, &fp) => {
                                 ReceiptVerdict::Verified
                             }
-                            Some(_) => ReceiptVerdict::SourceChanged,
+                            Ok(Some(_)) => ReceiptVerdict::SourceChanged,
+                            // ROADMAP O269 item 2: the walk named the cited
+                            // drawer, and this receipt verified.
+                            Err(e) if crate::unreadable_and_named(&e, named, &did) => continue,
+                            Err(e) => return Err(e),
                         }
                     };
                     (v, did)
@@ -3610,18 +3721,107 @@ impl VaultStore {
     /// `/v1/verify` actually ask — never touched the table. So a rewritten
     /// entity name or type produced a clean verdict, and every read that
     /// did not list entities kept agreeing with it.
-    pub(crate) fn kg_verify(&self) -> Result<Vec<String>, StoreError> {
+    ///
+    /// **Every column is read by its value type** (ROADMAP O269 item 2): the
+    /// walk collected typed rows, so one value of the wrong storage class or
+    /// TEXT that is not UTF-8 made `verify` fail with a conversion error. A
+    /// row is checked over its BYTES — [`crate::BadReason::TagFailed`] when
+    /// they changed, [`crate::BadReason::Undecodable`] when the bytes the tag
+    /// covers are intact and stored as what no read takes — and named by
+    /// `seq` (facts) or `rowid` (entities) where its id does not decode.
+    pub(crate) fn kg_verify(&self) -> Result<Vec<crate::BadRecord>, StoreError> {
+        use crate::{first_undecodable, text_of, value_bytes, BadRecord, Want};
+        use rusqlite::types::ValueRef;
         let mut bad = Vec::new();
-        let sql = format!("SELECT {TRIPLE_COLUMNS} FROM kg_triples ORDER BY seq");
+        let sql = format!("SELECT {TRIPLE_COLUMNS}, seq FROM kg_triples ORDER BY seq");
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows: Vec<TripleRow> = stmt
-            .query_map([], TripleRow::from_row)?
-            .collect::<Result<_, _>>()?;
-        for row in rows {
-            if self.vault.verify_tag(&row.canonical(), &row.tag).is_err() {
-                bad.push(format!("kg/{}", row.id));
+        let mut rows = stmt.query([])?;
+        // `TRIPLE_COLUMNS`, in order, with the class each read expects.
+        const TRIPLE_WANT: [(&str, Want); 16] = [
+            ("id", Want::Text),
+            ("subject", Want::Text),
+            ("predicate", Want::Text),
+            ("object", Want::Blob),
+            ("valid_from", Want::OptText),
+            ("valid_to", Want::OptText),
+            ("confidence", Want::Real),
+            ("source_drawer_id", Want::OptText),
+            ("tag", Want::Blob),
+            ("extracted_at", Want::Text),
+            ("support", Want::OptBlob),
+            ("authority_class", Want::OptText),
+            ("review_state", Want::OptText),
+            ("canonical_key", Want::OptText),
+            ("extractor", Want::OptText),
+            ("terms", Want::OptBlob),
+        ];
+        while let Some(r) = rows.next()? {
+            let seq: i64 = r.get(16)?;
+            let cells: Vec<ValueRef<'_>> =
+                (0..16).map(|i| r.get_ref(i)).collect::<Result<_, _>>()?;
+            let named: Vec<(&str, ValueRef<'_>, Want)> = TRIPLE_WANT
+                .iter()
+                .zip(&cells)
+                .map(|((n, w), v)| (*n, *v, *w))
+                .collect();
+            let name = match text_of(&cells[0]) {
+                Some(id) => format!("kg/{id}"),
+                None => format!("kg_triples seq {seq}"),
+            };
+            // `source_drawer_id` is outside the fact's canonical (it is the
+            // receipt's): it is not judged here, and the receipt leg owns it.
+            let why = first_undecodable(
+                &named
+                    .iter()
+                    .copied()
+                    .filter(|(n, _, _)| *n != "source_drawer_id")
+                    .collect::<Vec<_>>(),
+            );
+            // The tag over the BYTES, through the one builder, for every row —
+            // a row whose columns all decode gives exactly the canonical
+            // `TripleRow::canonical` builds from the typed values. A required
+            // column with no bytes, or a confidence that is no number, cannot
+            // carry the canonical, so no tag verifies over it.
+            let b = |i: usize| value_bytes(&cells[i]);
+            let opt = |i: usize| -> Option<Option<&[u8]>> {
+                match cells[i] {
+                    ValueRef::Null => Some(None),
+                    ref v => value_bytes(v).map(Some),
+                }
+            };
+            let confidence = match cells[6] {
+                ValueRef::Real(f) => Some(f),
+                ValueRef::Integer(n) => Some(n as f64),
+                _ => None,
+            };
+            let canonical = (|| {
+                let auth = authority_ext_bytes(opt(11)?, opt(12)?, opt(13)?);
+                let ext = extractor_ext_bytes(opt(14)?);
+                Some(triple_canonical_bytes(
+                    b(0)?,
+                    b(1)?,
+                    b(2)?,
+                    b(3)?,
+                    opt(4)?,
+                    opt(5)?,
+                    confidence?,
+                    opt(10)?,
+                    auth.as_deref(),
+                    ext.as_deref(),
+                    opt(15)?,
+                ))
+            })();
+            let verified = match (canonical, b(8)) {
+                (Some(c), Some(tag)) => self.vault.verify_tag(&c, tag).is_ok(),
+                _ => false,
+            };
+            match (verified, why) {
+                (false, _) => bad.push(BadRecord::tag_failed(name)),
+                (true, Some(why)) => bad.push(BadRecord::undecodable(name, why)),
+                (true, None) => {}
             }
         }
+        drop(rows);
         drop(stmt);
         // `name_rest` is selected because it is inside the canonical (the
         // fifth extension). Without it this leg verified a shape the write
@@ -3629,33 +3829,50 @@ impl VaultStore {
         // every entity tampered — and before the extension existed it could
         // not see a sealed name being erased at all.
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, etype, tag, created_at, name_rest FROM kg_entities ORDER BY name",
+            "SELECT id, name, etype, tag, created_at, name_rest, rowid FROM kg_entities \
+             ORDER BY name",
         )?;
-        #[allow(clippy::type_complexity)]
-        let entities: Vec<(String, String, String, Vec<u8>, String, Option<Vec<u8>>)> = stmt
-            .query_map([], |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                ))
-            })?
-            .collect::<Result<_, _>>()?;
-        for (id, name, etype, tag, created, name_rest) in entities {
-            if self
-                .vault
-                .verify_tag(
-                    &entity_canonical(&id, &name, &etype, &created, name_rest.as_deref()),
-                    &tag,
-                )
-                .is_err()
-            {
-                // The record-id namespace the entity's chain record uses, so
-                // a bad_records line and an audit row name the same thing.
-                bad.push(format!("kg-entity/{id}"));
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let rowid: i64 = r.get(6)?;
+            let cells: Vec<ValueRef<'_>> =
+                (0..6).map(|i| r.get_ref(i)).collect::<Result<_, _>>()?;
+            // The record-id namespace the entity's chain record uses, so a
+            // bad_records line and an audit row name the same thing.
+            let name = match text_of(&cells[0]) {
+                Some(id) => format!("kg-entity/{id}"),
+                None => format!("kg_entities rowid {rowid}"),
+            };
+            let why = first_undecodable(&[
+                ("id", cells[0], Want::Text),
+                ("name", cells[1], Want::Text),
+                ("etype", cells[2], Want::Text),
+                ("tag", cells[3], Want::Blob),
+                ("created_at", cells[4], Want::Text),
+                ("name_rest", cells[5], Want::OptBlob),
+            ]);
+            let name_rest = match cells[5] {
+                ValueRef::Null => Some(None),
+                ref v => value_bytes(v).map(Some),
+            };
+            let verified = match (
+                value_bytes(&cells[0]),
+                value_bytes(&cells[1]),
+                value_bytes(&cells[2]),
+                value_bytes(&cells[3]),
+                value_bytes(&cells[4]),
+                name_rest,
+            ) {
+                (Some(id), Some(n), Some(e), Some(tag), Some(c), Some(rest)) => self
+                    .vault
+                    .verify_tag(&entity_canonical(id, n, e, c, rest), tag)
+                    .is_ok(),
+                _ => false,
+            };
+            match (verified, why) {
+                (false, _) => bad.push(BadRecord::tag_failed(name)),
+                (true, Some(why)) => bad.push(BadRecord::undecodable(name, why)),
+                (true, None) => {}
             }
         }
         Ok(bad)
@@ -5436,7 +5653,10 @@ mod tests {
             ),
             Err(crate::StoreError::Integrity(_))
         ));
-        assert_eq!(s.kg_verify().unwrap(), vec![format!("kg/{id}")]);
+        assert_eq!(
+            s.kg_verify().unwrap(),
+            vec![crate::BadRecord::tag_failed(format!("kg/{id}"))]
+        );
     }
 
     /// Extractor identity: recorded on the fact, readable back, and inside
@@ -5483,7 +5703,10 @@ mod tests {
                 rusqlite::params![id],
             )
             .unwrap();
-        assert_eq!(s.kg_verify().unwrap(), vec![format!("kg/{id}")]);
+        assert_eq!(
+            s.kg_verify().unwrap(),
+            vec![crate::BadRecord::tag_failed(format!("kg/{id}"))]
+        );
     }
 
     /// The meta-rows export gap, closed and pinned: facts cross vaults

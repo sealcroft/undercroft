@@ -3137,8 +3137,20 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
         .map(|(_, t)| t.matches(".swap(hold)").count())
         .sum();
     assert_eq!(swaps, 1, "one swap");
+    // ROADMAP O269 item 6: the stage's ONE check is its `verify`, which carries
+    // SQLite's `integrity_check` as its storage leg — `storage_check`, a second
+    // implementation of that decision run beside it, is gone and stays gone.
+    assert!(
+        !door.contains("storage_check("),
+        "a second storage check beside the stage's verify (ROADMAP O269 item 6)"
+    );
+    assert_eq!(
+        door.matches("Step::Verify))?").count(),
+        1,
+        "the stage is verified once"
+    );
     let (verified, held, swapped) = (
-        door.find("storage_check()").expect("the storage check"),
+        door.find("Step::Verify))?").expect("the stage's verify"),
         door.find("hold_vault_exclusively(").expect("the hold"),
         door.find(".swap(hold)").expect("the swap"),
     );

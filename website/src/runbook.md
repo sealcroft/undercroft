@@ -65,6 +65,7 @@ undercroft verify --vault <vault>
 # mirror drift:    0
 # policy drift:    0
 # version replay:  0
+# storage:         0
 # VERIFY FAILED
 ```
 
@@ -81,7 +82,24 @@ one, it fails the verdict, and `backup create` refuses while it stands — but a
 key rotation is not refused over it, since a rotation cannot launder it. It can
 be made without the key (ROADMAP O406), so treat it as evidence:
 preserve the directory first, then restore an archive that holds the drawer
-intact, or `drawer delete` it if its content is not needed.
+intact, or `drawer delete` it if its content is not needed. Since 1.7.0 it
+also counts a row a column of which holds what no read takes — the wrong
+storage class, or text that is not UTF-8 — named `UNREADABLE: <id>: column
+<name> holds …` (or by `seq` where its id does not decode), where `verify`
+used to stop with a conversion error; that one DOES block a rotation, which
+cannot read it (ROADMAP O269).
+
+`storage:` is SQLite's own `integrity_check` of the file the rows live in, run
+first (ROADMAP O269). `STORAGE: integrity_check: row 11 missing from index
+idx_drawers_room` is damage confined to an index: an index hides rows from
+every read that finds one through it — `forget` included — so a vault can
+answer every other leg clean and still serve wrong answers. `undercroft repair`
+rebuilds every index from its table and then `verify` is clean again; a
+rebuild conforms an index to its table, so for any line that is not an index's,
+or any doubt, restore the newest archive whose restore is accepted instead.
+`STORAGE: <leg> not run: database disk image is malformed` is a leg that met
+damaged pages partway; and a file damaged at its first pages refuses to open
+at all, exit 2 with *the vault's database is damaged*. Both mean restore.
 
 **A broken chain also stops work before you get here, and that is deliberate
 (ROADMAP O237).** Every read that DECIDES from an audit label — a
@@ -95,7 +113,7 @@ the evidence, then restore a backup that verifies. A vault this binary has
 not yet opened writable keeps serving, because its labels were never bound
 to the chain.
 
-The next four lines are further legs, and
+The next five lines are further legs, and
 a non-zero count on any of them fails the verdict too; a vault holding
 supersession links or fact receipts prints a line for each of those legs as
 well, where only a tampered count fails.
@@ -259,9 +277,11 @@ restore**, not a repair-in-place of forged bytes:
    source failed verification, so a listed backup is known-good at capture time —
    and `restore` proves it again before it touches the live vault: the archive is
    copied into a stage, opened with this installation's key and the vault's
-   embedder, verified and checked with SQLite's `integrity_check`, and only then
-   swapped in. An archive that fails any of it exits 2 and the live vault is left
-   exactly as it was, which on this path is also your evidence (ROADMAP O268):
+   embedder, verified over every leg — SQLite's `integrity_check` among them, as
+   the storage leg (ROADMAP O269) — and only then swapped in. An archive that
+   fails any of it exits 2, prints what its verification found, and the live
+   vault is left exactly as it was, which on this path is also your evidence
+   (ROADMAP O268):
    ```bash
    undercroft backup list                          # names are <vault>-<stamp>
    undercroft backup restore <vault>-<stamp> --force   # stop the server first; --force to overwrite the live vault
