@@ -490,10 +490,19 @@ mod cases {
     }
 
     /// The offline writer's retyping of one covered column: `content` stored
-    /// as TEXT, or `meta_json` as a BLOB (the review's fixtures).
+    /// as TEXT, or `meta_json` as a BLOB (the review's fixtures). The first
+    /// also CHANGES the bytes, so the tag — checked over the bytes since
+    /// ROADMAP O269 item 2 — fails over it; the second keeps them, so the tag
+    /// verifies and the column is what no read takes.
     const RETYPES: &[&str] = &[
         "UPDATE drawers SET content = 'not a blob' WHERE id = ?1",
         "UPDATE drawers SET meta_json = CAST(meta_json AS BLOB) WHERE id = ?1",
+    ];
+
+    /// The reason the list gives each of [`RETYPES`], in order.
+    const RETYPE_REASONS: &[UnverifiableReason] = &[
+        UnverifiableReason::TagFails,
+        UnverifiableReason::ColumnRetyped,
     ];
 
     /// **A retyped row OUTSIDE the queue fails no door** (O221's review). One
@@ -537,14 +546,17 @@ mod cases {
     }
 
     /// **A retyped row IN the queue is reported and held** (O221's review):
-    /// the list names it `column-retyped` with the fence holding it, and
+    /// the list names it with the fence holding it — `column-retyped` where
+    /// the bytes are intact, `tag-fails` where the retype changed them (the
+    /// tag is checked over the bytes, ROADMAP O269 item 2; O221's first build
+    /// named both `column-retyped`, classifying before any tag) — and
     /// `drawer delete` and `delete_by_source` refuse it as an integrity
     /// verdict naming the remedies, deleting nothing.
     ///
     /// Counterfactual (`b4e5a3b`): the list failed with a conversion error.
     #[test]
     fn o221_a_retyped_row_in_the_queue_is_reported_and_held() {
-        for retype in RETYPES {
+        for (retype, reason) in RETYPES.iter().zip(RETYPE_REASONS) {
             let (_d, mut s) = store();
             let q0 = queued(&mut s, POISON, 0);
             let other = queued(
@@ -557,7 +569,7 @@ mod cases {
             assert_eq!(q.pending.len(), 1, "{retype}");
             assert_eq!(q.pending[0].id, other);
             assert_eq!(q.unverifiable.len(), 1, "{retype}: {q:?}");
-            assert_eq!(q.unverifiable[0].reason, UnverifiableReason::ColumnRetyped);
+            assert_eq!(q.unverifiable[0].reason, *reason, "{retype}");
             assert_eq!(q.unverifiable[0].seq, seq_of(&s, &q0));
             assert!(q.unverifiable[0].fenced && !q.ok);
             assert_eq!(standing(&s, &q0), QueueStanding::PendingUnverifiable);

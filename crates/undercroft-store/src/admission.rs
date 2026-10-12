@@ -164,9 +164,11 @@ pub enum UnverifiableReason {
     MetaUnparseable,
     /// The tag verifies, the meta parses, and the content does not decrypt.
     ContentUndecryptable,
-    /// A covered column holds a value of the wrong storage type — `meta_json`
-    /// stored as a BLOB, `content` or `tag` as TEXT — so no tag can be checked
-    /// over the row (an offline writer's retyping).
+    /// The tag verifies over the row's bytes and a covered column holds them
+    /// as a value no read takes — `meta_json` stored as a BLOB, `content` or
+    /// `tag` as TEXT, TEXT that is not UTF-8 (an offline writer's retyping).
+    /// A retype that changed the bytes fails the tag over them and is
+    /// [`UnverifiableReason::TagFails`] (ROADMAP O269 item 2).
     ColumnRetyped,
 }
 

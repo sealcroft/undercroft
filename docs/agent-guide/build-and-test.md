@@ -26,8 +26,8 @@ since O436: update a figure HERE when a count moves.
 ---
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1425 run,
-                                      # 17 #[ignore]d = 1442 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1443 run,
+                                      # 21 #[ignore]d = 1464 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -111,7 +111,7 @@ docker compose run --rm test          # cargo unit + integration tests (1425 run
                                       # remembered — do not hand-edit one to
                                       # silence the gate; it is measuring the
                                       # suite, not this comment.
-                                      # The 17 ignored are 3 measurements needing
+                                      # The 21 ignored are 3 measurements needing
                                       # testdata/*_50k.txt, one in lib.rs, and four
                                       # in anchor_tests.rs (ROADMAP O254, O257): the
                                       # multi-process gate's child entry point,
@@ -135,7 +135,13 @@ docker compose run --rm test          # cargo unit + integration tests (1425 run
                                       # which returns at once unless its parent
                                       # names a role), and one in
                                       # delete_tests.rs (ROADMAP O291's
-                                      # cross-process holder, the same shape).
+                                      # cross-process holder, the same shape),
+                                      # and four in storage_tests.rs (ROADMAP
+                                      # O269's measurements: an immutable
+                                      # reader beside a writer, with and
+                                      # without the store, a flipped FTS
+                                      # page, and the storage leg's cost at
+                                      # scale, each run by name).
                                       # Run the first
                                       # four with `cargo test --release -- --ignored`:
                                       # 3 pass, and `measure_relation_promiscuity`
@@ -173,7 +179,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (878 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (901 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (201 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (62 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate

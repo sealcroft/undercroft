@@ -2096,8 +2096,13 @@ impl undercroft_core::rerank::Reranker for SharedReranker {
 /// share, so the two cannot state different values for one class. The fourth
 /// class, 141 — the reader of stdout went away — is decided there alone.
 const EXIT_INTEGRITY: u8 = undercroft_obs::stdio::EXIT_INTEGRITY;
-/// Exit 1 — the run itself failed: bad arguments, a missing file, an
-/// unreadable vault. Retryable in the sense that a retry might succeed — with
+/// Exit 1 — the run itself failed: bad arguments, a missing file, a vault
+/// that could not be reached for a reason OUTSIDE its bytes — permissions, a
+/// lock, a missing path, an I/O error. A database whose bytes do not hold
+/// together is not that: it is an integrity verdict, exit 2, as an absent one
+/// has been since A33 (ROADMAP O269, the maintainer's ruling of 2026-10-08:
+/// "unreadable" means unreachable). Retryable in the sense that a retry might
+/// succeed — with
 /// one exception a script must know: a destruction whose `--out` failed after
 /// the drawers were gone, whose receipt went to stdout instead (ROADMAP O262).
 /// Its retry answers not found, and that stdout is the only copy.
@@ -2171,6 +2176,11 @@ fn integrity_verdict(e: &anyhow::Error) -> bool {
                     // database content, so an absent file contradicts
                     // nothing it claims — the A33 line, distinguished.
                     | S::DatabaseMissing { .. }
+                    // A database whose bytes do not hold together, met at
+                    // the open's named doors (ROADMAP O269, option B): the
+                    // retry rationale fits it exactly, since a retry meets
+                    // the same bytes. It exited 1.
+                    | S::StorageCorrupt(_)
                     // Two databases under one manifest (ROADMAP O7): the
                     // same self-contradiction, one file too many rather
                     // than one too few.
@@ -2200,6 +2210,128 @@ fn integrity_verdict(e: &anyhow::Error) -> bool {
         }
         false
     })
+}
+
+/// **`verify`'s projection on this surface, in ONE place** (ROADMAP O269
+/// item 6): `verify` prints it, and so does a refused `backup restore`, whose
+/// archive no other command can verify — a restore refused over its storage
+/// leg used to print only "it fails integrity verification", and folding
+/// `storage_check` into the report without printing the report there would
+/// have dropped the one diagnostic it gave.
+fn print_verify_report(report: &undercroft_store::VerifyReport) {
+    outln!("records checked: {}", report.records_checked);
+    // ROADMAP O231: one list, printed as two lines because only one
+    // of its reasons is a failed HMAC. A drawer whose HMAC verifies
+    // over covered meta that does not parse is refused by every read,
+    // and counting it as an HMAC failure would misname it — and so is a
+    // row whose tag verifies over columns no read takes (O269 item 2).
+    // Matched with no `_`, so a new reason is placed here before it
+    // compiles.
+    let (hmac, unreadable): (Vec<_>, Vec<_>) =
+        report.bad_records.iter().partition(|b| match b.reason {
+            undercroft_store::BadReason::TagFailed => true,
+            undercroft_store::BadReason::MetaUnparseable
+            | undercroft_store::BadReason::Undecodable => false,
+        });
+    outln!("hmac failures:   {}", hmac.len());
+    for b in &hmac {
+        outln!("  TAMPERED: {}", b.record);
+    }
+    outln!("unreadable:      {}", unreadable.len());
+    for b in &unreadable {
+        outln!("  UNREADABLE: {b}");
+    }
+    outln!(
+        "audit chain:     {}",
+        if report.chain_ok { "ok" } else { "BROKEN" }
+    );
+    // ROADMAP O233: the labels the chain held when it switched to the
+    // labelled step, against the commitment that bound them. A
+    // mismatch fails the verdict and does not block a rotation.
+    outln!("audit labels:    {}", report.label_commitment.as_str());
+    // The fourth leg: a graph or drawer label naming a record that
+    // is not there — on a switched chain, a row deleted with no
+    // destruction record; on an unswitched one, a relabel too.
+    outln!("orphan labels:   {}", report.orphan_labels.len());
+    for l in &report.orphan_labels {
+        outln!("  ORPHANED: {l} — names no live record");
+    }
+    // A28: an indexed mirror that disagrees with the covered meta.
+    // The record is intact; the COLUMN was edited offline.
+    outln!("mirror drift:    {}", report.mirror_drift.len());
+    for m in &report.mirror_drift {
+        outln!("  MIRROR: {m}");
+    }
+    // O94: a declared policy that no longer matches the chain record
+    // that assigned it. A flipped trust column fails closed on the
+    // retrieval path; a DELETED row does not — the floor simply stops
+    // applying — so this is the only place either becomes visible.
+    outln!("policy drift:    {}", report.policy_drift.len());
+    for p in &report.policy_drift {
+        outln!("  POLICY: {p}");
+    }
+    // O234: a row that verifies, and is not the version the chain
+    // last recorded — an older drawer, fact or entity written back
+    // over the current one, or a row restored after its destruction.
+    outln!("version replay:  {}", report.version_replay.len());
+    for v in &report.version_replay {
+        outln!("  REPLAYED: {v}");
+    }
+    // ROADMAP O269: the file the rows live in — every row SQLite's
+    // `integrity_check` returned that is not `ok`, and every leg a
+    // corruption code stopped. The names in a row are the file's.
+    outln!("storage:         {}", report.storage.len());
+    for s in &report.storage {
+        outln!("  STORAGE: {s}");
+    }
+    // Drawer supersession links are part of the vault's integrity
+    // story: a receipted link that fails its HMAC is tampering,
+    // reported with the same severity as a bad record. The leg now
+    // rides inside the report (one walk, and `report.ok()` covers
+    // it on every surface); this only renders it.
+    let links = &report.supersessions;
+    if !links.is_empty() {
+        use undercroft_store::ReceiptVerdict as V;
+        let count = |v: V| links.iter().filter(|l| l.verdict == v).count();
+        outln!(
+            "supersessions:   {} verified · {} source-changed · {} dangling · \
+                 {} unreceipted · {} tampered",
+            count(V::Verified),
+            count(V::SourceChanged),
+            count(V::Dangling),
+            count(V::Unreceipted),
+            report.tampered_supersessions()
+        );
+        for l in links.iter().filter(|l| l.verdict == V::Tampered) {
+            outln!("  TAMPERED LINK: {} → {}", l.drawer_id, l.supersedes);
+        }
+    }
+    // The sixth leg, and the same story one level up: a fact's
+    // receipt binds it to the verbatim drawer it was distilled
+    // from, keyed, in columns no drawer HMAC covers. It rides
+    // inside the report now — until it did, `VERIFY OK` printed
+    // over a forged citation and `backup create` archived it.
+    let receipts = &report.receipts;
+    if !receipts.is_empty() {
+        use undercroft_store::ReceiptVerdict as V;
+        let count = |v: V| receipts.iter().filter(|r| r.verdict == v).count();
+        outln!(
+            "fact receipts:   {} verified · {} source-changed · {} dangling · \
+                 {} unreceipted · {} tampered",
+            count(V::Verified),
+            count(V::SourceChanged),
+            count(V::Dangling),
+            count(V::Unreceipted),
+            report.tampered_receipts()
+        );
+        for r in receipts.iter().filter(|r| r.verdict == V::Tampered) {
+            outln!(
+                "  TAMPERED RECEIPT: {} ← {}",
+                r.triple_id,
+                r.source_drawer_id
+            );
+        }
+    }
 }
 
 fn main() -> std::process::ExitCode {
@@ -2945,109 +3077,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Verify { vault } => {
             let store = open_store(&cli, vault)?;
             let report = store.verify()?;
-            outln!("records checked: {}", report.records_checked);
-            // ROADMAP O231: one list, printed as two lines because only one
-            // of its reasons is a failed HMAC. A drawer whose HMAC verifies
-            // over covered meta that does not parse is refused by every read,
-            // and counting it as an HMAC failure would misname it. Matched
-            // with no `_`, so a new reason is placed here before it compiles.
-            let (hmac, unreadable): (Vec<_>, Vec<_>) =
-                report.bad_records.iter().partition(|b| match b.reason {
-                    undercroft_store::BadReason::TagFailed => true,
-                    undercroft_store::BadReason::MetaUnparseable => false,
-                });
-            outln!("hmac failures:   {}", hmac.len());
-            for b in &hmac {
-                outln!("  TAMPERED: {}", b.record);
-            }
-            outln!("unreadable:      {}", unreadable.len());
-            for b in &unreadable {
-                outln!("  UNREADABLE: {b}");
-            }
-            outln!(
-                "audit chain:     {}",
-                if report.chain_ok { "ok" } else { "BROKEN" }
-            );
-            // ROADMAP O233: the labels the chain held when it switched to the
-            // labelled step, against the commitment that bound them. A
-            // mismatch fails the verdict and does not block a rotation.
-            outln!("audit labels:    {}", report.label_commitment.as_str());
-            // The fourth leg: a graph or drawer label naming a record that
-            // is not there — on a switched chain, a row deleted with no
-            // destruction record; on an unswitched one, a relabel too.
-            outln!("orphan labels:   {}", report.orphan_labels.len());
-            for l in &report.orphan_labels {
-                outln!("  ORPHANED: {l} — names no live record");
-            }
-            // A28: an indexed mirror that disagrees with the covered meta.
-            // The record is intact; the COLUMN was edited offline.
-            outln!("mirror drift:    {}", report.mirror_drift.len());
-            for m in &report.mirror_drift {
-                outln!("  MIRROR: {m}");
-            }
-            // O94: a declared policy that no longer matches the chain record
-            // that assigned it. A flipped trust column fails closed on the
-            // retrieval path; a DELETED row does not — the floor simply stops
-            // applying — so this is the only place either becomes visible.
-            outln!("policy drift:    {}", report.policy_drift.len());
-            for p in &report.policy_drift {
-                outln!("  POLICY: {p}");
-            }
-            // O234: a row that verifies, and is not the version the chain
-            // last recorded — an older drawer, fact or entity written back
-            // over the current one, or a row restored after its destruction.
-            outln!("version replay:  {}", report.version_replay.len());
-            for v in &report.version_replay {
-                outln!("  REPLAYED: {v}");
-            }
-            // Drawer supersession links are part of the vault's integrity
-            // story: a receipted link that fails its HMAC is tampering,
-            // reported with the same severity as a bad record. The leg now
-            // rides inside the report (one walk, and `report.ok()` covers
-            // it on every surface); this only renders it.
-            let links = &report.supersessions;
-            if !links.is_empty() {
-                use undercroft_store::ReceiptVerdict as V;
-                let count = |v: V| links.iter().filter(|l| l.verdict == v).count();
-                outln!(
-                    "supersessions:   {} verified · {} source-changed · {} dangling · \
-                     {} unreceipted · {} tampered",
-                    count(V::Verified),
-                    count(V::SourceChanged),
-                    count(V::Dangling),
-                    count(V::Unreceipted),
-                    report.tampered_supersessions()
-                );
-                for l in links.iter().filter(|l| l.verdict == V::Tampered) {
-                    outln!("  TAMPERED LINK: {} → {}", l.drawer_id, l.supersedes);
-                }
-            }
-            // The sixth leg, and the same story one level up: a fact's
-            // receipt binds it to the verbatim drawer it was distilled
-            // from, keyed, in columns no drawer HMAC covers. It rides
-            // inside the report now — until it did, `VERIFY OK` printed
-            // over a forged citation and `backup create` archived it.
-            let receipts = &report.receipts;
-            if !receipts.is_empty() {
-                use undercroft_store::ReceiptVerdict as V;
-                let count = |v: V| receipts.iter().filter(|r| r.verdict == v).count();
-                outln!(
-                    "fact receipts:   {} verified · {} source-changed · {} dangling · \
-                     {} unreceipted · {} tampered",
-                    count(V::Verified),
-                    count(V::SourceChanged),
-                    count(V::Dangling),
-                    count(V::Unreceipted),
-                    report.tampered_receipts()
-                );
-                for r in receipts.iter().filter(|r| r.verdict == V::Tampered) {
-                    outln!(
-                        "  TAMPERED RECEIPT: {} ← {}",
-                        r.triple_id,
-                        r.source_drawer_id
-                    );
-                }
-            }
+            print_verify_report(&report);
             if report.ok() {
                 outln!("{}", tr("verify-ok"));
             } else {
@@ -4840,12 +4870,16 @@ fn run(cli: Cli) -> Result<()> {
                             .map_err(|e| restore_refusal(&src, e))?;
                     let report = match outcome {
                         undercroft_store::RestoreOutcome::Restored(report) => report,
-                        undercroft_store::RestoreOutcome::Refused(_) => {
+                        undercroft_store::RestoreOutcome::Refused(report) => {
                             outln!(
                                 "refusing to restore backup '{name}': it fails integrity \
                                  verification, so nothing was restored and the live vault was \
-                                 not changed"
+                                 not changed. What its verification found:"
                             );
+                            // ROADMAP O269 item 6: the findings, every leg,
+                            // through `verify`'s own projection — the
+                            // archive cannot be verified any other way.
+                            print_verify_report(&report);
                             std::process::exit(EXIT_INTEGRITY.into());
                         }
                     };

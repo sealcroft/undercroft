@@ -650,12 +650,10 @@ so it answered OK and a backup archived it (ROADMAP O231). It can be a legacy or
 defect-written row, and it can also be made without the key, by moving where a
 drawer's meta ends and its content begins (ROADMAP O406). A failed HMAC is
 still printed under `hmac failures:`; this reason has its own line because the
-HMAC verifies. **One shape of this damage is not yet named on a line:** where the
-boundary is moved so that the covered meta is no longer valid UTF-8, `verify` and
-`backup create` exit 1 with `corrupt row …` (a run failure) instead of naming the
-row at exit 2 — O269's build is settling whether that reads as a named verdict
-too. So on this release treat a `corrupt row` exit 1 from `verify` as the same
-finding, not a transient error.
+HMAC verifies. Where the boundary is moved so that the covered meta is no longer
+valid UTF-8, the row is named too, on the same line with another reason —
+`UNREADABLE: <id>: column meta_json holds TEXT that is not UTF-8 …` — and that
+one DOES block a rotation, which cannot read it (ROADMAP O269, the next entry).
 
 **Fix:** `undercroft verify --vault <name>` names every such drawer. Restore the
 newest archive whose restore is accepted, if one holds the drawer intact; or, if
@@ -665,6 +663,78 @@ afterwards and `backup create` works again. An archive taken before 1.7.0 that
 holds such a row can still be restored by the binary that took it; then delete
 the row with this one. `undercroft config check` cannot detect this: it opens no
 vault database. Run the new binary's `verify --read-only` before the upgrade.
+
+### `verify` checks the database file itself; damage it finds, or a database that does not hold together, is exit 2 and stops `backup create` and `vault rotate` (O269)
+
+**Symptom:** on a vault the previous binary verified, any of these.
+
+- `undercroft verify` exits 2 with a new line, `storage:         N`, and one
+  `STORAGE: integrity_check: …` line per row SQLite's own check returned —
+  `row 11 missing from index idx_drawers_room`, `wrong # of entries in index …`,
+  a freelist or page-accounting line — or `STORAGE: <leg> not run: database disk
+  image is malformed` for a check that met damaged pages partway (MCP: `isError`,
+  `storage: N`; `/v1`: `"ok": false` and `"storage": [...]`; the console shows the
+  lines). `backup create` then exits 2 (`/v1`: 409 `class: "integrity"`), and
+  `vault rotate` refuses before it re-keys anything, exit 2, naming the same
+  lines. A clean vault prints `storage:         0`.
+- `verify` exits 2 with `UNREADABLE: <id>: column meta_json holds a BLOB — a
+  value this build never writes there, so every read refuses it` (the column and
+  what it holds vary; `drawers seq 12` names a row whose id itself does not
+  decode; a mirror column is a `mirror drift:` line, an audit label an `orphan
+  labels:` line, a policy row a `policy drift:` line) where it exited 1 with
+  `Conversion error from type Text …` or `Invalid column type Blob …` and reported
+  nothing else. Such a row blocks `vault rotate`.
+- EVERY command — `search`, `recent`, `stats`, `verify`, a server's routes — on
+  a vault whose `vault.db` is cut short or whose header no longer reads exits 2
+  with `the vault's database is damaged: <path> could not be read at the
+  writable open's first statement: SQLite answered "database disk image is
+  malformed" …` (or `the read-only open's first statement`, or `the read-only
+  open's first content read`), where it exited 1 with the bare SQLite message;
+  `/v1` answers 409 `class: "integrity"` where it answered 500. A read-only open
+  no longer reopens such a file with `immutable=1`.
+- `backup restore` of an archive with such damage prints the refused archive's
+  findings after `What its verification found:`, every leg, where it printed one
+  line; `/v1`'s 409 carries them as `report`.
+- `verify` on a read-only handle that opened its database with `immutable=1`
+  (the start-up warning says so: a write-protected mount or a snapshot) exits 1
+  with `the storage leg cannot be verified on this handle: …` where SQLite's own
+  check, or a later leg, met damage; `/v1` answers 409 with no class. Such a
+  handle reads with no lock and no WAL, so beside a process still writing the
+  vault a read can tear, and it cannot tell that from damage. On a vault nothing
+  writes, run `verify` where its directory is writable, or on a copy.
+
+**Cause:** `verify` walked tags and the chain and never the structure the rows
+live in, so one flipped byte in an index page passed it while SQLite's
+`integrity_check` named the missing rows — and an index hides rows from every read
+that finds one through it, `forget` and the policy checks included (ROADMAP O269).
+Where `verify` did trip over damage it returned SQLite's error, exit 1 — the class
+`docs/AGENTS.md` tells a script to retry — on a file whose answer never changes. A
+storage leg now runs SQLite's FULL `integrity_check` first, inside the same
+snapshot as every other leg, and so inside `backup create`'s and the rotation's
+own checks; no row aborts `verify` any more; and the open's doors class SQLite's
+corruption codes as an integrity verdict, as an absent database has been since
+A33. "Unreadable" in exit 1's definition now means unreachable for a reason
+outside the file's bytes — permissions, a lock, a missing path, an I/O error.
+Corruption met PARTWAY through a command other than `verify` is still exit 1;
+the next `verify` gives the verdict. The full check costs time on every
+`verify`, `backup create` and rotation, measured in ROADMAP O269.
+
+**Fix:** for any `STORAGE:` line, one that names an index (`… missing from
+index …`, `wrong # of entries in index …`) included, restore the newest archive
+whose restore is accepted — a restore refuses an archive carrying the same
+damage and says why. `undercroft repair` does not mend it, and that is
+deliberate: its closing VACUUM copies each index as it stands, so the lines
+survive it, and rebuilding an index from its table would CONFORM the index to
+the table — while one byte changed on the TABLE side of an indexed column
+produces exactly the lines index damage does, so a rebuild would turn that edit
+into a vault `verify` calls clean. Whether index damage should get a rebuild
+that first rules out the table side is an open question (ROADMAP
+O434). A row named `UNREADABLE` with `holds a BLOB` or `holds TEXT` over bytes
+that are otherwise intact can be retyped back with `sqlite3` (`CAST(col AS
+TEXT)`/`AS BLOB`), after a `cp -a` evidence copy; otherwise restore an archive, or
+`drawer delete` it. A database that does not open: restore an archive.
+`undercroft config check` opens no vault database and cannot see any of this; run
+the new binary's `verify --read-only` before switching.
 
 ### `bundle keygen` and `bundle sign-keygen` refuse a link at the identity's path (O321), and a key file is published whole (O210)
 
@@ -755,8 +825,10 @@ offline writer has touched — none on an intact one.
 - A drawer an offline writer RETYPED (a covered column stored with another
   storage type) is reported by `admission list` as `column-retyped` when
   either copy places it in the queue, is refused by every fence there, and is
-  deleted like any unreadable row outside it; `verify` and a retention sweep
-  still fail on it with a conversion error, as before (ROADMAP O427).
+  deleted like any unreadable row outside it. One whose retype also changed the
+  bytes is reported `tag-fails`, its tag being checked over them. `verify`
+  names it (exit 2) and a retention sweep reports it unverifiable, where both
+  failed with a conversion error (ROADMAP O269, which answers O427).
 
 **Cause:** ROADMAP O221. One function decided "pending" for every
 destruction fence by the clear `wing` column, so one offline flip of that

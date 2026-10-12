@@ -374,10 +374,12 @@ fn o268_an_archive_naming_another_vault_cannot_replace_it() {
     assert_no_stage(root, "planted");
 }
 
-/// **`verify` is blind to an index; the restore is not.** A byte flipped in an
-/// index page is found by measurement to pass `verify` in a scratch root (the
-/// premise — `verify` reads no index) and fail `integrity_check`; the restore
-/// refuses it as an integrity verdict.
+/// **An index only the storage leg sees; the restore refuses it.** A byte
+/// flipped in an index page is found by measurement to pass EVERY row leg of
+/// `verify` in a scratch root — the premise this test was written on, "verify
+/// reads no index", re-expressed rather than deleted (ROADMAP O269 item 6) —
+/// while the storage leg names the index; the restore refuses it with that
+/// report, the one implementation `storage_check` used to duplicate.
 #[test]
 fn o268_a_corrupt_index_passes_verify_and_is_still_refused() {
     let dir = corpus(40);
@@ -416,10 +418,19 @@ fn o268_a_corrupt_index_passes_verify_and_is_still_refused() {
             for f in ["vault.db", "vault.json"] {
                 std::fs::copy(cand.join(f), to.join(f)).unwrap();
             }
+            // Every row leg clean, the storage leg alone failing: the vault
+            // `verify` called clean before O269.
             VaultStore::open(mgr(scratch.path()).unlock(VAULT).unwrap())
                 .ok()
                 .and_then(|s| s.verify().ok())
-                .is_some_and(|r| r.ok())
+                .is_some_and(|r| {
+                    let rows_clean = crate::VerifyReport {
+                        storage: Vec::new(),
+                        ..r.clone()
+                    }
+                    .ok();
+                    rows_clean && !r.storage.is_empty()
+                })
         };
         if verifies {
             found = Some(cand);
@@ -427,16 +438,29 @@ fn o268_a_corrupt_index_passes_verify_and_is_still_refused() {
         }
         std::fs::remove_dir_all(&cand).unwrap();
     }
-    let cand =
-        found.expect("premise: a flipped index byte that verify passes and integrity_check fails");
+    let cand = found.expect(
+        "premise: a flipped index byte that every row leg passes and the storage leg names",
+    );
     let live = tree(&vdir(root));
-    let e = match restore_archive(&mgr(root), &cand, None, true, &hash) {
-        Err(e) => e,
+    let report = match restore_archive(&mgr(root), &cand, None, true, &hash) {
+        Ok(RestoreOutcome::Refused(r)) => r,
         Ok(o) => panic!("a corrupt index was restored: {o:?}"),
+        Err(e) => panic!("refused, but not with the report: {e}"),
     };
     assert!(
-        is_integrity(&e) && e.to_string().contains("integrity_check"),
-        "{e}"
+        report
+            .storage
+            .iter()
+            .any(|f| f.starts_with("integrity_check: ") && f.contains("idx_drawers_room")),
+        "the storage leg names the index: {report:?}"
+    );
+    assert!(
+        crate::VerifyReport {
+            storage: Vec::new(),
+            ..(*report).clone()
+        }
+        .ok(),
+        "and every other leg passes: {report:?}"
     );
     assert_eq!(tree(&vdir(root)), live);
     assert_no_stage(root, "index");

@@ -330,7 +330,7 @@ impl VaultStore {
             None => "0".to_string(),
         };
         let sql = format!(
-            "SELECT t.id FROM {table} t \
+            "SELECT t.id, t.rowid FROM {table} t \
               WHERE (SELECT CAST(a.tag AS BLOB) FROM audit a \
                       WHERE a.record_id IN ({labels}) ORDER BY a.seq DESC LIMIT 1) <> t.tag \
                 AND ({arm1} \
@@ -340,11 +340,18 @@ impl VaultStore {
             table = spec.table,
         );
         let mut stmt = snap.conn().prepare(&sql)?;
-        let ids: Vec<String> = stmt
-            .query_map(rusqlite::params_from_iter(label_params.iter()), |r| {
-                r.get(0)
-            })?
-            .collect::<Result<_, _>>()?;
+        // The id read by its type (ROADMAP O269 item 2): one that does not
+        // decode made this leg — and `verify` — fail with a conversion error.
+        // It is named by its place in its table instead.
+        let mut q = stmt.query(rusqlite::params_from_iter(label_params.iter()))?;
+        let mut ids: Vec<String> = Vec::new();
+        while let Some(r) = q.next()? {
+            let rowid: i64 = r.get(1)?;
+            ids.push(match crate::text_of(&r.get_ref(0)?) {
+                Some(id) => id.to_string(),
+                None => format!("{} rowid {rowid}", spec.table),
+            });
+        }
         Ok(ids
             .into_iter()
             .map(|id| {
@@ -385,11 +392,17 @@ impl VaultStore {
             let sql =
                 format!("SELECT record_id, MAX(seq) FROM audit WHERE {clause} GROUP BY record_id");
             let mut stmt = snap.conn().prepare(&sql)?;
-            let dead: Vec<(String, i64)> = stmt
-                .query_map(rusqlite::params_from_iter(ps.iter()), |r| {
-                    Ok((r.get(0)?, r.get(1)?))
-                })?
-                .collect::<Result<_, _>>()?;
+            // The label read by its type (ROADMAP O269 item 2): one that does
+            // not decode names no row, and the orphan-label leg names it.
+            let mut dead: Vec<(String, i64)> = Vec::new();
+            {
+                let mut q = stmt.query(rusqlite::params_from_iter(ps.iter()))?;
+                while let Some(r) = q.next()? {
+                    if let Some(l) = crate::text_of(&r.get_ref(0)?) {
+                        dead.push((l.to_string(), r.get(1)?));
+                    }
+                }
+            }
             drop(stmt);
             let head = format!("{}{infix}", ns.prefix());
             for (label, dead_at) in dead {
