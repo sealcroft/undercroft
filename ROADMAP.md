@@ -4375,6 +4375,29 @@ The carrier is settled by the reference-holder and mixed-version evidence, the d
 - **Keep O163 for 2.0.0 as M3.** Every legacy vault, mirror and archive refuses until FORCE plus `repair`, for a defect a fix can close, and O154 bars its stated `config check` arm.
 - **Leave it filed.** The swap stays silent for every deployment that does not declare a name and rename it on every swap — and for declared-name deployments that swap a file under a kept name.
 
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** Should O163 leave `## 2.0.0`, where it is the only item, and be scheduled as a non-MAJOR fix,
+or stay filed for a major?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided**, as both runs recommended: "do not spend a MAJOR on O163. Build the ruled shape, after P163-4, as a
+fix in the unreleased `1.7.0` or a later release." The ruled shape is the one above — `embedder_name` and its
+literals byte-identical, a per-vault model fingerprint as a second leg compared through ONE function, adoption
+on evidence — and M3, derive-and-replace, stays the MAJOR shape and is not built. Its version is PATCH by the
+ruled record above, with the `UPGRADING.md` lines that record names.
+
+**What remains open.**
+- Which release: the recommendation says "`1.7.0` or a later release", and the answer fixes neither.
+- The `## 2.0.0` section. The recommendation leaves "Leaving it in place (empty, or reserved for a later
+  retirement of the legacy literals) or removing it" to the maintainer, and the answer does not choose. This
+  record therefore does not move the entry: it leaves `## 2.0.0` when its release is fixed and that question is
+  answered, together.
+- Sequencing with O166, "which touches the same comparison", is the maintainer's and is not answered here.
+- P163-4 needs model weights, whose choice and download are the maintainer's.
+
 ## 1.7.0 — unreleased
 
 MINOR: O245 adds capability the product never had — a witness the engine
@@ -33947,6 +33970,34 @@ Nothing here is built. Everything below is conditional on the maintainer offerin
 
 Both spellings fail OPEN on an engine without O147, because the router ignores what it does not read. That is why the echo and the kept `last` look are part of the ruled shape whatever is chosen here.
 
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** Should `DELETE /v1/vaults/{id}` offer an OPTIONAL precondition on the vault's committed chain
+head, refusing and changing nothing when it no longer holds — and if so, in what public spelling and status, and
+should this one route then refuse query keys it does not read?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: option A, an optional precondition**, as both runs recommended:
+- "An optional query parameter, `?if_chain_head=<64 hex digits>`, named after the `chain_head` field `stats`
+  already publishes."
+- "**412** when the condition does not hold."
+- "**400** for a malformed value, a duplicated parameter, or any query key this route does not read" — on this
+  route only.
+- "Today's behaviour byte for byte when no parameter is sent."
+
+Not `If-Match`/`ETag`, a JSON body or a new POST route. The ruled shape above, conditional until now on this
+offer, binds the build: the committed head alone, read under the hold through one accessor; the refusals decided
+before the hold; the echo and the 412's found head and height; the `/v1` order; the orchestrator's typed
+conditional call and its `last` look comparing `chain_head` as well as `writes`.
+
+**Version.** MINOR, as the ruled record above states. `UPGRADING.md` owes its two lines there: the 400 on an
+unknown query key, and the upgrade order (engines before the orchestrator). `config check` owes nothing.
+
+**What remains open.** Nothing for the maintainer. A mixed fleet keeps today's window until its source engines
+run the release, the ruled shape's stated residual.
+
 ### O148 — migrating a vault with a non-empty quarantine queue releases it at a non-screening destination
 
 **Filed 2026-09-12, needs a ruling rather than code.** The tenant data plane
@@ -35138,6 +35189,29 @@ the door's name and surfaces, the maintainer's.
 **Version class.** PATCH, by the 2026-09-08 ruling: a surface that reports an existing silent
 defect. It rides 1.7.0 and changes no documented contract. No `UPGRADING.md` entry: nothing stops.
 
+#### RULED 2026-10-08 by the maintainer
+
+**The question (Q2's escalated part).** The new door's command and route names, and which surfaces offer it.
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided — the surfaces**, as recommended: "A read verb of its own, not a mode of `repair`: the CLI; `/v1` as a
+GET, so a `--read-only` server serves it with no `mutates` exception; the orchestrator's ops plane, on the
+`verify-forgetting` precedent; absent from MCP, recorded where the tree records an operator-only absence
+(`OPERATOR_ONLY` and a `Boundary` row in `SURFACE_ABSENCES`), because its remedy, `repair`, is operator-only and
+an O(corpus) read per call is a cost lever on a served vault." Item 6's inventories therefore include
+`OPERATOR_ONLY`. The panels' items 1-8 above bind the build. A dry-run mode of `repair` is not taken.
+
+**Version.** PATCH, by the 2026-09-08 ruling, riding 1.7.0, with no `UPGRADING.md` entry, as above.
+
+**What remains open.**
+- **The name.** The analysis recommends where the door is offered and proposes no spelling for its command or
+  its route, so the answer approved none. Naming is the maintainer's (O66; O131's series names were the
+  maintainer's): the building unit proposes the command and the route in its pull request, for the
+  maintainer's word.
+- The cost run at ~10⁵ sealed drawers (probe P1), on the maintainer's explicit go if it is long.
+
 ### O187 — `refine`'s fact-mirror drawers are embedded and screened with no record naming those endpoints
 
 **Filed 2026-09-15 by O167's panel; verified by reading.** `refine` files each
@@ -36170,6 +36244,35 @@ Each is settled by the evidence named above.
 - **No declaration.** N alone stays. It closes container reach in the recipe and attributes nothing on a managed or remote backend.
 - **Terminator-enforced authentication, or mutual TLS.** The engine must still present a credential. Mutual TLS adds client key material on disk and a new `undercroft-net` capability.
 
+#### RULED 2026-10-08 by the maintainer
+
+**The questions.** (1) Does the index client offer a credential declaration — a new `UNDERCROFT_*` variable —
+and under what name and scope? (2) Does the team-server recipe REQUIRE that key, or offer it?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided**, as recommended:
+1. "Yes, one variable per backend, Qdrant first. Shaped `UNDERCROFT_QDRANT_KEY`, beside `UNDERCROFT_QDRANT_URL` —
+   the `_URL`/`_KEY` pairing the tree already has twice. Not a shared `UNDERCROFT_INDEX_KEY`."
+2. "Optional in the recipe", with the analysis's mechanics: on the engine side `UNDERCROFT_QDRANT_KEY:` with no
+   value (the `UNDERCROFT_PASSPHRASE` precedent: passed only when set, never empty); on the Qdrant side
+   `QDRANT__SERVICE__API_KEY: ${UNDERCROFT_QDRANT_KEY:-}` "only if P202-3 shows that an empty value means 'no key'
+   at v1.12.4. Otherwise the keyed shape is an opt-in overlay file"; and the recipe header and
+   `deploy/server.env.example` state plainly that the mirror runs unkeyed unless the key is set.
+
+The ruled shape above, conditional until now on the offer, binds the build: N stands on its own; the resolver
+reads the key only in `undercroft_index::from_env`'s Qdrant arm, carries it on every request, refuses an empty
+value and the bytes that cannot arrive, is never trimmed, and is class `Protects`, parse `Checked`; the header is
+`Authorization: Bearer` if P202-1 shows Qdrant accepts it.
+
+**Version.** N: PATCH, with its `UPGRADING.md` entry. The key: MINOR, owing a `config check` arm. Together:
+MINOR. The obligations the ruled record names for a REQUIRED key do not arise.
+
+**What remains open.** Nothing for the maintainer. P202-3 chooses between the `${…:-}` mapping and an overlay
+file; P202-1 chooses the header. Only the Qdrant variable is named by this answer: each further backend's key
+ships only with its own arm (the ruled shape's item 4).
+
 ### O203 — a mirror is a snapshot: nothing pushes a later save, and only `forget` reaches it on a delete
 
 **Filed 2026-09-17 by O172, whose ruling named it; a memory-lifecycle decision
@@ -36446,6 +36549,39 @@ ruling), no `UPGRADING.md`. (b) as recommended: MINOR, and `UPGRADING.md` owes a
 backend credential without delete permission now fails a scheduled push; `config check` cannot see
 it) and a note (the first push after upgrading lowers the mirror's count). D2, if ever offered: MINOR.
 Nothing here is MAJOR.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** Should the copies a destroyed drawer left on a mirror be retired, and through which door —
+Q2, with the D2 half of Q1 that travels with it?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided**, the recommendation both runs gave: "yes — `index push` removes, by default and with no flag, the
+mirrored ids of drawers this vault no longer holds (Q2, MINOR); the retention sweep and `admission deny` take no
+backend (option D2 not offered)." In the shape the analysis gives for an approval:
+- after the upserts, never before, and never on the upsert-failure path;
+- candidates proposed by this vault's own chain — the union of every bare drawer-write label and the rest of
+  every label in an `is_destruction()` namespace (through `chain::prefix_range`, never `strip_prefix("del/")`),
+  kept only where it passes `is_drawer_id`, minus every id `drawers` holds, read in ONE read snapshot — and
+  absence decides;
+- batched, never an empty id list, after the `ensure` the push already makes, posture first;
+- recorded and reported: the `egress/index-push` record is written whatever the prune does, its canonical
+  binding the pruned count, and the reply carrying `pruned`; a prune failing after a complete upsert exits
+  non-zero naming how many candidates remain;
+- `docs/remote-server.md`, the team-server recipe header and `docs/THREAT_MODEL.md`'s A5 say so in the same unit.
+
+Items 1-4 above are owed whatever the answer, and stand.
+
+**Version.** MINOR. `UPGRADING.md` owes the stop entry (a backend credential without delete permission now
+fails a scheduled push; `config check` cannot see it) and the note (the first push after upgrading lowers the
+mirror's count).
+
+**What remains open.** Nothing for the maintainer beyond a run: P-C at 10⁵ destroyed ids starts only on the
+maintainer's explicit go, being long. A completed-prune watermark is added only if P-C warrants it, and is its
+own ruling. The collection-identity entry and Weaviate's swallowed deletes stay their own entries, as the
+analysis records.
 
 ### O205 — an agent cannot read back a deletion it performed, because agent and operator deletions share the fenced `del/` namespace
 
@@ -36858,6 +36994,30 @@ Launching a benchmark is the maintainer's. So are choosing and downloading model
 - **E1 at 131k/262k only.** Cheaper. It can find a leak; it cannot retire the gap.
 - **E2 only.** Cheap and reproducible, but it measures a geometry no deployment runs.
 - **No run.** Recorded as a decision with its argument.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** Is an FDE-at-scale run authorised — and with which ColBERT export, on which host, at which
+checkpoints, in what exclusive window, against what latency budget?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: "a staged go"**, as both runs recommended:
+- "P208-0 and P208-1 first."
+- "The full grid (P208-2) decided on P208-1's extrapolation, run in an exclusive window with nothing else
+  running, with two keyed draws at 1,048,576."
+- "The budget is named BEFORE the run: p95 at 1,048,576 no worse than an amount the maintainer sets against the
+  PQ tier's settled 112.7 ms/q at the same checkpoint."
+
+E4, no run, is not taken. The instrument and the decision rule above, written before any run, bind the table.
+
+**What remains open.**
+- The ColBERT export — its source, sha256 and licence — which the maintainer names; weights never enter the
+  repo. P208-0 needs none (a deterministic encoder); P208-1 runs "through the chosen export", so it waits on
+  that choice.
+- The p95 budget at 1,048,576, which the maintainer names before the full grid.
+- P208-2 itself, decided on P208-1's extrapolation, with its host and its exclusive window.
 
 ### O209 — the `Shared*` model wrappers forward trait methods by hand and drop `score_batch`
 
@@ -38124,6 +38284,37 @@ May an operator destroy it, and with what record and what receipt?
 - **D2**: changes a documented reply on one arm, which is why it is recommended against.
 - **D3**: rejected.
 
+#### RULED 2026-10-08 by the maintainer
+
+**The question (O221(c)).** May an operator destroy a pending row whose tag fails — a row that can be neither
+allowed, denied, deleted nor forgotten — and with what record and what receipt?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: D4's shape.** The act is explicit, on one named row, and inside one destruction lock it has the five
+properties the recommendation lists, verbatim:
+1. re-classifies the row through part (b)'s predicate and refuses unless the row fails verification now AND the
+   destruction fence holds it — so it can never bypass attestation on a readable row;
+2. appends a ruling whose keyed canonical carries a distinct verdict word (for example `denied-unverified`), so
+   "denied" never means two acts and never reads as housekeeping;
+3. destroys through `destroy_in` and its keyed tombstone;
+4. mints no attestation and no fingerprint, and says so on the CLI, `/v1`, the ops plane and the console;
+5. is unreachable from the sweep, bulk deletes and `forget`, and never allows: releasing unverified bytes into
+   the vault is refused on every arm.
+
+D2 (one lens's preference) and D3 (rejected on evidence) are not taken. Until D4 is built, D1 and part (a)'s
+report stand, as both panels decided. The probes are owed: P-L2b, P4x, and P2d with its inversion under O227
+item 1.
+
+**Version.** "**D4**: MINOR, a new opt-in capability. No `UPGRADING.md` entry, because nothing that runs today
+stops."
+
+**What remains open: the spelling.** The recommendation says "The maintainer picks the spelling" — a flag on
+`deny` or a verb of its own, and the verdict word, `denied-unverified` being the analysis's example only — and
+the answer approved the shape without naming one. It is still the maintainer's; the building unit asks it with
+its pull request.
+
 ### O223 — a vault's own export restored into that vault rewrites every row, because the import stamp moves `added_by`
 
 **Filed 2026-09-18 by O216's real-corpus drive, measured on the `4ff51ab`
@@ -38988,6 +39179,22 @@ delete — that appends a `denied` ruling for each row inside the same lock, bef
 shape), and names the rows in the existing `drawers` list, so `attest_in`'s exactness assertion is untouched and
 no new canonical member waits on O315 — MINOR.
 
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** Should an erasure (`forget`, the retention sweep) also DESTROY the pending rows naming its
+target, in the same attested run?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: not offered.** An erasure destroys no pending row. The ruled disclosure above stands: the operator
+denies each such row, and each deny is itself receipted. The cost the analysis put to the maintainer is accepted
+as stated: "without destruction, the pre-erasure text in those rows survives the erasure until someone denies
+it, and travels with any operator export or tenant migration." The opt-in shape the analysis describes "If it is
+ever offered" is neither built nor filed; asking the question again owes new evidence.
+
+**What remains open.** Nothing. Rulings 1-3 above build as ruled.
+
 ### O229 — an allow has no override for applying a queued text over newer content
 
 **Filed 2026-09-19 by O224's ruling panel and escalated: what a surface offers
@@ -39090,6 +39297,38 @@ only the shape, if offered.
 
 **Version.** MINOR if offered: new, optional capability and a new list field. Not surface that reports a
 silence — today's refusal is correct and names a working exit. `UPGRADING.md` not owed.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** Should `allow` offer an override in one ruling, applying a queued text over a destination that
+reads `changed`, `deleted` or `unrecorded-occupied`?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: "offer a compare-and-swap; never a force flag"**, in the shape both panels settled identically:
+- **The list:** `PendingAdmission.destination_digest`, "the hex of `queue_destination_key(stored kg_secret,
+  destination id, CURRENT content)` computed directly (never through `keyed_fp_of_digest`), absent when the
+  destination is absent or unreadable", with `HAND_PROJECTED` rows for the CLI and `ui.html`.
+- **The parameter:** `admission allow <id> --over <digest>`; a body field `over` on `/v1`, relayed verbatim by the
+  ops alias; on the console a SEPARATE guarded action that shows the destination id and asks for confirmation,
+  the plain ALLOW never sending the listed digest. Operator-only on all four renderers; never MCP
+  (`OPERATOR_ONLY`).
+- **The check:** the expectation travelling on `BypassReason::OperatorRuling` is `Expected::Held(over)`, decided
+  by the existing comparison in `destination_state`, repeated inside `write_drawer_stmts` under `BEGIN
+  IMMEDIATE`; the queue row's own record is never rewritten; no new `Expected` variant and no new boundary
+  refusal.
+- **Reachable states:** `changed` and `unrecorded-occupied` only; `deleted` refuses by construction.
+- **The trail:** verdict `allowed-over` (record `admission/{id}/allowed-over`, in the agent-fenced `Admission`
+  namespace), with the named digest and the row's recorded state inside the ruling canonical.
+- **Sequencing:** with or after O260.
+
+A force flag is not offered. Probe P-O229, owed "only if offered", is now owed, on the CLI, `/v1`, the ops plane
+and the console.
+
+**Version.** MINOR: a new, optional capability and a new list field. `UPGRADING.md` not owed.
+
+**What remains open.** Nothing for the maintainer. The relations with O225 and O260 above stand.
 
 ### O231 — `verify` skips a drawer whose tag verifies and whose covered meta does not parse, and answers OK
 
@@ -40237,6 +40476,7 @@ precedent), so it is recorded as one.
    It trades latency against protection, which the tree does not settle. **Recommended answer:** keep
    the per-unit landing gate, make the cumulative figure mandatory beside every measurement, and set
    any cumulative ceiling by the maintainer's decision.
+   **Answered 2026-10-08 by the maintainer, as recommended; the ruling is recorded in O340.**
 2. **Only if P-3 fails (i) or (iii):** accept the measured resident memory for the corpus half, or
    narrow the image to the policy half and keep the drawer and fact arms as `Verdict::Cost` in an
    open entry. **Recommended answer:** accept it and state it in `UPGRADING.md`, because integrity is
@@ -41133,6 +41373,37 @@ doctrine the old exit contradicted. The maintainer confirms it with the wording.
 client enumerating `verdict` meets a third value where it met a 409. `docs/AGENTS.md`'s documented exit-2 example and
 enumeration move with it. `undercroft config check` has nothing to detect.
 
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** A receipt minted before O255 while another handle committed answers the tamper verdict
+forever. What should `verify_forget_attestation` answer instead — and in what word and sentence, since two
+documented answers move?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided**, the recommended answer in full:
+- "Approve the mechanics below." The panels' items 1-10 above bind the build: a NEW `AttestationVerdict` variant,
+  reached only where today's checks fail, with `Verified` and `Recorded` unwidened; the structural walk
+  rewritten, not relaxed, and the two `.expect`s gone; the posture decided by the NAMED tombstones alone; the
+  keyed branch with and without a chaining document, and the recorded branch, as written; the claims and the
+  non-claims of item 8; the surfaces of item 9, MCP carrying the word and the counts only; no age
+  discrimination.
+- "Use the word `interleaved`."
+- The CLI line, verbatim: "ATTESTATION INTERLEAVED — the named drawers were destroyed by this vault and are gone;
+  N other record(s) share the attested interval (minted by Undercroft 1.6.1 or earlier beside another writer)".
+- "Exit 0 and HTTP 200, on O13's precedent: no retry changes the answer, and it is not tampering."
+- `docs/AGENTS.md`'s exit-2 example narrowed to "a record this vault's chain does not place inside the
+  interval".
+- The third value added to the route table and to the "THREE outcomes" paragraph.
+- PATCH.
+
+**Version.** PATCH, as the versioning paragraph above states, the maintainer's confirmation being this answer.
+`UPGRADING.md` owes its one line: a client enumerating `verdict` meets a third value where it met a 409.
+
+**What remains open.** Nothing for the maintainer: the build, and its gate P8-c, which is integrator work and
+not a long run. The residuals above stay stated.
+
 ### O262 — the CLI loses a destruction's receipt when `--sign` or `--out` fails after the drawers are gone
 
 **Filed 2026-09-25 by O255's ruling (the agentic-memory lens; confirmed by the
@@ -41682,6 +41953,37 @@ Relations for the integrator to record, every partner open:
   `UPGRADING.md` note only if a default ever changes.
 - A default bound on either door: MAJOR, `## 2.0.0`.
 - In-call chunking: MAJOR, and a custody defect besides.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** Does a single destruction's hold need a bound below another writer's 5 s busy budget — by
+which mechanism, for which doors — and is P8-b, the long measurement every option turns on, authorised?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided**, the recommended answer:
+1. "Authorize P8-b." The long run is authorised, under the standing rules: Docker only, nothing else running
+   beside it.
+2. "Build the savings in item 3 where P8-b shows that the verified per-drawer read and fingerprint, or the
+   sweep's double pass, are most of the hold."
+3. "Keep O255 item 7 as the default: one lock and one receipt per call, and no default bound on either door." A
+   writer refused beside a large destruction receives O258's typed 503, refused at its `BEGIN` with nothing
+   stored; the documents carry the measured crossing once P8-b exists; and the filed gate is revised to: "at
+   10⁵ drawers with the tiers built, the receipt verifies, the phases are published, and a writer refused beside
+   it receives O258's 503 with nothing stored."
+4. "Only if P8-b shows that a 10⁵-drawer sweep still keeps a waiter past 2.5 s after the savings", an OPT-IN
+   per-call `limit` on the retention sweep is offered: at most `limit` members, oldest covered `filed_at` first;
+   `expired` what this call destroyed; `remaining` in a field of its own on all four renderers and through the
+   orchestrator, never folded into `ok`; the CLI's `retention sweep --limit` looping until `remaining` is 0, each
+   receipt written or printed before the next call commits, O262's delivery fix first. `forget` gets no limit.
+
+No default bound and no in-call chunking, by default or opt-in.
+
+**Version.** The savings: PATCH. The opt-in `limit` with `remaining`: MINOR.
+
+**What remains open.** Nothing for the maintainer. Whether the savings and the limit are built is P8-b's to
+show, and the filed gate is revised to the shape above in the unit that builds it.
 
 ### O267 — a destroyed drawer's bytes survive in freed pages and WAL frames, in the live file and in later archives
 
@@ -42329,6 +42631,28 @@ evidence above, A kept as the alternative P-O269g could reopen.
 
 **Version class.** B: PATCH under the recommended reading, MAJOR under the literal one. A: the same. C: none.
 
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** When a command other than `verify`'s own checking meets SQLite corruption (`DatabaseCorrupt`,
+`NotADatabase`) — at its open or partway through — is that an integrity verdict, or the run failure it is today?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: B, as PATCH, under the retry-semantics reading.** "A typed integrity-family variant minted by the
+store at named doors, only on a non-`immutable` handle": the connector's probe and first locking statement, the
+writable schema batch, and the read-only open's first content read, with the same O115 row and one-set test.
+Corruption met partway through a command other than `verify` stays exit 1, a residual stated: the next `verify`
+gives the verdict. In the same unit, `docs/AGENTS.md`'s sentence and `EXIT_FAILURE`'s doc are refined "to say that
+'unreadable' means unreachable for a reason outside the file's bytes — permissions, a lock, a missing path, an
+I/O error — and that a database whose bytes do not hold together is an integrity verdict, as an absent one has
+been since A33; `UPGRADING.md` gains an entry." The answer takes the retry-semantics reading, so the MAJOR branch
+the recommendation describes — B to `2.0.0`, C until then — does not arise.
+
+**What remains open.** Nothing for the maintainer. The probes come first: P-O269f places each corruption, and
+P-O269g asks whether an `immutable=1` reader beside a writer ever raises the codes. A stays the alternative
+P-O269g could reopen.
+
 ### O270 — a restore over a vault whose database is missing refuses, including a fresh host `init` has populated
 
 **Filed 2026-09-26 by O268's ruling (all four answers); measured by the
@@ -42753,6 +43077,39 @@ symptom, cause and fix.
 **Relations:** sequenced after O292 — the class `create` answers for a directory holding a database and no manifest is ruled there, and this build lands with or after that ruling.
 **Relations:** shares a diff surface with O302 — this publish never exposes a manifest-less directory and never returns a losing salt, and that entry's predicate is what a stale open asks of the directory this publish creates.
 **Relations:** shares a question with O275 — whether a directory published by rename onto an absent or empty `vaults/<id>`, and a junction there, behave on native Windows as read is measured in that entry.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** What makes `VaultManager::create` exclusive, what a create does with a `vaults/<id>` that
+already exists, and each refusal's class — escalated because every mechanism that closes the race also decides
+which layouts and filesystems a new vault may be created on.
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided**, the recommended answer:
+1. "Publish a new vault by ONE directory rename onto an absent `vaults/<id>` (option 3 below)."
+2. "A mount point at `vaults/<id>` is not a supported layout for `create`, as it already is not for restore …
+   or delete …. A vault created on one is a vault neither door can act on today."
+3. "Ratify O283's extension to `create`: a link at `vaults/<id>` refuses."
+
+Neither layout is ruled supported, so option 2, the hard-link publish, stays the recorded fallback and is not
+built. The panels' items 1-6 above, written for option 3, bind the build: the new vault staged as a directory in
+the restore area holding only `vault.json`, written through `write_manifest_file` unchanged and synced; the
+survey's order — absent publishes; `vault.json` present is `AlreadyExists`, asked first; a link or a
+non-directory refuses; an EMPTY directory is removed with `fs::remove_dir` and then published; a directory
+holding only a crashed create's temps has them removed by name, then is removed and published; a database with
+no manifest is O292's class; anything else refuses naming the entries — the publish factored as ONE step shared
+with the restore swap's absent-target half; the `Vault` assembled only after the publish, a loser answering
+`AlreadyExists` and `init` reading it as "palace already"; a crash leaving only a stage, swept after
+`STALE_STAGE`.
+
+**Version.** PATCH. `UPGRADING.md` is owed: `init`, `vault create` and `POST /v1/vaults` refuse a link, a mount
+point, or a non-empty directory that is not a vault at `vaults/<id>`, with symptom, cause and fix.
+
+**What remains open.** Nothing for the maintainer. The build lands with or after O292's ruling on a directory
+holding a database and no manifest; the probes G1-G6 are the integrator's; the Windows arms are O275's W9 and
+W10.
 
 ### O272 — `validate_name` measures the trimmed value while its callers keep the raw one
 
@@ -43191,6 +43548,21 @@ O205's split precedent as its own entry: an agent-visible marker carrying only "
 vault's history at <time>" — no archive name, no chain facts — leaving `restore/` fenced. Versioning of that
 offer, if taken: MINOR (a new agent-surface capability).
 
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** Should the agent surface (`undercroft_history` at `HistoryScope::Agent`) learn that its memory
+was rewound by a restore?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided:** "Build `restore/` fenced, as ruled." No agent-facing marker: the recommendation offered one only
+"If the maintainer wants agents told", and the answer asks for none, so no entry is filed for it. An agent whose
+remembered ids stop resolving after a restore keeps no in-band explanation — the residual this entry states
+above, accepted as stated.
+
+**What remains open.** Nothing.
+
 ### O275 — restore over an existing vault is implied broken on Windows, before and after O268
 
 **Filed 2026-09-26 by O268's ruling; read, not measured — nothing here runs on
@@ -43402,6 +43774,34 @@ worked there; were it to work today and be withdrawn, the maintainer weighs it a
 **Relations:** sequenced after O294 — a claim about Rust's rename on Windows is a claim about the toolchain that builds the shipped binary, which that entry pins.
 **Relations:** shares a question with O285 — the moved-file check answers nothing off unix, so whether a move can happen there decides what that entry's check leaves uncovered.
 **Relations:** shares a question with O271 — that entry's directory publish and its link check are measured on native Windows here.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** On a Windows filesystem, can `backup restore` replace an existing vault — and a vault delete
+take one out of service — with O69's hold open, and if not, what is the safe order? Escalated for the permission
+to run anything on Windows, and for two outcomes that are product choices on a shipped platform.
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: the probe, recommended answer 1.** "Approve the probe as a dispatch-only workflow file of its own —
+the `republish-ort-image.yml` precedent — so `ci.yml`'s `verdict` `needs:` and the published job figures do not
+move, on the pinned 1.90 toolchain (O294 first, or pinned in that file and stated)." Permission is granted for
+the native-NTFS run of arms W0-W13 as the panels decided them: never drvfs, every arm by name, looped at least
+200 times, cross-process, with pause witnesses. The decision table — item 2 of the panels' list, outcomes (A),
+(B) and (C) — stands registered before the run, and no order changes before the measurement (item 1); the one
+helper is built with the order the probe selects, never before it (item 3).
+
+**What remains open.**
+- Whether a `workflow_dispatch` file must first exist on the default branch, or the probe runs on a push
+  filtered to one probe branch: "The integrator confirms which applies before asking."
+- Recommended answers 2 and 3 apply only on their measured outcome: under (A), grant the Windows identity check
+  (`SQLITE_FCNTL_WIN32_GET_HANDLE`, compared by volume serial and file index with the path's); under (C), refuse
+  restore-over-existing and delete-beside-a-holder on Windows, naming why. They are part of the recommendation
+  the answer approved. The list's line for this question named the probe and its pre-registered decision table,
+  and a second `unsafe` block is, by `CLAUDE.md`'s Conventions, a new decision for the maintainer, so before
+  outcome (A)'s check is built the integrator confirms with the maintainer, measurement attached, that this
+  answer granted it.
 
 ### O285 — an `immutable=1` handle whose database moved after its open serves the set-aside vault for its life
 
@@ -44323,6 +44723,46 @@ salt" would move every agent-held (vault, drawer) reference at each rotation, th
 doctrine's A10 defect. `created_at` is MAC-covered and survives a rotation and a restore, but it is
 a clock reading, not a designed identifier; a dedicated incarnation field is a canonical change
 that O241 ruling 4 sequences behind O238's fence.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** What does a (vault id, drawer id) reference promise across a vault delete and a re-create of
+the same id — and across a restore of an older archive?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: the promise**, verbatim from the recommendation: "A vault id is a NAME and may be reused; deleting a
+vault ends its references and does not reserve the name, and no ledger is kept (O267 item 6). A mined drawer's
+id names its filing — wing, room, source path, chunk — and resolves to what that filing holds now, in whichever
+vault of that name holds it, as documented (`docs/AGENTS.md` §4). An id an API save was given is never given to
+another drawer under the same vault id: not by a vault re-created after a delete, not after a restore of an
+older archive, an import or a tenant migration. A document or archive bound to a vault names its lineage, and a
+successor under the same name is reported as a different vault — never as forged, rolled back or rotated."
+
+**And its mechanism, the append space — not the fallback.** "A per-database random append space (16 bytes in
+`meta`, clear — not key material, so rotation never touches it), minted at the first writable save and never on
+a read-only open, minted afresh by the restore door when it swaps a database in, carried on every API-save
+drawer in a COVERED meta field and fed to `id_over_with`'s trailing component, which contributes nothing when
+absent, so every existing id stays byte-identical". One store door mints `(index, space)` for all six sites
+inside the write transaction; `filing_ids` and `aimed_filing` read the space from the drawer's covered meta; the
+quarantine recipes take the same component through a framing pinned to an independently derived literal. Its
+stated costs come with it: one field in the unsealed `meta_json`, which the sealed exposure inventory gains; the
+recipe line in `docs/AGENTS.md` §4 and `CLAUDE.md`'s invariant gaining "and, for an API save, the database's
+append space" (the `CLAUDE.md` line through the pull request the maintainer approves); and the downgrade
+shapes the analysis names. The fallback, a random per-database base on the sequence, was offered "only if the
+maintainer accepts 'practically never'", and the answer does not accept it. The options the analysis excludes
+stay excluded. Rulings 1-5 above bind the build.
+
+**Version.** PATCH: no documented contract moves, every existing id stays byte-identical, and `docs/AGENTS.md`
+§4's uniqueness sentence is kept. `UPGRADING.md` not owed.
+
+**What remains open: the archive half.** The analysis also recommends, "On archives (O317's deferred
+question)", that archives belong to the incarnation that made them, matched by the archive manifest's
+`created_at` as well as its id, that a successor neither counts nor prunes a predecessor's archives and restores
+one only explicitly (`--force`), and that the witness may carry `created_at` with a `WITNESS_VERSION` bump. The
+list's line for this question named the promise and its mechanism; whether the answer also settles that archive
+scoping was not stated there, so it stays O317's question, asked there with this analysis attached.
 
 ### O299 — a vault delete leaves the vault's remote index mirror collection, which a later vault of the same id addresses
 
@@ -45838,6 +46278,27 @@ closing it. Salvage alone gives up proving a good archive without a key copy. Bo
 `BackupAction` variants, two `/v1` routes and their ops aliases, two MCP `Boundary` rows, and both route
 documents. All three are MINOR, as approved.
 
+#### RULED 2026-10-08 by the maintainer
+
+**The question (Q4).** Which form this entry builds — a salvage export, a `backup verify`, or both — and
+whether the gate's closing words, "the live vault byte-identical throughout", bind the salvage too.
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided.** The form: "both, in one entry, `backup verify` first, and neither presented as closing the other's
+gap." The second question: "amend the gate beside, so that a salvage changes the live vault by exactly that one
+record and nothing else" — the one `egress/` record a salvage appends to the live vault of its id, by custody.
+The amendment is written BESIDE the original gate, never in place of it, mapping each clause to its form as the
+table above does: clause 1 to the salvage, clause 2 to `backup verify`, clause 3 to `backup verify` (a salvage
+names the failure too). The panels' rulings on Q5 and Q6 below bind both forms.
+
+**Version.** MINOR, as approved under O268 item 3, with the costs stated above: two `BackupAction` variants, two
+`/v1` routes and their ops aliases, two MCP `Boundary` rows, and both route documents.
+
+**What remains open.** Nothing for the maintainer. The building unit writes the amended gate beside the
+original.
+
 #### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
 
 **The questions.** Q5: if `backup verify` is offered, what it opens, under which posture, what it
@@ -46789,6 +47250,32 @@ token; only the doctrine stops that.
 
 **Version class.** None: repository settings.
 
+#### RULED 2026-10-08 by the maintainer
+
+**The question (Q3).** Should `strict`, with the required `CI verdict` (app 15368) and `main`'s force-push and
+deletion blocking, be expressed as branch rulesets beside the classic protection, instead of it, or not at all,
+and with which bypass?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: "two rulesets beside the classic protection, the classic layer unchanged."**
+- **(A), `main` is append-only:** "`non_fast_forward` and `deletion` on `refs/heads/main`, with an EMPTY bypass
+  list, on the tag ruleset's shape."
+- **(B), `main` merges only green and up to date:** "`required_status_checks` with `CI verdict`, `integration_id`
+  15368 and `strict_required_status_checks_policy: true`, with the Repository-admin role as its one bypass actor,
+  in bypass mode **`pull_request`**" — not `always`. This takes the tightening the analysis named as the
+  maintainer's: an administrator can still merge a pull request past the checks (O9's hatch, `gh pr merge
+  --admin` included), and an administrator's direct push to `main` past CI is refused.
+
+`enforce_admins` stays off in the classic layer (O313 item 1, O9).
+
+**Version.** None: repository settings.
+
+**What remains open.** The maintainer applies both rulesets. They are then read back by GET, and the announced
+negative control runs on O313 P3's precedent; its temporary `refs/heads/rprobe-*` pattern is itself a setting
+change, made on the maintainer's word when it is announced, as P3's was. O324's job then pins both ids.
+
 ### O325 — `release.yml` publishes a release before its assets exist, which rules out Immutable Releases
 
 **Filed 2026-10-06 by O313's ruling (item 3).** `release.yml` creates a placeholder release before any
@@ -47006,6 +47493,27 @@ draft, approve (or publish). It changes only through the maintainer's pull reque
 
 **Version class.** None for the choice; the build is PATCH-class, as ruled above.
 
+#### RULED 2026-10-08 by the maintainer
+
+**The question (Q5, who publishes).** Once `verify` is green, what flips the draft to published: the workflow, a
+person approving a gated job, or a person by hand?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: (ii).** "Publication is a job behind a `release` environment whose required reviewer is the
+maintainer. The maintainer curates notes on the verified draft and approves; one run and one file; GitHub
+records the approval." Its costs are taken as stated: a repository setting; `releases/latest` and `:latest` lag
+the tag until the approval; the static arm holds the `environment:` line; and with one seat, self-review stays
+allowed, so the pause separates two acts of one account and the doctrine still owns it. The fallbacks (iii) and
+(i) are not taken. "The `CLAUDE.md` flow then reads, in place of `gh release create`: the release run green,
+notes on the draft, approve (or publish). It changes only through the maintainer's pull request."
+
+**Version.** None for the choice; the build is PATCH-class, as ruled above.
+
+**What remains open.** The `release` environment is a repository setting, which the maintainer applies. The
+`CLAUDE.md` flow changes through the pull request that builds it, which the maintainer approves.
+
 #### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
 
 **The question (Q6).** Should Immutable Releases be turned on, and when? What does it do to the tag
@@ -47060,6 +47568,30 @@ forever. Never: assets and their `.sha256` sidecars stay replaceable together wi
 tag moving (O313's fails-silently clause).
 
 **Version class.** None: a repository setting.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question (Q6).** Should Immutable Releases be turned on, and when?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: "yes, as the maintainer's setting, once all of these hold":**
+1. "O310 and Q5's shape are built and merged, and the `CLAUDE.md` flow holds no `gh release create`."
+2. "P5 has run in a throwaway repository."
+3. "One real draft-first release has been published and observed complete: 20 assets, every sidecar checked,
+   curated notes at publication, and `:latest` moved after publication."
+4. "The notes path chosen in the escalation above is compatible with what P5 shows." Q5's answer above chose
+   notes curated on the draft before publication.
+5. "The following release has not yet been published."
+
+"O324's job then asserts `immutable: true` on `releases/latest`." P5 is run extended, recording what the
+analysis lists. The costs stated above are taken. Not on in the same unit as draft-first, and not after P5 alone.
+
+**Version.** None: a repository setting.
+
+**What remains open.** The maintainer applies the setting once all five conditions hold; until then it stays
+off.
 
 ### O326 — the workflows run third-party actions by mutable tag, and `release.yml` hands every job a token that can write the repository and its packages
 
@@ -47266,6 +47798,33 @@ restated reason gets this file's backwards test.
 **Version class.** None for the recommended answer: governance text. The rejected option would change
 documented install contracts and owe `UPGRADING.md` and every install document.
 
+#### RULED 2026-10-08 by the maintainer
+
+**The question (item 3).** What is the restated reason the repositories must stay public, now that "GitHub Free
+will not serve Pages from a private repo" is stale?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: "keep the obligation, and restate its reason."**
+- "Restate it per repository, from dependencies the tree holds and can check: source-available distribution
+  through public releases; the anonymous install and checksum-verification paths; anonymous image pulls; private
+  vulnerability reporting. Cite no plan fact".
+- "Say separately whether `sealcroft/sealcroft.github.io` stays public, and why."
+- "Let O324's job read `visibility` back for both repositories, so the obligation is gated rather than
+  remembered."
+
+Making the repositories private is not taken. "Forking cannot be disabled while the repos are public" stays, a
+consequence rather than a reason.
+
+**Version.** None: governance text.
+
+**What remains open.** The sentence itself. `CLAUDE.md` changes only through the pull request the maintainer
+approves, so the restated reason lands in the pull request that builds O330, not in this record, and each of its
+clauses gets the file's backwards test there. In that sentence, whether `sealcroft/sealcroft.github.io` stays
+public, and why, is still to be said: its only stated reason, Pages, does not require a public repository on
+Team, so that reason is the maintainer's to supply in the same pull request.
+
 ### O331 — the house-figures job reads the latest release unauthenticated and throws away why it failed, so a rate limit fails CI as a stale page
 
 **Filed 2026-10-07, from PR sealcroft/undercroft#259's first CI run.** Run 37555908483's job `House page
@@ -47385,6 +47944,38 @@ gains a writer arm that sees a tracing fmt layer with no `with_writer` or a stdo
 telemetry build under `UNDERCROFT_LOG_FORMAT=json`, `serve-mcp`'s stdout carries the JSON-RPC frames
 alone and an export's stdout is the payload alone (e2e-telemetry), each with the premise that the log
 line is emitted; counterfactual, today's layer.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** On a telemetry build, `UNDERCROFT_LOG_FORMAT=json` writes its log lines to stdout, into the MCP
+stream and an export's payload, while `website/src/observability.md`'s pipeline diagram and its rendered copy
+publish stdout as where they go. May the JSON layer move to stderr against that published label? No panel
+analysis preceded it: this entry's build stopped on the published statement, and the question was escalated
+with the 23 others answered the same day.
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its recommended answer, this one among them, its recommendation being the
+decision below.
+
+**Decided**, in the words of the recommendation approved: move the JSON log layer to stderr through the door,
+and relabel the published observability diagram (`website/src/observability.md`, `docs/diagrams/`); promtail
+reads both streams. So:
+- the JSON fmt layer writes to stderr, through O287's door in `undercroft-obs` (`stdio.rs`), never through
+  tracing's default stdout writer, and `serve-mcp`'s stdout then carries the JSON-RPC frames alone and an
+  export's stdout the payload alone;
+- the edge to promtail labelled `UNDERCROFT_LOG_FORMAT=json<br/>stdout` moves with it, in the canonical Mermaid
+  block in `website/src/observability.md`, its extracted copy `docs/diagrams/src/observability-pipeline.mmd`, and
+  the rendered `docs/diagrams/observability-pipeline.svg`;
+- the shipped stack does not notice: promtail's `docker_sd_configs` read a container's stdout and stderr alike
+  (`deploy/observability/promtail/promtail-config.yml`).
+
+The rest of the entry's shape stands: `UPGRADING.md` says so, since an operator piping `serve-http`'s stdout
+alone into a log shipper stops receiving the lines; the `stdio.rs` source gate gains a writer arm that sees a
+tracing fmt layer with no `with_writer` or a stdout one; and the gate above is the entry's, through
+e2e-telemetry, with its premise and its counterfactual.
+
+**What remains open.** Nothing for the maintainer. The answer named no version class; the building unit states
+it, with the `UPGRADING.md` entry the shape owes.
 
 ### O334 — an ordinary write can reach the review queue's id space, and only the import door refuses a write onto a pending row
 
@@ -50480,7 +51071,7 @@ entry leaves `## Unversioned` through the battery's roster" was my own wording, 
 stays under `## Unversioned`, closed. The release-flow clauses are in `CLAUDE.md` — its opening paragraph
 and its release flow — and notes stand beside O309 and O310.
 
-### O340 — is O234's 10% read budget per unit or cumulative — a decision escalated to the maintainer
+### O340 — CLOSED 2026-10-08 by the maintainer's ruling: O234's 10% read budget is a per-unit landing gate, with the cumulative figure reported beside it in every unit's record
 
 **Filed 2026-10-08 by O252's ruling, as a pure decision.** Found by ruling panel `P03-label-guard`,
 2026-10-08. O234 is finished, so the question has no open home, and a question with no entry gets
@@ -50497,6 +51088,27 @@ not voted.
 **Recommended answer** (O252's ruling): keep the per-unit landing gate, make the cumulative figure
 mandatory beside every measurement, and set any cumulative ceiling by the maintainer's decision.
 Non-blocking for O252, whose P-5 gate satisfies both readings.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** Is O234's 10% read budget per unit or cumulative?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided**, as O252's ruling recommended: "keep the per-unit landing gate, make the cumulative figure
+mandatory beside every measurement, and set any cumulative ceiling by the maintainer's decision." So a unit that
+moves the read path lands against its own budget — at most 10% of warm search ms/q at ~10⁵ drawers — and every
+unit's record reports, beside its own figure, the cumulative figure against the pre-O234 baseline (36.84 ms/q;
+about +9.4% compounded so far, an estimate composed across separate runs), which is mandatory, never
+optional.
+
+**What remains open.** No cumulative ceiling is set by this answer; one, if ever wanted, is a later decision of
+the maintainer's, asked with the cumulative figures this ruling makes every unit report.
+
+**Placement.** A pure decision with no code of its own, so the entry stays under `## Unversioned`, finished, with
+its row in the battery's `UNVERSIONED_CLOSED` roster (O101). O252's escalated question names this entry beside
+it.
 
 ## Beyond 2.0.0 — the competitive track
 
