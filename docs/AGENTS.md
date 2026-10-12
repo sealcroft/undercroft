@@ -1105,6 +1105,9 @@ undercroft import vault.bundle --identity ops.key --sender <sender-hex>
   sender with `--sender` to enforce attestation; `--trust` is the sender's
   claim for your policy, never a trust boundary by itself; an expired
   bundle is refused at import. Legacy exports (no manifest) still import.
+  Both keygens refuse a path that already exists — a link there included,
+  dangling or not, which is never followed — before a byte is written, and
+  write the secret owner-only from its creation (ROADMAP O321).
   Since C3.4, `bundle keygen` produces a **hybrid post-quantum identity**
   (X25519 + ML-KEM-768, `pq1`-prefixed strings) and seals v2 bundles that
   close harvest-now-decrypt-later; legacy bare-hex X25519 identities keep

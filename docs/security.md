@@ -13,7 +13,15 @@ modification: every read verifies, `verify` audits everything.
   only in an installation nothing refers to yet, never under a read-only open, and a
   declaration the key files contradict is refused before anything is derived
   (ROADMAP O204). The key files are unauthenticated, so they decide nothing
-  about which key sealed a vault; the manifest MAC does.
+  about which key sealed a vault; the manifest MAC does. A key file is
+  written under a temp name, fsynced, and only then hard-linked to its own
+  name, owner-only from its creation, so a crash never leaves a short key
+  under that name; a short one already there is refused by name. On a
+  filesystem without hard links (FAT, exFAT) it is created in place, with a
+  warning, as before 1.7.0 (ROADMAP O210). `bundle keygen` and
+  `bundle sign-keygen` write their identities the same way, and refuse an
+  existing path — a link included, dangling or not — before a byte is
+  written (ROADMAP O321).
 - **Per-vault keys**: `HKDF-SHA256(master, vault_salt, "undercroft.v1/vault/<id>/<label>")`
   for enc / mac / manifest / sample / chain labels. `sample` keys the PQ
   training-sample rank and is deliberately rotation-sensitive, because

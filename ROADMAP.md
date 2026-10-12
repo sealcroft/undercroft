@@ -13652,6 +13652,9 @@ and archives bytes identical to `.next`); P-Q3d (`serve-http --read-only` still 
 **What remains**: this entry's build — items 1 to 3 and 6. Filed under `## Open`: O320 (`--out`) and O321
 (`write_identity`'s check, then write, then chmod).
 
+**Noted 2026-10-08.** O321 is closed under this release, with O210: `write_identity` now writes through
+the palace key writer's publisher, and the read-only refusal above stays the first arm ahead of it.
+
 #### BUILT 2026-10-07, as ruled — with one reading of item 4, and one gate the ruling's silent-failure list needed
 
 **What landed.** Ruling item 1: `VaultStore::backup` (`crates/undercroft-store/src/backup.rs`) refuses
@@ -14121,6 +14124,160 @@ orchestrator likewise answers `/healthz`.
 **What stays outside it, stated.** A third-party library writing to stderr on its own (ONNX Runtime's
 C++ logger in a model build) is not a Rust print and is not counted; a telemetry build's JSON log
 layer writes STDOUT, which is O333's.
+
+### O210 — CLOSED 2026-10-08: a key file is published whole by a hard link of a fsynced temp, so a crash inside the write never leaves a short key under its name, and a short one already there is refused by name
+
+**Filed 2026-09-17 by O204's ruling; verified by reading, not executed.** The
+palace key writer in `crates/undercroft-vault/src/keys.rs` creates the file,
+writes the bytes, then fsyncs. A crash between the create and the write leaves
+a zero-length or short `master.key` or `kdf.salt`, and every start after it
+fails `CorruptKeyFile` with no vault ever sealed under the key. O204 made the
+create exclusive and set the mode at open, so the window is narrower and never
+overwrites, but it still exists. `write_identity`
+(`crates/undercroft-cli/src/main.rs`) has the older shape: an `exists` check
+then a plain write, and the owner-only mode applied after the bytes land.
+
+**Shape**: write the bytes to a unique temporary name in the same directory,
+fsync it, then publish it with an operation that fails if the final name
+exists (a hard link, then remove the temporary), and fsync the directory. A
+filesystem without hard links needs a stated fallback. `write_identity` takes
+the same publish step.
+
+**Gate**: a test that kills the writer between the create and the write — or
+leaves a planted short file — and shows the next start either loads a whole
+key or refuses naming the torn file, never a key that seals nothing.
+Counterfactual: today's writer, under which the short file is published.
+
+#### BUILT 2026-10-08, as filed and with O321 in one unit — the fallback stated with its argument
+
+**What landed.** `keys::publish_new_secret` (`crates/undercroft-vault/src/keys.rs`), the ONE way the
+workspace writes a secret file: `symlink_metadata` refuses an existing entry — a link counted, dangling
+or not — before a byte is written; the bytes go to `<name>.tmp.<32 hex nonce>` in the same directory,
+created `create_new` with mode 0600 at the open; fsync; `fs::hard_link` to the name, which fails
+`AlreadyExists` where the name exists; the temp name removed; the directory fsynced. `create_master`
+publishes `master.key` and `kdf.salt` through it (`write_new_private` is gone), and `master_key`'s
+`AlreadyExists` arm still re-classifies and loads a concurrent first start's key. `bundle keygen` and
+`bundle sign-keygen` use it too (O321). `KeyError::CorruptKeyFile` carries `{file, len, references}`:
+the refusal names the file and both lengths, says what leaves such a file, states whether anything
+refers to a key, and — like O204's refusals — advises no deletion. Exit 1, as before.
+
+**The fallback for a filesystem without hard links — settled by the tree, not chosen.** On any link
+error other than "it exists" the publisher takes O204's writer — `create_new` of the name itself, mode
+at the open, the bytes, fsync, directory fsync — removes the temp and warns. Its argument:
+- **never a rename**: `rename` replaces an existing file on Unix, so a fallback by rename replaces a
+  concurrent first start's key after that process sealed under it, which O204's ruling forbids ("never
+  replaces an entry that appeared after the stat"); measured, a counterfactual publishing by rename
+  hands two racing first starts different keys at round 0;
+- **never a refusal**: on FAT and exFAT the first start, and `bundle keygen --out` onto removable media,
+  work today; refusing them stops a documented destination being accepted, a contract change this
+  PATCH does not carry (the versioning doctrine);
+- **the gate's own words accept what the fallback leaves**: "either loads a whole key or refuses
+  naming the torn file";
+- **`sync_dir`'s precedent**: a platform without the primitive gets the strongest one it has, stated.
+Every non-`AlreadyExists` link error takes it, not only `EPERM`/`ENOTSUP`, because those codes differ
+by platform and the fallback is exclusive too: on an error a linking filesystem also raises (a full
+disk, a vanished temp) it costs that one write its crash protection and nothing else. **Residual,
+stated**: on such a filesystem a crash inside the in-place write leaves a torn file, which the next start
+refuses by name.
+
+**What a crash leaves, and why nothing sweeps it.** Before the link, the temp holds bytes nothing was
+ever sealed under; after it and before the temp name is removed, the temp is a second name for the
+published key, owner-only like it. A sweep on O254's manifest-temp precedent was considered and not
+built: a key temp holding a whole secret may be the ONLY copy — the in-place fallback's temp is exactly
+that once the final name is lost — the manifest sweep runs under the database's write lock, which no
+key write holds, and O204's refusals are written never to advise deleting key material. Pinned as a
+cost: the crash test asserts the temp is still there after the next start, and so does the CLI test.
+
+**Gates, RED → GREEN.** A crash seam beside the vault crate's fault seam
+(`fixture::crash_secret_write_at` / `SecretCrash::{Created, Torn, Synced, Published, InPlaceTorn}`):
+the writer returns at the step and runs NOTHING after it, its own cleanup included — what an injected
+I/O error cannot show, since an error path removes its temp. `keys.rs`:
+`o210_a_crash_inside_a_key_write_never_publishes_a_short_key` — each step, both key sources; the name
+never holds a short file, the step was REACHED (the temp's exact length, mode 0600 before a byte), and
+the next start's key is the one under the name — RED on a counterfactual putting back the pre-O210
+writer with the same crash points (`master.key Created: short`);
+`o210_a_short_key_file_is_refused_by_name_and_never_rewritten` (both sources, zero and one
+references, both postures); `o210_without_hard_links_the_writer_falls_back_to_an_exclusive_in_place_write`
+(`Fault::SecretLink`: `Published::InPlace`, 0600, temp removed, still exclusive, and the residual —
+`InPlaceTorn` — refused next start as `CorruptKeyFile { master.key, 16, 0 }`);
+`o210_racing_first_starts_hold_one_key` (20 rounds of two threads, looped ten times: 200 rounds green;
+RED at round 0 with the link replaced by a rename); `key_material_has_exactly_one_writer` (one
+`create_new`, one `hard_link`, no `rename`, no `set_permissions` — RED under the rename counterfactual).
+`tests/cli.rs`: `o210_a_torn_master_key_is_refused_by_name_and_a_crash_leftover_is_ignored`, RED on
+`5f5fe2f`'s binary (the old message names neither file nor length). `tests/e2e.sh`: three checks — a
+torn `master.key` refused by name, never rewritten, and a fresh one 32 bytes, `0600`, one link, no temp.
+Run against `5f5fe2f`'s release binary the new e2e block (eight checks with O321's) is RED on four:
+both keygen refusals, nothing written through the link, and the torn key's message. The other four
+pass on both binaries and are said to be what they are — the control (an identity written with the
+link gone), and guards of what the old writer also kept (a torn key never rewritten; a whole key and
+identity, `0600`, one name). Mode-from-creation is not visible in an end state: the old writer's
+chmod leaves the same `600`, which is why the unit test asserts the temp's mode at its `Created`
+crash, before a byte exists.
+
+**Measured, on the release binary.** `init` 225 ms, its key linked (32 bytes, `0600`, one link, no
+temp); the LoCoMo feed mined into four wings (340 drawers), `search` 509 ms, `VERIFY OK` in 130 ms; a
+passphrase `init`'s `kdf.salt` 16 bytes, `0600`, one link; 20 rounds of eight concurrent first starts,
+no failure, one whole key and no temp in each. **A real FAT filesystem** (a 32 MiB vfat loop device in
+a privileged container): `ln` refused with `EPERM`; `init` exit 0 with the warning, `master.key` 32
+bytes, no temp left, `remember` and `VERIFY OK` on it; `bundle keygen --out` onto it exit 0 with the
+warning, `bundle recipient` reads it, and a second keygen there is refused.
+
+**Drift check.** A key is created only through `VaultManager::open_as` → `keys::master_key`, which
+every surface reaches (the CLI, `serve-http`'s `/v1` and `/mcp`, `serve-mcp`); the orchestrator writes
+no key file, its keys being declarations. No report struct a renderer projects changed. `config check`
+reads which key files exist and never their length, so it says ok over a torn key the start refuses —
+a gap between the pre-flight and the start that predates this unit, filed as O-NEW-O210-1. Its refusal,
+like every `KeyError`, prints twice in the CLI's error chain — filed as O-NEW-O210-2.
+
+PATCH inside the unreleased 1.7.0: a key file's write stops leaving a short key, and the refusal of one
+names it. `UPGRADING.md` carries one entry with O321's; `config check` cannot detect it.
+
+### O321 — CLOSED 2026-10-08: `bundle keygen` and `bundle sign-keygen` refuse an existing path, a link included, before a byte is written, and write the secret owner-only from its creation
+
+**Filed 2026-10-06 by O212's ruling (its refuter).** `write_identity`
+(`crates/undercroft-cli/src/main.rs` 996-1014) checks for the file, writes it, then restricts its mode:
+it follows a dangling symlink planted at the default path under the data directory, and the secret sits
+under umask permissions until the chmod.
+
+**Shape**: create the file new with mode 0600 at the open (unix), refusing an existing entry, a link
+included, before any byte is written. **Gate**: a dangling symlink at `<data_dir>/bundle.key` makes
+`bundle keygen` refuse with nothing written through it (P-Q3e); a fresh key is 0600 from its creation.
+
+#### BUILT 2026-10-08, as filed, in O210's unit
+
+**What landed.** `write_identity` hands its bytes to `keys::publish_new_secret` (O210's BUILT record):
+the existing entry — a link included, dangling or not — refused by `symlink_metadata` before a byte is
+written, the temp `create_new` with mode 0600 at the open, the publish a hard link that refuses an
+existing name and follows no link. The refusal keeps its words (`refusing to overwrite an identity
+key`, which `tests/e2e.sh` already matched) and adds that a link counts and nothing was written. The
+filing's shape (`create_new` of the final name) is the publisher's fallback; the temp-and-link
+publish is O210's, which the filing named as the same step.
+
+**P-Q3e, measured.** On `5f5fe2f`'s binary `bundle keygen` over a dangling link at
+`<data_dir>/bundle.key` exits 0 and writes the identity through it. On this tree both keygens exit 1,
+nothing is created where the link points, and no temp is left; with the link removed the identity is
+written `0600` with one link, `bundle recipient`/`bundle sender` read it, and a sealed, signed export
+of the four-wing corpus (340 records, 384,969 bytes) imports into a second installation with it.
+
+**Gates, RED → GREEN.** `tests/cli.rs`:
+`o321_keygen_refuses_a_link_at_the_identity_path_and_writes_nothing_through_it` — both keygens, the
+default path and `--out`, exit 1, nothing through the link, no temp in either directory, then
+`0600` — RED on `5f5fe2f`'s binary (exit 0, the identity written through the link). `main.rs`:
+`o321_every_secret_file_is_written_by_the_one_publisher` — `write_identity` calls the publisher and
+none of `exists()`, `fs::write`, `set_permissions`; across every crate's production code the publisher
+is defined in `keys.rs` and called there twice and once in `main.rs`, and nothing narrows a mode after
+the bytes exist — RED with the old body put back. `keys.rs`:
+`o321_a_link_at_the_name_is_refused_and_never_followed`. `tests/e2e.sh`: five checks — both keygens
+over a dangling link, nothing written through it, and a fresh identity `600` with one link — three of
+them RED on `5f5fe2f`'s release binary (O210's record gives the split).
+
+**Drift check.** The keygens are CLI-only: `SURFACE_ABSENCES` rules them out of MCP and `/v1` (a server
+that generated your identity would hold the half only you may hold), and the orchestrator's `keygen`
+prints its secrets to stdout and writes no file. O212's read-only refusal stays the first arm of
+`Command::Bundle`, ahead of this writer.
+
+PATCH inside the unreleased 1.7.0: a keygen over a link exits 1 where it wrote through a dangling one;
+`UPGRADING.md` carries it beside O210's; `config check` cannot see a flag on one command.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -18615,6 +18772,10 @@ short key), O211 (Argon2id on every manager open), O212 (local file effects of
 created). The systemd guidance to run `init` by hand without the unit's data
 directory and passphrase, and the false "`vault status` said `master.key`"
 claim, are corrected in this unit.
+
+**Noted 2026-10-08.** O210 is closed under 1.7.0: the one writer this ruling made now publishes a
+fsynced temp by a hard link, which never replaces an entry, so a crash before the link leaves no key
+file; the exclusive in-place create is kept as its fallback where a filesystem has no hard links.
 
 #### BUILT 2026-09-17, as ruled
 
@@ -33078,29 +33239,6 @@ implementor's `score_batch`, counted by a fixture that records which method
 ran. Counterfactual: today's `SharedReranker`, under which the sequential
 default runs.
 
-### O210 — a crash inside a key-file write leaves a short key, and every later start refuses
-
-**Filed 2026-09-17 by O204's ruling; verified by reading, not executed.** The
-palace key writer in `crates/undercroft-vault/src/keys.rs` creates the file,
-writes the bytes, then fsyncs. A crash between the create and the write leaves
-a zero-length or short `master.key` or `kdf.salt`, and every start after it
-fails `CorruptKeyFile` with no vault ever sealed under the key. O204 made the
-create exclusive and set the mode at open, so the window is narrower and never
-overwrites, but it still exists. `write_identity`
-(`crates/undercroft-cli/src/main.rs`) has the older shape: an `exists` check
-then a plain write, and the owner-only mode applied after the bytes land.
-
-**Shape**: write the bytes to a unique temporary name in the same directory,
-fsync it, then publish it with an operation that fails if the final name
-exists (a hard link, then remove the temporary), and fsync the directory. A
-filesystem without hard links needs a stated fallback. `write_identity` takes
-the same publish step.
-
-**Gate**: a test that kills the writer between the create and the write — or
-leaves a planted short file — and shows the next start either loads a whole
-key or refuses naming the torn file, never a key that seals nothing.
-Counterfactual: today's writer, under which the short file is published.
-
 ### O211 — every manager open runs Argon2id, so a passphrase palace pays 64 MiB per command and per vault
 
 **Filed 2026-09-17 by O204's ruling; verified by reading.** The CLI's
@@ -34717,17 +34855,6 @@ projection, and its gate's last clause stands. The door's read-only refusal is i
 source gate `o212_the_read_only_refusal_precedes_every_step_of_the_door` names what it must still
 precede.
 
-### O321 — `bundle keygen` and `bundle sign-keygen` write a secret by a check, then a write, then a chmod
-
-**Filed 2026-10-06 by O212's ruling (its refuter).** `write_identity`
-(`crates/undercroft-cli/src/main.rs` 996-1014) checks for the file, writes it, then restricts its mode:
-it follows a dangling symlink planted at the default path under the data directory, and the secret sits
-under umask permissions until the chmod.
-
-**Shape**: create the file new with mode 0600 at the open (unix), refusing an existing entry, a link
-included, before any byte is written. **Gate**: a dangling symlink at `<data_dir>/bundle.key` makes
-`bundle keygen` refuse with nothing written through it (P-Q3e); a fresh key is 0600 from its creation.
-
 ### O322 — the head-less refusal says "Nothing was written." for a database whose open has already renamed and migrated it
 
 **Filed 2026-10-06 by O303's ruling of that day.** The `Orphaned` refusal text
@@ -34966,6 +35093,36 @@ gains a writer arm that sees a tracing fmt layer with no `with_writer` or a stdo
 telemetry build under `UNDERCROFT_LOG_FORMAT=json`, `serve-mcp`'s stdout carries the JSON-RPC frames
 alone and an export's stdout is the payload alone (e2e-telemetry), each with the premise that the log
 line is emitted; counterfactual, today's layer.
+
+### O-NEW-O210-1 — `config check` says ok over a key file a start refuses for its length
+
+**Filed 2026-10-08 by O210's build; measured by reading and by the binary.** O204's ruling says the
+pre-flight's palace arm "is fatal exactly where a writable start refuses". It asks `keys::plan`, which
+reads which key files EXIST (`survey`) and never their length, so over a `master.key` of 11 bytes it
+prints `ok — master.key present, as declared` while every start refuses `CorruptKeyFile` (exit 1).
+O210 made that refusal name the file and its length; the pre-flight still cannot see it.
+
+**Shape**: when the plan is `Load`, the arm stats the declared file's length (`fs::metadata`, which
+follows a mounted secret's link as the start's read does — a stat, so it opens nothing, O154) and
+refuses with the start's own `CorruptKeyFile` text on a mismatch, one length table shared with
+`load_master` so the two cannot answer differently. **Gate**: `config check --data-dir` over an
+11-byte `master.key`, and over a 1-byte `kdf.salt` under a passphrase, exits 1 naming the file;
+counterfactual, today's arm, which exits 0.
+
+### O-NEW-O210-2 — every wrapped error prints its message twice in the CLI's error chain
+
+**Filed 2026-10-08 by O210's build; measured on one instance, the tree-wide reach unmeasured.** The
+error enums format a wrapped source into their own message AND expose it through `#[from]`'s
+`source()` — `VaultError::Key` is `#[error("key error: {0}")]`, `StoreError::Vault` is
+`#[error("vault error: {0}")]` — and anyhow's `{:?}` prints every link of the chain, so the CLI shows
+the inner message once per wrapper. Measured: a torn `master.key` prints
+`0: key error: master.key is 11 bytes …` and then `1: master.key is 11 bytes …`, the same sentence
+twice; O204's refusals and every `KeyError` read the same way since they were written.
+
+**Shape, for a ruling** (the messages are a surface operators and `tests/e2e.sh` match on): either the
+wrapping variants become `#[error(transparent)]` or carry a context phrase without `{0}`, or the CLI
+prints the head alone where a link repeats the next. **Gate**: the torn-key refusal and an O204
+refusal each print their sentence once, and every e2e check matching on a refusal's words still passes.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

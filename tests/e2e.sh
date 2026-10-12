@@ -4709,6 +4709,59 @@ check "O212: without the flag, bundle keygen writes the identity into the same d
   "Recipient (shareable)" -- env UNDERCROFT_HOME="$O212_FRESH" "$BIN" bundle keygen
 rm -rf "$O212_PARENT"
 
+echo "== a key file is published whole, and a link at an identity's path is refused (ROADMAP O210, O321) =="
+# O321 (probe P-Q3e): the keygens asked exists(), which follows a link, so a
+# DANGLING link planted at <data_dir>/bundle.key read as absent and the secret
+# was written through it, wherever it pointed, at exit 0; then the mode was
+# narrowed after the bytes existed. Both keygens now refuse the link before a
+# byte is written, through the key writer's own publisher.
+O321_HOME="$(mktemp -d)"
+O321_TARGET="$(mktemp -u)"
+ln -s "$O321_TARGET" "$O321_HOME/bundle.key"
+ln -s "$O321_TARGET" "$O321_HOME/bundle-sign.key"
+check "O321: bundle keygen refuses a dangling link at its default path" 1 "refusing to overwrite" -- \
+  env UNDERCROFT_HOME="$O321_HOME" "$BIN" bundle keygen
+check "O321: bundle sign-keygen refuses a dangling link at its default path" 1 "nothing was written" -- \
+  env UNDERCROFT_HOME="$O321_HOME" "$BIN" bundle sign-keygen
+if [ ! -e "$O321_TARGET" ] && [ -z "$(find "$O321_HOME" -name '*.tmp.*')" ]; then
+  echo "ok    O321: nothing was written through either link, and no temp file was left"; PASS=$((PASS+1))
+else
+  echo "FAIL  O321: a keygen wrote through a link or left a temp file"; ls -la "$O321_HOME" "$O321_TARGET" 2>&1 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -f "$O321_HOME/bundle.key" "$O321_HOME/bundle-sign.key"
+check "O321: with the link gone, bundle keygen writes the identity" 0 "Recipient (shareable)" -- \
+  env UNDERCROFT_HOME="$O321_HOME" "$BIN" bundle keygen
+O321_STAT="$(stat -c '%a %h' "$O321_HOME/bundle.key" 2>&1)"
+if [ "$O321_STAT" = "600 1" ]; then
+  echo "ok    O321: the identity is owner-only with one name, its temp name removed"; PASS=$((PASS+1))
+else
+  echo "FAIL  O321: the identity's mode and links read '$O321_STAT', wanted '600 1'"; FAIL=$((FAIL+1))
+fi
+rm -rf "$O321_HOME"
+# O210: the writer before 1.7.0 created master.key, then wrote it, so a crash
+# between the two left a short key and every later start refused with a message
+# naming neither the file nor its length. A short key is now refused by name and
+# never rewritten; a fresh one is published whole by a hard link of a fsynced temp.
+O210_HOME="$(mktemp -d)"
+head -c 11 /dev/zero >"$O210_HOME/master.key"
+check "O210: a torn master.key is refused naming the file and its length" 1 \
+  "master.key is 11 bytes where 32 are expected" -- env UNDERCROFT_HOME="$O210_HOME" "$BIN" init
+if [ "$(stat -c %s "$O210_HOME/master.key")" = 11 ] && [ ! -e "$O210_HOME/vaults" ]; then
+  echo "ok    O210: the torn key was never rewritten, and nothing else was created"; PASS=$((PASS+1))
+else
+  echo "FAIL  O210: the torn key was rewritten or the start went on"; ls -la "$O210_HOME" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -rf "$O210_HOME"
+O210_HOME="$(mktemp -d)/home"
+UNDERCROFT_HOME="$O210_HOME" "$BIN" init >/dev/null 2>&1
+O210_STAT="$(stat -c '%s %a %h' "$O210_HOME/master.key" 2>&1)"
+if [ "$O210_STAT" = "32 600 1" ] && [ -z "$(find "$O210_HOME" -maxdepth 1 -name '*.tmp.*')" ]; then
+  echo "ok    O210: a fresh master.key is whole, owner-only, one name, and no temp is left"; PASS=$((PASS+1))
+else
+  echo "FAIL  O210: a fresh master.key reads '$O210_STAT', wanted '32 600 1', or a temp was left"; FAIL=$((FAIL+1))
+fi
+rm -rf "$(dirname "$O210_HOME")"
+
 echo "== A promote beneath a live read-only server, then vault.json forged or gone (ROADMAP O289, O277) =="
 # A `serve-http --read-only` opened over a deferred promote keeps its deferral
 # for its life (no latch), and before O289 it answered a vault.json forged AFTER

@@ -965,6 +965,51 @@ pub mod fixture {
         /// A vault delete's removal of the vault it set aside fails, leaving
         /// the aside whole: the vault is out of service and not yet erased.
         DeleteRemove,
+        /// A secret file's hard link fails as on a filesystem without hard
+        /// links (ROADMAP O210), so the publish takes its in-place fallback.
+        SecretLink,
+    }
+
+    /// Where a secret-file write stops as a process killed at that point
+    /// would (ROADMAP O210): the writer returns at once and runs nothing
+    /// after the step, its own cleanup included — what an injected I/O error
+    /// cannot show, since an error path removes its temp file.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SecretCrash {
+        /// The temp file exists, owner-only, and holds no byte.
+        Created,
+        /// Half the bytes are in the temp file.
+        Torn,
+        /// The whole temp file is fsynced and has no final name yet.
+        Synced,
+        /// The final name is linked and the temp name not yet removed.
+        Published,
+        /// The in-place fallback created the final name and wrote half the
+        /// bytes — the residual that fallback keeps.
+        InPlaceTorn,
+    }
+
+    thread_local! {
+        static SECRET_CRASH: Cell<Option<SecretCrash>> = const { Cell::new(None) };
+    }
+
+    /// Stop this thread's next secret-file write at `step`. Consumed when it
+    /// fires; thread-local, like every fault here.
+    pub fn crash_secret_write_at(step: SecretCrash) {
+        SECRET_CRASH.with(|armed| armed.set(Some(step)));
+    }
+
+    /// The crash armed for `step`, consumed — `None` when another step, or
+    /// none, is armed.
+    pub(crate) fn secret_crash(step: SecretCrash) -> Option<std::io::Error> {
+        SECRET_CRASH.with(|armed| {
+            (armed.get() == Some(step)).then(|| {
+                armed.set(None);
+                std::io::Error::other(format!(
+                    "injected crash at {step:?} (the ROADMAP O210 test fixture)"
+                ))
+            })
+        })
     }
 
     thread_local! {
