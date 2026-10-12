@@ -3180,10 +3180,12 @@ pub struct VerifyReport {
     /// **A bare drawer id is the case that reason did not describe**, and it
     /// discriminates because destruction is a choke point: the crate has one
     /// `DELETE FROM drawers WHERE id` (`destroy_in`, ROADMAP O255) and it
-    /// appends `del/{id}` in the same transaction, inherited by both of its
-    /// callers — the public delete (`delete_drawer_ruled`, which
-    /// `delete_by_source` loops) and the attested destruction `forget`, the
-    /// retention sweep and admission deny share. So no live row
+    /// appends `del/{id}` in the same transaction, inherited by all four of its
+    /// callers — the public delete (`delete_drawer_ruled`), the whole-source
+    /// delete (`delete_by_source`, one lock since ROADMAP O259), the allow's
+    /// removal of its queue row (one lock since O260), and the attested
+    /// destruction `forget`, the retention sweep and admission deny share
+    /// (`attest_in`). So no live row
     /// AND no tombstone is unreachable legitimately; it is a relabel onto a drawer
     /// nothing destroyed. Enumerated from every `chain_append` call site,
     /// which is also what establishes that a label with no `/` can only be a
@@ -10956,10 +10958,10 @@ impl VaultStore {
                 // discriminating because deletion is a choke point:
                 // `destroy_in` holds the only `DELETE FROM drawers WHERE id`
                 // in the crate (ROADMAP O255) and appends `del/{id}` in the
-                // SAME transaction, and both of its callers (the public
-                // delete, which `delete_by_source` loops, and the attested
-                // destruction `forget`, the retention sweep and admission
-                // deny share) inherit it.
+                // SAME transaction, and all four of its callers (the public
+                // delete, the whole-source delete, the allow's removal of its
+                // queue row, and the attested destruction `forget`, the
+                // retention sweep and admission deny share) inherit it.
                 //
                 // So: no live row AND no tombstone is not ordinary operation.
                 // It is a relabel onto a drawer that was never destroyed —

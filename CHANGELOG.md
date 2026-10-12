@@ -386,7 +386,10 @@ left part of the source deleted in 49 of 51 refusals. Now the whole source is
 one write lock — its members, the fence over every one of them with its error
 propagated, and the destruction — so any refusal deletes nothing, through the
 CLI, MCP's `undercroft_delete_by_source` and `/v1`'s `DELETE …/drawers?source=`
-alike.
+alike. Review evidence is still refused at a door in front of the lock, so that
+refusal takes no write lock; and the fence is no longer something each
+destruction must remember to ask: the one statement that deletes a drawer takes
+a witness only the fence mints.
 
 **`admission allow` committed its re-filed drawer, its ruling and the queue
 row's removal as three transactions**, so a `deny` of the same row from another

@@ -49,6 +49,11 @@ use crate::{chain_append, Namespace, StoreError, VaultStore};
 /// here and no one has ruled yet".
 pub const QUARANTINE_WING: &str = "quarantine-pending";
 
+/// What `allow_in` hands its lock: the vector the drawer was re-filed with and
+/// whether its id was new (for `post_write` after the COMMIT), and the queue row
+/// it destroyed (for the lock's RAM-cache bookkeeping).
+type AllowedIn = ((Vec<f32>, bool), Vec<crate::manage::Destroyed>);
+
 /// One pending admission review.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PendingAdmission {
@@ -1383,49 +1388,67 @@ impl VaultStore {
                 )))
             }
         }
-        let (embedding, is_new) = self.under_destruction_lock(|s, snap| {
-            // The decision again, where nothing can commit between it and the
-            // effect. A deny that committed since the door leaves `NotFound`;
-            // a row that changed — another text on a vacated id, a
-            // convergence that moved its declaration — refuses rather than
-            // re-file what the door judged over a row holding something else.
-            let now = s.quarantined(id)?;
-            if now != d {
-                return Err(StoreError::Invalid(format!(
-                    "{id} changed while this allow ran (another writer replaced its text \
-                     or its declaration) — nothing was written; read it again and rule again"
-                )));
-            }
-            // The quarantined row's own stored vector (ROADMAP O167). Its
-            // content is byte-identical to `restored`'s — only metadata and id
-            // move — so asking the embedder again sent the drawer to a served
-            // endpoint for a vector the vault already held, and on an external
-            // vault replaced the caller's vector with `ExternalEmbedder`'s
-            // zero vector.
-            let embedding = s.stored_embedding(id)?;
-            // Straight to the write statements, NOT through `upsert`: the
-            // content still trips the screen (that is why it was here), and
-            // the human ruling IS the override — re-screening would trap every
-            // allowed drawer forever. Stated, not implied; the boundary checks
-            // the expectation it carries inside this transaction (O224).
-            let is_new = s.write_drawer_in(
-                snap,
-                &restored,
-                &embedding,
-                crate::Screen::Bypass(crate::BypassReason::OperatorRuling(expected)),
-            )?;
-            s.admission_ruling_in(snap.conn(), id, "allowed", Some(&restored_id))?;
-            // The queue row, by the one destruction body, its verdict already
-            // appended one statement above in this same lock.
-            let tables = crate::manage::DerivedTables::read(s)?;
-            let gone = s.destroy_in(snap, &tables, id)?;
-            s.settle_derived(snap, &tables, std::slice::from_ref(&gone))?;
-            Ok(((embedding, is_new), vec![gone]))
-        })?;
+        let (embedding, is_new) =
+            self.under_destruction_lock(|s, snap| s.allow_in(snap, id, &d, &restored, expected))?;
         // The re-filed drawer's derived rows and RAM caches, after the COMMIT
         // and the anchor — as `write_drawer` has always done them.
         self.post_write(&restored, embedding, is_new);
         Ok(restored_id)
+    }
+
+    /// `admission_allow`'s body inside its write lock (ROADMAP O260): the
+    /// decision again, the re-filed write, the ruling and the queue row's
+    /// removal — and nothing else, so a source gate reads exactly what runs
+    /// under the lock while the door above it may grow (O228's ruling puts the
+    /// label guard there, outside the lock). Returns the vector it re-filed
+    /// with and whether the destination was new, for `post_write` after the
+    /// COMMIT.
+    fn allow_in(
+        &self,
+        snap: &crate::chain::Snapshot<'_>,
+        id: &str,
+        judged: &Drawer,
+        restored: &Drawer,
+        expected: Expected,
+    ) -> Result<AllowedIn, StoreError> {
+        // The decision again, where nothing can commit between it and the
+        // effect. A deny that committed since the door leaves `NotFound`; a
+        // row that changed — another text on a vacated id, a convergence that
+        // moved its declaration — refuses rather than re-file what the door
+        // judged over a row holding something else.
+        let now = self.quarantined(id)?;
+        if &now != judged {
+            return Err(StoreError::Invalid(format!(
+                "{id} changed while this allow ran (another writer replaced its text \
+                 or its declaration) — nothing was written; read it again and rule again"
+            )));
+        }
+        // The quarantined row's own stored vector (ROADMAP O167). Its content
+        // is byte-identical to `restored`'s — only metadata and id move — so
+        // asking the embedder again sent the drawer to a served endpoint for a
+        // vector the vault already held, and on an external vault replaced the
+        // caller's vector with `ExternalEmbedder`'s zero vector.
+        let embedding = self.stored_embedding(id)?;
+        // Straight to the write statements, NOT through `upsert`: the content
+        // still trips the screen (that is why it was here), and the human
+        // ruling IS the override — re-screening would trap every allowed
+        // drawer forever. Stated, not implied; the boundary checks the
+        // expectation it carries inside this transaction (O224).
+        let is_new = self.write_drawer_in(
+            snap,
+            restored,
+            &embedding,
+            crate::Screen::Bypass(crate::BypassReason::OperatorRuling(expected)),
+        )?;
+        self.admission_ruling_in(snap.conn(), id, "allowed", Some(&restored.id))?;
+        // The queue row, by the one destruction body, its verdict appended one
+        // statement above in this same lock — which is the `Ruled` the fence
+        // is told.
+        let fenced = self.fence(snap, id, crate::manage::PendingEvidence::Ruled)?;
+        let tables = crate::manage::DerivedTables::read(self)?;
+        let gone = self.destroy_in(snap, &tables, fenced)?;
+        self.settle_derived(snap, &tables, std::slice::from_ref(&gone))?;
+        Ok(((embedding, is_new), vec![gone]))
     }
 
     /// Deny a quarantined drawer: the ruling is recorded, then the content
