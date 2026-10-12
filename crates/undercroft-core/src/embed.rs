@@ -360,6 +360,37 @@ pub const HASH_EMBEDDER_V2: &str = "undercroft-hash-v2";
 /// orphan it left on this constant.)
 pub const HASH_EMBEDDER: &str = "undercroft-hash-v3";
 
+// The hash identity's token space is asserted at COMPILE time (ROADMAP O294's
+// ruling of 2026-10-12). `HashEmbedder`'s tokens, `search_key` and the room a
+// file stem derives read std's `char` tables (`is_alphanumeric`,
+// `is_uppercase`, `to_lowercase`) and `unicode-normalization`'s, so the space
+// an identity names is the code TIMES those two tables — and the GHCR images
+// (Rust 1.90, Unicode 16) and the prebuilt binaries (1.97.1 to 1.98.1,
+// Unicode 17) computed two spaces under one name for every release up to
+// 1.6.1 (ROADMAP O421). This makes the version a property of the code again:
+// a toolchain whose std, or a `unicode-normalization` whose tables, carry
+// another version fails the build here — `cargo +x`, `RUSTUP_TOOLCHAIN`, a
+// distro `cargo` and every `cargo check` included — instead of moving every
+// vault's vectors under an unchanged name. Moving it is an identity decision:
+// a new `HASH_EMBEDDER`, a `KNOWN_EMBEDDER_UPGRADES` row and a walk (O421,
+// O422), never an edit of these numbers alone. A test could not see a native
+// release build; a `const` cannot be skipped by one.
+const _: () = {
+    let std_tables = core::char::UNICODE_VERSION;
+    let nfc_tables = unicode_normalization::UNICODE_VERSION;
+    assert!(
+        std_tables.0 == 17
+            && std_tables.1 == 0
+            && std_tables.2 == 0
+            && nfc_tables.0 == 17
+            && nfc_tables.1 == 0
+            && nfc_tables.2 == 0,
+        "the hash embedder's token space (HASH_EMBEDDER) is defined over Unicode 17.0.0, and this \
+         toolchain's std or the locked unicode-normalization carries another version: build with \
+         the toolchain rust-toolchain.toml pins (ROADMAP O294, O421)"
+    );
+};
+
 /// The `semantic` score above which [`HashEmbedder`] admits on cosine alone.
 ///
 /// Declared rather than calibrated, and deliberately so: this is the

@@ -622,7 +622,7 @@ mod tests {
                 .iter()
                 .map(|(s, t)| (terms.iter().filter(|w| t.contains(*w)).count(), s))
                 .collect();
-            scored.sort_by(|a, b| b.0.cmp(&a.0));
+            scored.sort_by_key(|x| std::cmp::Reverse(x.0));
             let mut out: Vec<String> = Vec::new();
             for (_, s) in scored {
                 if !out.contains(s) {

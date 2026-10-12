@@ -815,6 +815,59 @@ answers a newer build's receipt as not checked. A receipt carrying a field signe
 1.7.0 is refused that way by every build from 1.7.0 up to that release, and read as **forged**, exit 2,
 by 1.6.1 and older; and every build before 1.1.0 already reads 1.1.0's signed `mirror` note that way.
 
+
+### a native source build uses Rust 1.98.1, fetches it the first time, and does not compile on a standard library of another Unicode version (O294)
+
+**Symptom:** `cargo build --release` in a checkout, on a host whose rustup does
+not hold 1.98.1, first prints `info: syncing channel updates for
+'1.98.1-<host>'` and installs it; with no network it fails with a download
+error from `static.rust-lang.org` instead of building. And a build that does
+not go through the file — `cargo +<toolchain>`, `RUSTUP_TOOLCHAIN`, a
+distribution's own `cargo` — on a toolchain whose standard library carries
+another Unicode version than 17.0.0 (Rust 1.90.0 carries 16.0.0) stops in
+`undercroft-core` with `error[E0080]: evaluation panicked: the hash embedder's
+token space (HASH_EMBEDDER) is defined over Unicode 17.0.0, and this
+toolchain's std or the locked unicode-normalization carries another version:
+…`. Before 1.7.0 the same commands built with whatever toolchain they found.
+
+**Cause:** `rust-toolchain.toml` now pins the toolchain every build uses —
+1.98.1, which built every v1.5.2, v1.6.0 and v1.6.1 binary — and rustup obeys
+it for every cargo call in the checkout (ROADMAP O294). The hash embedder's
+tokens read the standard library's Unicode tables, so a build on another
+Unicode version computes a different vector space under the same embedder
+name; `undercroft-core` refuses it at compile time rather than let it move
+every vault's vectors with nothing said. Until this release the Docker images
+were built by 1.90 (Unicode 16) and the prebuilt binaries by 1.97.1 to 1.98.1
+(Unicode 17).
+
+**Fix:** install it once while online, `rustup toolchain install 1.98.1`. A
+`cargo` that is not rustup's proxy ignores the file; build with rustup's.
+Building on another Unicode version is not supported — moving the tables is
+an identity decision (ROADMAP O421, O422), not a toolchain choice. The fetch
+does not touch the prebuilt binaries, the GHCR images or a `docker build`,
+which carry the pin. What the pin moves in the images' vector space — a vault
+an image wrote was tokenized under Unicode 16 — is healed by ROADMAP O421's
+walk, which ships in the same release as this pin, with its own entry in this
+file.
+
+**An engine built from `main` before ROADMAP O421 lands is the exception, and
+the shipped compose recipes build one.** The team server
+(`deploy/docker-compose.server.yml`) and the observability stack
+(`deploy/observability/docker-compose.observability.yml`) BUILD the engine
+from the checkout. Rebuilt from a `main` that carries this pin and not yet
+O421's walk, either runs a Unicode-17 engine over a vault a 1.90 image wrote,
+under the unchanged embedder name `undercroft-hash-v3`, and nothing says so:
+the vault's stored vectors, and on an hmac-only vault its search index, keep
+the old tables while its queries use the new. **Fix:** build those recipes
+from a release tag, not from `main`, until the release that carries O421; a
+vault already served by such a build is healed by O421's walk when that
+release opens it, which also rebuilds the search index. Its vectors can be
+re-embedded sooner with `UNDERCROFT_FORCE_EMBEDDER=1` and `undercroft
+repair`; the search index waits for that release.
+
+`undercroft config check` cannot detect any of this: a build is not a
+declaration.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)
