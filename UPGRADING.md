@@ -688,8 +688,25 @@ Building on another Unicode version is not supported — moving the tables is
 an identity decision (ROADMAP O421, O422), not a toolchain choice. The fetch
 does not touch the prebuilt binaries, the GHCR images or a `docker build`,
 which carry the pin. What the pin moves in the images' vector space — a vault
-an image wrote was tokenized under Unicode 16 — is healed by O421's walk,
-which ships in the same release as this pin, with its own entry in this file.
+an image wrote was tokenized under Unicode 16 — is healed by ROADMAP O421's
+walk, which ships in the same release as this pin, with its own entry in this
+file.
+
+**An engine built from `main` before ROADMAP O421 lands is the exception, and
+the shipped compose recipes build one.** The team server
+(`deploy/docker-compose.server.yml`) and the observability stack
+(`deploy/observability/docker-compose.observability.yml`) BUILD the engine
+from the checkout. Rebuilt from a `main` that carries this pin and not yet
+O421's walk, either runs a Unicode-17 engine over a vault a 1.90 image wrote,
+under the unchanged embedder name `undercroft-hash-v3`, and nothing says so:
+the vault's stored vectors, and on an hmac-only vault its search index, keep
+the old tables while its queries use the new. **Fix:** build those recipes
+from a release tag, not from `main`, until the release that carries O421; a
+vault already served by such a build is healed by O421's walk when that
+release opens it, which also rebuilds the search index. Its vectors can be
+re-embedded sooner with `UNDERCROFT_FORCE_EMBEDDER=1` and `undercroft
+repair`; the search index waits for that release.
+
 `undercroft config check` cannot detect any of this: a build is not a
 declaration.
 

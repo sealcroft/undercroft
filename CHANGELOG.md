@@ -2334,7 +2334,14 @@ byte-identical tables at Unicode 17.0.0; 1.90.0 prints Unicode 16.0.0 and differ
 longer lowercases to the final form (`ʕΣ` is `ʕς` under 1.90.0, `ʕσ` under 1.98.1), and U+A7D3 and
 U+A7D5 gain uppercase mappings no token path reads. So every image computed one token space and every
 prebuilt binary another under the one name `undercroft-hash-v3`: a newly assigned letter was a
-delimiter in an image's vault and a token in a binary's. **The actions (O326).** Every third-party
+delimiter in an image's vault and a token in a binary's. **And two identifiers read the same
+lowercasing**: the room `mine` derives from a file stem, a component of the drawer id, and the
+subject and predicate from which `refine` derives a fact's id. A stem or a term holding a codepoint
+new in Unicode 17, one of the 28 newly cased letters, or U+0295 before a capital sigma derived one id
+in an image and another in a prebuilt binary — so re-mining such a file in the other population files
+its drawers again under a new room, and re-running `refine` files such a fact again under a new id.
+No walk moves an id; that is a stated cost of the release that carries the walk (ROADMAP O421), and
+whether an id may ever move with a Unicode version again is filed for a ruling (O426). **The actions (O326).** Every third-party
 action was referenced by a tag its owner can move — `docker/setup-buildx-action@v4`,
 `docker/login-action@v4`, `docker/build-push-action@v7`, `aquasecurity/trivy-action@v0.36.0`,
 `taiki-e/install-action@v2`, `peaceiris/actions-mdbook@v2`, `dtolnay/rust-toolchain@stable` — and
@@ -2372,7 +2379,9 @@ index digest, with the checkout mounted `:ro` and `--network none`.
 the images' token space from Unicode 16 to 17: a vault a prebuilt binary wrote is unaffected, and a
 vault an image wrote would hold Unicode-16 vectors under a name that then means 17. O421 mints `v4`
 and walks every hash vault once at its first writable open, as v1 and v2 were walked. It is its own
-unit and is not in this tree. Until it lands beside this pin, this tree must not be tagged.
+unit and is not in this tree. Until it lands beside this pin, this tree must not be tagged — and the
+ROADMAP preflight holds that: O421 is filed under 1.7.0, and the preflight refuses to mark a release
+released while an entry under it is unfinished.
 
 **One new host-side preflight holds all of it, and it runs before the first preflight that launches
 a container**, so a launch it refuses never happens: every `uses:` names a local path, a GitHub-owned
@@ -2399,7 +2408,10 @@ four jobs running cargo without the pin and six container defects — beside the
 build's reader passed four of its independent review's plants (an untagged `FROM rust`, another
 registry's Rust image, `rustup run nightly` with a `setup-rust-toolchain` action, a cargo step holding
 `github['token']`); planted in a copy of this tree they are now refused, eleven refusals across four
-readers. `undercroft-core` fails to compile under 1.90.0 with the assertion's message and compiles
+readers. A second review's plants — an image named by a flow mapping (`container: {image: …}`) or by
+`COPY --from=`, a builder on another Debian release than the runtime stage, and `rustup_toolchain:` in
+a Windows job's `env:` — are refused too: every Rust image's tag must now name the runtime stage's
+distribution as well as the pinned version. `undercroft-core` fails to compile under 1.90.0 with the assertion's message and compiles
 under 1.98.1; under the pin the format check, the three clippy runs, a `--locked` build that leaves
 `Cargo.lock` byte-identical, the Dockerfile's test and runtime stages, whose binary starts, and `cargo test --release` in the test stage (1,380 passed, none failed, 17 ignored) all pass. The preflight runs green under
 Debian 12's mawk 1.3.4 20200120 and gawk 5.2.1.
@@ -2418,14 +2430,21 @@ upgrade; its review stopped it, and that defect was mine. Filed: O421 (the `v4` 
 O422 (decoupling the token path from std's tables, which the maintainer ruled on 2026-10-12: in-tree
 tables generated from the Unicode 17.0.0 data files, pinned by sha256, proven equal to 1.98.1's std),
 O423 (`script_of`'s Han arm stops at Extension F), O424 (the builder image is named by tag, not
-digest) and O425 (nothing reports that a pinned action or the pinned toolchain has a fix the pin
-lacks, escalated).
+digest), O425 (nothing reports that a pinned action or the pinned toolchain has a fix the pin
+lacks, escalated) and O426 (two id recipes read std's Unicode lowercasing, for a ruling on whether an
+id may ever move with it).
 
 PATCH inside the unreleased 1.7.0: what ships was built by a compiler no suite ran, and one identity
 named two token spaces; the pin removes the first and, with O421's walk in the same release, the
-second. Nothing an operator runs changes until then. A native source build changes, so `UPGRADING.md`
-carries an entry: rustup now builds with 1.98.1 and fetches it on first use, and a build on a
-toolchain whose std is not Unicode 17.0.0 fails to compile; `config check` cannot see a build.
+second. Until then a prebuilt binary and a published image change nothing, but **an engine built from
+this tree does**: both shipped compose recipes — the team server (`deploy/docker-compose.server.yml`)
+and the observability stack — BUILD the engine from the checkout, so an operator who rebuilds either
+from `main` before O421 lands runs a Unicode-17 engine over a vault a 1.90 image wrote, under the
+unchanged name `undercroft-hash-v3` and with nothing said: the vault's stored vectors, and on an
+hmac-only vault its search index, keep the old tables while its queries use the new — the stale space
+O421's walk exists to heal. `UPGRADING.md` carries that and the native source build: rustup now
+builds with 1.98.1 and fetches it on first use, and a build on a toolchain whose std is not Unicode
+17.0.0 fails to compile; `config check` sees neither, a build not being a declaration.
 
 ## 1.6.1 — 2026-09-22
 

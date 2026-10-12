@@ -16634,6 +16634,18 @@ needs no walk. By the ruling's decision rule the tables differ, the identity ent
 pin is the newest of the three identical toolchains; CHANGELOG names U+0295's class, as O421's
 ruling asks.
 
+**And two identifiers move with U+0295 — found by the second independent review, mine to have
+missed.** The same `str::to_lowercase` feeds two id recipes: `normalize_wing_name` (`normalize.rs`
+625-635), through which `room_for_file` derives a mined drawer's room, a component of its id; and
+`refine`'s lowercased subject and predicate (`refine.rs` 244-245), from which `kg_add_grounded`
+derives the triple id. So a stem or a triple term holding `ʕΣ` derives `ʕς` on the images' builds
+and `ʕσ` on the binaries' — a different room and drawer id, a different triple id — as one holding a
+codepoint new in 17 does, and as the 28 newly cased letters do. O421's ruling item 4 treats these as a
+stated cost, never a migration, and no walk may move an id; its classes were each one character short,
+which a note beside it records. Every later move of an id input with a Unicode version is filed as
+O426, because neither O421 (the 1.90-to-1.98.1 move) nor O422 (the data source) asks whether an
+identifier may move at all.
+
 **P2, the population.** Read from the runner image each `Binaries` job logged and that image's own
 readme (the jobs ran `rustup target add` alone, which installs no toolchain): v1.0.0, v1.1.0 and
 v1.1.1 on 1.97.1, ten jobs of ten; v1.2.0 to v1.5.1 on 1.97.1 and 1.98.0 mixed inside a release (four
@@ -16712,14 +16724,30 @@ refuse, beside `rust:latest` behind a `--platform` flag. The review's own three 
 copy of the tree, are refused by name: eleven refusals across four readers. The probes pass under
 Debian 12's mawk 1.3.4 20200120 and gawk 5.2.1, and the real files hold two Rust images and four
 native cargo jobs, each through the script.
+A **second independent review** then found the arm blind to four more of its plants, each now a probe:
+an image named by a flow mapping (`container: {image: "rust:1.90-slim-bookworm"}`, which the key reader
+took as the word `{image:`) and by `COPY --from=` (with `RUN --mount=…,from=` added beside it); a builder on another
+distribution than the runtime stage (`rust:1.98.1-slim-trixie` beside `debian:bookworm-slim`, which
+links a glibc the runtime lacks and fails at start, not at build — the ruling's decision rule); and
+`rustup_toolchain:` in a Windows job's `env:`, which Windows reads as `RUSTUP_TOOLCHAIN`. A Rust image's
+tag must now be `<pin>-slim-<dist>` or `<pin>-<dist>`, the distribution read from the Dockerfile's one
+`FROM debian:<dist>-slim` (none or two is a premise failure), and `RUSTUP_TOOLCHAIN` is matched in any
+case. The probes number ten images and eight mechanisms the arm must refuse; the review's two files,
+planted in a copy of the tree, draw six refusals by name, every plant among them; and the real files
+hold, on bookworm.
 
-**No tag carries this pin without O421's walk** (the ruling's item 3). This entry closes because the
-pin, the assertion and the gate are built. The images' token space moves from Unicode 16 to 17 with
-it, and only O421's `undercroft-hash-v4` walk heals the vaults the images wrote. O421 stays under
-`## Open` until the maintainer names the release that carries both; it then moves under that
-release's heading, where O309's tag-reading arm refuses to mark the release released while O421 is
-open. Until the maintainer names it, nothing gates it but this sentence and CHANGELOG's, which the
-release flow reads.
+**No tag carries this pin without O421's walk** (the ruling's item 3), **and the preflight holds it.**
+This entry closes because the pin, the assertion and the gate are built. The images' token space moves
+from Unicode 16 to 17 with it, and only O421's `undercroft-hash-v4` walk heals the vaults the images
+wrote. O421 is filed under `## 1.7.0 — unreleased`, this entry's release, as its target release — moved
+there from `## Open` after the second independent review found the sequencing held by prose alone, my
+first record having said "nothing gates it but this sentence". O309's tag-reading arm refuses an
+unfinished entry under a released section, so 1.7.0 cannot be marked released while O421 is open.
+Measured: `--preflight-only` accepts O421 under the unreleased heading; with that heading changed to
+`released 2026-10-12` and nothing else, the arm refuses
+`released-entry-unfinished` for O421, beside `window-not-the-workspace-version` (the workspace still
+reads 1.6.1), and nothing else. If
+the maintainer names another release for the pin, both entries move to it.
 
 **What stays outside it, stated.** Every shipped target has compiled under 1.98.1 — it built all ten
 v1.6.1 assets — but only `windows-check` (Windows, default features, `check`) compiles natively on a
@@ -16729,6 +16757,13 @@ another Unicode version stops at the assertion — how that is ever moved is O42
 bump is due O425's. The builder image is pinned by version, not digest (O424). Of the two model crates, `undercroft-embed-onnx` compiles under the pin with its tests (`cargo check
 --all-targets`, no warning); `undercroft-embed-ort`, which fetches ONNX Runtime at build time, was not
 built here, and neither crate's tests were run — the `onnx-build` and `ort-build` legs do both.
+**Both shipped compose recipes build the engine from the checkout** — the team server
+(`deploy/docker-compose.server.yml`, its `build: context: ..`) and the observability stack — so an
+operator who rebuilds either from `main` after this merges and before O421 lands runs a Unicode-17
+binary over a vault a 1.90 image wrote, under the unchanged name `undercroft-hash-v3`, and nothing
+says so: its stored vectors, and on an hmac-only vault its search index, keep the old tables while
+its queries use the new. Found by the
+second independent review; CHANGELOG and `UPGRADING.md` state it, naming O421.
 
 **Notes beside, owed by the ruling.** O275 (its maintainer ruling's "1.90"), O163 (`hash`'s identity
 "is its code's"), and each record that states a 1.90 std or cargo behaviour as a property of what
@@ -16881,6 +16916,197 @@ streams examined across 11 PDFs, every pattern probed on its known positive firs
 live in the compose files (the builder and lint images are pinned by tag, filed as O424), and
 `tests/tls-pins.sh`, a host-side suite, launches its own. The digest fixes the image; a newer Python is
 a deliberate edit to it.
+
+### O421 — `undercroft-hash-v3` names two token spaces in released builds: the GHCR images tokenize with Unicode 16, the prebuilt binaries with Unicode 17
+
+**Filed 2026-10-12 by the ruling on O294 and O166 (three lenses and a refuter).** `HashEmbedder`'s
+tokens read std's `char` tables (`is_alphanumeric` in `segment`, `script.rs` 259; `is_uppercase` and
+`to_lowercase` in `search_key`, `normalize.rs` 115 and 330), and so does the room `mine` and `sweep`
+derive from a file stem (`normalize_wing_name`, `normalize.rs` 625-635, through `room_for_file`,
+`crates/undercroft-cli/src/main.rs` 4944-4949), which is a component of the drawer id. Every image
+since `v1.0.0` was built by Rust 1.90 (Unicode 16); every prebuilt binary by 1.97.1, 1.98.0 or 1.98.1
+(Unicode 17 as the review measured 1.97.1 and 1.98.1; 1.98.0 is P-U1's). `enforce_embedder_identity` returns on a name match (store `lib.rs` 3925-3927), so a vault one
+population wrote and the other opens is not walked and nothing says so. O294's ruling of this date
+pins a Unicode-17 toolchain, which moves the image population.
+
+**Noted 2026-10-12 by O294's build — the relations the ruling declared here, and where this entry
+sits.** Sequenced with O294 — that entry's pin ships in no tag without this entry's walk; sequenced
+after O423 — a fix to the Han arm, if ruled, rides this identity; sequenced before O422 — a decoupled
+token path must reproduce this identity. O294 closed on that date under `## 1.7.0 — unreleased`, and
+this entry was moved there as its target release (`CLAUDE.md`: a filing goes under its target release
+once that is fixed), after the build's second independent review found the sequencing held by prose
+alone: O309's tag-reading arm refuses an unfinished entry under a released section, so 1.7.0 cannot be
+marked released while this entry is open (O294's record has the measurement). A `Relations:` line
+names entries under `## Open` only, so the three relations are notes, here and in O422 and O423. If the
+maintainer names another release for the pin, both entries move to it.
+
+#### RULED 2026-10-12 by three lenses (Agentic Memory Architecture; Retrieval and text processing (Unicode segmentation, normalization stability, vector-space identity); Release engineering and supply chain (reproducible toolchains, what was shipped vs tested, UPGRADING)) and an adversarial refuter
+
+**The question.** Must the released hash space be healed, and how: a new identity with the automatic
+walk, a second identity leg, a targeted re-embed, or a stated residual?
+
+**Prior rulings found, and their disposition.**
+- **O166's ruling of 2026-10-08.** Its option (A), a `v4`, "is not refused as MAJOR (it migrates)"
+  and lost "on the 1.0.0 decision and the fleet-wide cost". The 1.0.0 decision does not reach these
+  populations; both are release populations. Its item 6 put "a v4 back on the table" for exactly a
+  released stale space. Its item 2: "editing a pinned digest IS minting an identity". FOLLOWED.
+- **The v2 precedent** (`embed.rs` 341-356): v2 "could have been redefined in place … Minting v3
+  anyway", because a redefinition leaves vectors "stale and unmigrated, with the identity matching
+  and therefore no warning". FOLLOWED: re-reading `v3` as "Unicode 17" in place is that redefinition,
+  for released vaults.
+- **The documented contract** — `KNOWN_EMBEDDER_UPGRADES`'s doc (store `lib.rs` 707-716): "a user who
+  merely upgraded did not choose a new embedding space and should not have to repair one by hand";
+  `docs/EMBEDDERS.md` 217-219; `CLAUDE.md` 276-283. It is consistent across three surfaces including
+  the doctrine, so by the drift-direction rule the documents lead.
+- **O163's ruling of 2026-10-08.** Its carrier (a second leg, the name unchanged) rests on "an older
+  binary using the same model computes the same space"; for hash an older image computes a DIFFERENT
+  space, so the carrier does not transfer — a distinction, not a refutation. Its scope phrase "`hash`,
+  whose identity is its code's" (ROADMAP 4235) is REFUTED as a description of the released state and
+  restored as a property by O294's compile-time assertion; a sentence goes beside it. Its open point
+  "Sequencing with O166" is the maintainer's; this entry uses the existing name comparison and walk
+  and has no technical ordering constraint with O163's one comparison function, which must carry the
+  `KNOWN_EMBEDDER_UPGRADES` arm whichever lands second.
+- **O233 and O238**: an older binary refusing a vault a newer one has touched shipped as a fix
+  (`UPGRADING.md` 608-636: "There is no supported downgrade after the first writable open"). FOLLOWED.
+- **The code comment at store `lib.rs` 748-749** ("a whole-fleet re-embed is not worth one script's
+  cosine leg"): a judgement about a population O166 then showed no release produced. It is not a
+  ruling and does not outweigh the documents above for a released one.
+
+**Ruled.**
+1. **`HASH_EMBEDDER` becomes `undercroft-hash-v4`**: v3's token rules over the Unicode-17.0.0 tables
+   O294's assertion pins, its doc saying so. A new `HASH_EMBEDDER_V3` constant holds the old name, and
+   `KNOWN_EMBEDDER_UPGRADES` gains `(v3, v4)` beside the v1 and v2 rows, which follow the constant.
+   Every hash vault walks once at its first writable open through `migrate_embedding_space` (store
+   `lib.rs` 4004-4085): every drawer re-embedded through `get`, PQ and IVF dropped
+   (`invalidate_embedding_space`, 4097-4103), one `migrate/embedding-space` chain record, the identity
+   recorded last. Prebuilt-binary vaults recompute byte-identical vectors; image and mixed vaults are
+   healed. No marker tells them apart (O166's option E), so no narrower walk is possible.
+2. **`FTS_KEY_VERSION` moves in the same unit** (store `lib.rs` 705), because `search_key`'s output
+   moves for the 28 newly assigned cased letters and `drawers_fts` holds it; the existing
+   `init_fts_schema` rebuild runs at the first writable open, and a read-only open falls back to the
+   announced full scan until then.
+3. **Mirrors are refused `IndexStale` until `index push`** — correct, since a mirror holds the vectors
+   that were pushed (`remote.rs` 545-557).
+4. **Rooms and refine's KG terms are a stated cost, never a migration.** No walk may move a drawer
+   id. An image vault re-mining a file whose stem holds a codepoint new in 17 derives a new room
+   (under 16 such a stem lost those characters, and a stem made only of them fell to `unsorted`), so a
+   second drawer set counted `created`, outside any room-scoped retention policy; prebuilt-binary
+   vaults re-derive the same room. `refine` re-run moves a triple id only through the 28 cased
+   letters. CHANGELOG names both and the recovery (a re-mine into a fresh wing, or `forget` by source
+   for the old set). Bumping `NORMALIZE_VERSION` (moves every id) and a history-aware room (an id
+   would depend on vault state) are rejected.
+5. **The CJK Extension G–J classification is its own entry** (O423, filed by this ruling),
+   ruled before this entry's unit is built; if it is fixed, it rides this identity so the fleet walks
+   once.
+
+**Options that lost.**
+- **No walk, `v3` redefined as Unicode 17 and `repair` named in CHANGELOG (lens 2).** It leaves image
+  vaults holding Unicode-16 vectors under a name that now means 17 — the redefinition in place the v2
+  precedent refused, the "two spaces under one name" O166 refused in its option (B), and it makes the
+  user "repair one by hand", which the documented contract forbids. Its argument is prevalence, which
+  no corpus on hand can measure for the fleet.
+- **A second identity leg with an unconditional walk, the name unchanged (S4).** Same walk cost; no
+  mirror re-push and no older-binary refusal. It loses because the name would still name two spaces
+  (older images keep writing Unicode-16 vectors into a healed vault with nothing refusing, and a
+  legacy mirror marker is trusted under O163's rule), against O166 item 2's minting rule, and it adds
+  a second mechanism beside a tested one.
+- **Re-embed only the affected drawers (S5)**: O166's option (B), two spaces under one name, and a
+  full decrypt on a sealed vault.
+- **The Unicode version in the identity string per build (S3)**: every reference holder moves with the
+  distribution, and a mixed deployment walks back and forth.
+- **A `v4` over Unicode 16 (lens 3)**: removes reach from every prebuilt-binary vault (O294's record).
+
+**Claims refuted.**
+- Lens 1's end-to-end probe: "the 1.6.1 binary then refuses the vault `EmbedderMismatch`, exit 1,
+  writing nothing" — the open runs `init_fts_schema` (store `lib.rs` 5259) before
+  `enforce_embedder_identity` (3748), so an older WRITABLE open finds `fts_key_version` foreign,
+  rebuilds `drawers_fts` under its own key, writes its own marker, and only then refuses. The next new
+  open rebuilds again. Nothing is lost, and it is stated rather than tested as "nothing written".
+- Lens 1: the name change is a fence. Partly: it also refuses prebuilt-binary 1.6.x binaries that
+  compute identical vectors — a cost O163 counted for its own question, accepted here on the O233
+  precedent.
+- Lens 2's additive standard for future bumps ("V moves with the toolchain" without an identity):
+  refuted by O166 item 2 and the v2 precedent.
+
+**Probes owed.**
+- **P-U1** (O294's record) first. If it shows no std-table difference between 1.90.0 and the pin,
+  this entry is withdrawn by evidence. If it shows an assigned-in-16 character changing a token-path
+  property, the ruling is unchanged and CHANGELOG names that wider class.
+- **P-L2, end to end, no download.** Stand-ins: `git archive v1.6.1` built in
+  `rust:1.98.1-slim-bookworm` (the binaries' population) and in `rust:1.90.0-slim-bookworm` (the
+  images'). Each writes a sealed and an hmac-only vault holding (a) a drawer with U+323B0, (b) a plain
+  drawer, (c) a mined file whose stem holds U+323B0, and a pushed mirror marker. Premise, before the
+  open: (a)'s stored vector differs from a fresh embed by the `v4` build on the images' vault and
+  equals it on the binaries', or the stand-ins did not reproduce the two populations. Opened writable
+  by the `v4` build: one `migrate/embedding-space` record naming `v4`; (a)'s stored vector equals a
+  fresh embed on both; (b)'s decrypted vector is unchanged (premise); `fts_key_version` moved and an
+  hmac-only query holding U+A7CE's case form and a common word returns both drawers; a mirror search
+  refuses `IndexStale` until re-push; a lexical query for (a)'s ideograph finds it on both
+  populations' vaults; re-mining (c) adds no drawers on the binaries' vault and adds the file's chunks
+  on the images' (the stated room cost, measured). Then the 1.6.1 build opens the walked vault and
+  refuses `EmbedderMismatch` with exit 1, appending no drawer, embedding or audit record. Counterfactual:
+  without the `(v3, v4)` row the open refuses `EmbedderMismatch` instead of walking.
+- **P-U7, the maintainer's go (a long run).** The walk at about 10⁵ drawers, sealed and hmac-only,
+  with the PQ retrain. It sets `UPGRADING.md`'s figure and decides nothing else; 45.9 µs/drawer is the
+  old branch head's, on an unnamed corpus.
+- **P-U3 and P-U4, informational.** How many texts and stems in the corpora on hand hold a codepoint
+  new in 17, and that stored bytes, chunk boundaries and `match_key` are identical across the two
+  toolchains. A zero is a fact about those corpora, not the fleet.
+
+**Dissent.** Lens 2 holds no walk; refuted above.
+
+**Fails silently if** the `(v3, v4)` row is omitted (loud, every vault refuses) or the v1 and v2 rows
+are hand-written to `v3`; `FTS_KEY_VERSION` stays; the gate corpus lacks a codepoint new in 17; the
+pin ships in a tag without this walk; the multi-tenant server meets the walk inside each vault's first
+request with no warning in `UPGRADING.md`; or the Han-arm change ships later as a second identity.
+
+**What remains.** Which release carries it with O294 (the maintainer's); P-U1, P-L2, P-U7; the
+sentence beside O163; `CLAUDE.md` 276-288 through the maintainer's approval of the pull request.
+
+**Version class.** PATCH-class: O166 records that a `v4` "is not refused as MAJOR (it migrates)"; no
+document names a Unicode version (searched `docs/`, `website/src/`, README, `UPGRADING.md`); the
+change restores the documented promises (byte-reproducible, an upgrade chooses no new space) and
+removes reach from no released population (pending P-U1's assigned-in-16 row: a character that leaves
+Alphabetic between 16 and 17 would remove reach from the images' vaults, and is then named in
+CHANGELOG); an older binary's refusal follows the O233 precedent.
+`UPGRADING.md` owes: every hash vault walks once at its first writable open (P-U7's figure; on the
+multi-tenant server inside the first request per vault, so one writable open per vault before
+serving); prefilter vaults retrain; mirrors are refused `IndexStale` until `index push`; a binary
+before this release refuses a walked vault (`EmbedderMismatch`, exit 1), and on an hmac-only vault
+its writable open first rebuilds `drawers_fts` — upgrade every binary sharing a data directory together, no supported
+downgrade without FORCE plus `repair` on the older binary; read-only replicas warn until a writer
+opens; an older archive restores and walks at the stage, which `RestoreReport` states. `config check`
+cannot detect any of it: it opens no database, the exemption O154 argues and O163 applied. Rides
+`1.7.0`, already MINOR.
+
+**Noted 2026-10-12 by O294's build, beside item 4 — found by the build's second independent review.**
+Item 4's classes are each one short. Rooms: `normalize_wing_name` (`normalize.rs` 625-635) lowercases
+with `str::to_lowercase` before it filters, so a stem holding U+0295 before a capital sigma — a
+character assigned in Unicode 16 that leaves Lowercase in 17 — derives `ʕς` on the images' builds and
+`ʕσ` on the binaries', a different room and so a different drawer id, as a stem holding a codepoint new
+in 17 does. Refine: a subject or predicate holding `ʕΣ` (`refine.rs` 244-245, then
+`kg_add_grounded`) moves its triple id the same way, beside the 28 cased letters. Item 4's treatment
+covers both — a stated cost, never a migration, and no walk may move an id — and CHANGELOG names U+0295
+for rooms and triple ids as well as for tokens (O294's record). Every later move of these id inputs is
+O426's.
+
+#### RULED 2026-10-12 by the maintainer
+
+**The question.** P-U7 — the walk at about 10⁵ drawers, sealed and hmac-only, with the PQ retrain — a
+long run, which the ruling above left to the maintainer's go.
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-12 to the list of
+questions that day's rulings escalated, each shown with its recommended answer, this one among them,
+and relayed with the list to O294's build by the integrator.
+
+**Decided — as recommended, in the integrator's words:** the ~10⁵ walk-cost measurements may run when
+the machine is otherwise idle. P-U7 runs only while no other run, battery or unit is using the machine;
+it sets `UPGRADING.md`'s figure and decides nothing else, as the ruling says. The same answer covers
+O406's P15f (its record of this date).
+
+**What remains open.** The build. Which release carries this entry is settled by O294's: it sits under
+`## 1.7.0 — unreleased` beside that entry (the note above), until the maintainer names another. P-U1 is
+done (O294's record): the ruling stands, and U+0295's class is one CHANGELOG must name.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -37804,16 +38030,18 @@ an O(corpus) read per call is a cost lever on a served vault." Item 6's inventor
 
 **The question.** The name the 2026-10-08 ruling left open: the new door's command and its route.
 
-**The maintainer's answer, as relayed to O294's build by the integrator on 2026-10-12:** O174's door is
-`undercroft vault holes` and `GET /v1/vaults/{id}/holes`.
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-12 to the list of
+questions that day's rulings escalated, each shown with its recommended answer, this one among them,
+and relayed with the list to O294's build by the integrator.
 
-**Decided.** The CLI command `undercroft vault holes` and the `/v1` route `GET /v1/vaults/{id}/holes`, on
-the surfaces the 2026-10-08 ruling decided: the orchestrator's ops plane on the `verify-forgetting`
-precedent, and absent from MCP with an `OPERATOR_ONLY` entry and a `Boundary` row in `SURFACE_ABSENCES`.
+**Decided — as recommended, in the integrator's words:** O174's door is `undercroft vault holes` and
+`GET /v1/vaults/{id}/holes`, on the surfaces the 2026-10-08 ruling decided: the orchestrator's ops
+plane on the `verify-forgetting` precedent, and absent from MCP with an `OPERATOR_ONLY` entry and a
+`Boundary` row in `SURFACE_ABSENCES`.
 
 **What remains open.** The build, under the panels' items 1-8, and the cost run at ~10⁵ sealed drawers
-(P1) on the maintainer's explicit go if it is long — the answer recorded on O421 of this date covers that
-entry's walk, not this probe.
+(P1) on the maintainer's explicit go if it is long — the answer on O421 and O406 of this date covers
+those entries' walks, not this probe.
 
 ### O187 — `refine`'s fact-mirror drawers are embedded and screened with no record naming those endpoints
 
@@ -42262,6 +42490,21 @@ boundary, as "What remains" asks; and item 13's five filings are O416 (i), O417 
 and O420 (v). The correction beside O238 and the scoping of CLAUDE.md's VACUUM sentences remain owed.
 
 **Relations:** shares a diff surface with O269 — one arm for undecodable rows and unparseable meta, and the boundary move that produces both.
+
+#### RULED 2026-10-12 by the maintainer
+
+**The question.** P15f — the walk's wall time and WAL growth, `verify` with the new legs, warm search
+and repeated withheld opens, at ~10⁵ on both levels — a long run; the ruling above allows 10⁶ "only on
+the maintainer's go".
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-12 to the list of
+questions that day's rulings escalated, each shown with its recommended answer, this one among them,
+and relayed with the list to O294's build by the integrator.
+
+**Decided — as recommended, in the integrator's words:** the ~10⁵ measurements may run when the machine
+is otherwise idle; 10⁶ still needs a go of its own.
+
+**What remains open.** The build, gated by its probes; P15f at 10⁶.
 
 ### O235 — `StoreError::Integrity` says "HMAC mismatch" at sites where no HMAC was compared
 
@@ -52200,12 +52443,14 @@ same. Windows' link error on FAT is unmeasured and owed by whichever option is r
 **The question.** Which writer a filesystem without hard links gets for a key: the in-place create as
 built, a no-replace rename, or a refusal.
 
-**The maintainer's answer, as relayed to O294's build by the integrator on 2026-10-12:** O210's
-no-link-filesystem fallback becomes a no-replace rename, through the `rustix` crate.
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-12 to the list of
+questions that day's rulings escalated, each shown with its recommended answer, this one among them,
+and relayed with the list to O294's build by the integrator.
 
-**Decided.** The second option. Where `link()` answers "unsupported", the key's fsynced temp is
-published by a rename that refuses an existing name, so the torn-key window the in-place create keeps
-closes there too. Through `rustix`, a new dependency, rather than a second `unsafe` block, which
+**Decided — as recommended, in the integrator's words:** O210's no-link-filesystem fallback becomes a
+no-replace rename, through the `rustix` crate. Where `link()` answers "unsupported", the key's fsynced
+temp is published by a rename that refuses an existing name, so the torn-key window the in-place create
+keeps closes there too — through `rustix`, a new dependency, rather than a second `unsafe` block, which
 `CLAUDE.md` reserves to the maintainer and which this answer does not grant.
 
 **What remains open.** The build and the gate above. Which call `rustix` reaches on each target
@@ -52338,180 +52583,6 @@ import keeping what its payload says. **Gate**: a `valid_from` that is not a dat
 refusal is ruled, one holding a C0 byte — is refused on MCP, the CLI and `/v1`, and an import of the
 vault's own export still lands; counterfactual, today's acceptance.
 
-### O421 — `undercroft-hash-v3` names two token spaces in released builds: the GHCR images tokenize with Unicode 16, the prebuilt binaries with Unicode 17
-
-**Filed 2026-10-12 by the ruling on O294 and O166 (three lenses and a refuter).** `HashEmbedder`'s
-tokens read std's `char` tables (`is_alphanumeric` in `segment`, `script.rs` 259; `is_uppercase` and
-`to_lowercase` in `search_key`, `normalize.rs` 115 and 330), and so does the room `mine` and `sweep`
-derive from a file stem (`normalize_wing_name`, `normalize.rs` 625-635, through `room_for_file`,
-`crates/undercroft-cli/src/main.rs` 4944-4949), which is a component of the drawer id. Every image
-since `v1.0.0` was built by Rust 1.90 (Unicode 16); every prebuilt binary by 1.97.1, 1.98.0 or 1.98.1
-(Unicode 17 as the review measured 1.97.1 and 1.98.1; 1.98.0 is P-U1's). `enforce_embedder_identity` returns on a name match (store `lib.rs` 3925-3927), so a vault one
-population wrote and the other opens is not walked and nothing says so. O294's ruling of this date
-pins a Unicode-17 toolchain, which moves the image population.
-
-**Noted 2026-10-12 by O294's build — a relation the ruling declared here.** Sequenced with O294 — that
-entry's pin ships in no tag without this entry's walk. O294 closed on that date, so this is a note
-rather than a `Relations:` line, which names open entries only. Until the maintainer names the release
-that carries both, this entry stays under `## Open`; it then moves under that release's heading, where
-O309's tag-reading arm refuses to mark the release released while this entry is open.
-
-**Relations:** sequenced after O423 — a fix to the Han arm, if ruled, rides this identity.
-**Relations:** sequenced before O422 — a decoupled token path must reproduce this identity.
-
-#### RULED 2026-10-12 by three lenses (Agentic Memory Architecture; Retrieval and text processing (Unicode segmentation, normalization stability, vector-space identity); Release engineering and supply chain (reproducible toolchains, what was shipped vs tested, UPGRADING)) and an adversarial refuter
-
-**The question.** Must the released hash space be healed, and how: a new identity with the automatic
-walk, a second identity leg, a targeted re-embed, or a stated residual?
-
-**Prior rulings found, and their disposition.**
-- **O166's ruling of 2026-10-08.** Its option (A), a `v4`, "is not refused as MAJOR (it migrates)"
-  and lost "on the 1.0.0 decision and the fleet-wide cost". The 1.0.0 decision does not reach these
-  populations; both are release populations. Its item 6 put "a v4 back on the table" for exactly a
-  released stale space. Its item 2: "editing a pinned digest IS minting an identity". FOLLOWED.
-- **The v2 precedent** (`embed.rs` 341-356): v2 "could have been redefined in place … Minting v3
-  anyway", because a redefinition leaves vectors "stale and unmigrated, with the identity matching
-  and therefore no warning". FOLLOWED: re-reading `v3` as "Unicode 17" in place is that redefinition,
-  for released vaults.
-- **The documented contract** — `KNOWN_EMBEDDER_UPGRADES`'s doc (store `lib.rs` 707-716): "a user who
-  merely upgraded did not choose a new embedding space and should not have to repair one by hand";
-  `docs/EMBEDDERS.md` 217-219; `CLAUDE.md` 276-283. It is consistent across three surfaces including
-  the doctrine, so by the drift-direction rule the documents lead.
-- **O163's ruling of 2026-10-08.** Its carrier (a second leg, the name unchanged) rests on "an older
-  binary using the same model computes the same space"; for hash an older image computes a DIFFERENT
-  space, so the carrier does not transfer — a distinction, not a refutation. Its scope phrase "`hash`,
-  whose identity is its code's" (ROADMAP 4235) is REFUTED as a description of the released state and
-  restored as a property by O294's compile-time assertion; a sentence goes beside it. Its open point
-  "Sequencing with O166" is the maintainer's; this entry uses the existing name comparison and walk
-  and has no technical ordering constraint with O163's one comparison function, which must carry the
-  `KNOWN_EMBEDDER_UPGRADES` arm whichever lands second.
-- **O233 and O238**: an older binary refusing a vault a newer one has touched shipped as a fix
-  (`UPGRADING.md` 608-636: "There is no supported downgrade after the first writable open"). FOLLOWED.
-- **The code comment at store `lib.rs` 748-749** ("a whole-fleet re-embed is not worth one script's
-  cosine leg"): a judgement about a population O166 then showed no release produced. It is not a
-  ruling and does not outweigh the documents above for a released one.
-
-**Ruled.**
-1. **`HASH_EMBEDDER` becomes `undercroft-hash-v4`**: v3's token rules over the Unicode-17.0.0 tables
-   O294's assertion pins, its doc saying so. A new `HASH_EMBEDDER_V3` constant holds the old name, and
-   `KNOWN_EMBEDDER_UPGRADES` gains `(v3, v4)` beside the v1 and v2 rows, which follow the constant.
-   Every hash vault walks once at its first writable open through `migrate_embedding_space` (store
-   `lib.rs` 4004-4085): every drawer re-embedded through `get`, PQ and IVF dropped
-   (`invalidate_embedding_space`, 4097-4103), one `migrate/embedding-space` chain record, the identity
-   recorded last. Prebuilt-binary vaults recompute byte-identical vectors; image and mixed vaults are
-   healed. No marker tells them apart (O166's option E), so no narrower walk is possible.
-2. **`FTS_KEY_VERSION` moves in the same unit** (store `lib.rs` 705), because `search_key`'s output
-   moves for the 28 newly assigned cased letters and `drawers_fts` holds it; the existing
-   `init_fts_schema` rebuild runs at the first writable open, and a read-only open falls back to the
-   announced full scan until then.
-3. **Mirrors are refused `IndexStale` until `index push`** — correct, since a mirror holds the vectors
-   that were pushed (`remote.rs` 545-557).
-4. **Rooms and refine's KG terms are a stated cost, never a migration.** No walk may move a drawer
-   id. An image vault re-mining a file whose stem holds a codepoint new in 17 derives a new room
-   (under 16 such a stem lost those characters, and a stem made only of them fell to `unsorted`), so a
-   second drawer set counted `created`, outside any room-scoped retention policy; prebuilt-binary
-   vaults re-derive the same room. `refine` re-run moves a triple id only through the 28 cased
-   letters. CHANGELOG names both and the recovery (a re-mine into a fresh wing, or `forget` by source
-   for the old set). Bumping `NORMALIZE_VERSION` (moves every id) and a history-aware room (an id
-   would depend on vault state) are rejected.
-5. **The CJK Extension G–J classification is its own entry** (O423, filed by this ruling),
-   ruled before this entry's unit is built; if it is fixed, it rides this identity so the fleet walks
-   once.
-
-**Options that lost.**
-- **No walk, `v3` redefined as Unicode 17 and `repair` named in CHANGELOG (lens 2).** It leaves image
-  vaults holding Unicode-16 vectors under a name that now means 17 — the redefinition in place the v2
-  precedent refused, the "two spaces under one name" O166 refused in its option (B), and it makes the
-  user "repair one by hand", which the documented contract forbids. Its argument is prevalence, which
-  no corpus on hand can measure for the fleet.
-- **A second identity leg with an unconditional walk, the name unchanged (S4).** Same walk cost; no
-  mirror re-push and no older-binary refusal. It loses because the name would still name two spaces
-  (older images keep writing Unicode-16 vectors into a healed vault with nothing refusing, and a
-  legacy mirror marker is trusted under O163's rule), against O166 item 2's minting rule, and it adds
-  a second mechanism beside a tested one.
-- **Re-embed only the affected drawers (S5)**: O166's option (B), two spaces under one name, and a
-  full decrypt on a sealed vault.
-- **The Unicode version in the identity string per build (S3)**: every reference holder moves with the
-  distribution, and a mixed deployment walks back and forth.
-- **A `v4` over Unicode 16 (lens 3)**: removes reach from every prebuilt-binary vault (O294's record).
-
-**Claims refuted.**
-- Lens 1's end-to-end probe: "the 1.6.1 binary then refuses the vault `EmbedderMismatch`, exit 1,
-  writing nothing" — the open runs `init_fts_schema` (store `lib.rs` 5259) before
-  `enforce_embedder_identity` (3748), so an older WRITABLE open finds `fts_key_version` foreign,
-  rebuilds `drawers_fts` under its own key, writes its own marker, and only then refuses. The next new
-  open rebuilds again. Nothing is lost, and it is stated rather than tested as "nothing written".
-- Lens 1: the name change is a fence. Partly: it also refuses prebuilt-binary 1.6.x binaries that
-  compute identical vectors — a cost O163 counted for its own question, accepted here on the O233
-  precedent.
-- Lens 2's additive standard for future bumps ("V moves with the toolchain" without an identity):
-  refuted by O166 item 2 and the v2 precedent.
-
-**Probes owed.**
-- **P-U1** (O294's record) first. If it shows no std-table difference between 1.90.0 and the pin,
-  this entry is withdrawn by evidence. If it shows an assigned-in-16 character changing a token-path
-  property, the ruling is unchanged and CHANGELOG names that wider class.
-- **P-L2, end to end, no download.** Stand-ins: `git archive v1.6.1` built in
-  `rust:1.98.1-slim-bookworm` (the binaries' population) and in `rust:1.90.0-slim-bookworm` (the
-  images'). Each writes a sealed and an hmac-only vault holding (a) a drawer with U+323B0, (b) a plain
-  drawer, (c) a mined file whose stem holds U+323B0, and a pushed mirror marker. Premise, before the
-  open: (a)'s stored vector differs from a fresh embed by the `v4` build on the images' vault and
-  equals it on the binaries', or the stand-ins did not reproduce the two populations. Opened writable
-  by the `v4` build: one `migrate/embedding-space` record naming `v4`; (a)'s stored vector equals a
-  fresh embed on both; (b)'s decrypted vector is unchanged (premise); `fts_key_version` moved and an
-  hmac-only query holding U+A7CE's case form and a common word returns both drawers; a mirror search
-  refuses `IndexStale` until re-push; a lexical query for (a)'s ideograph finds it on both
-  populations' vaults; re-mining (c) adds no drawers on the binaries' vault and adds the file's chunks
-  on the images' (the stated room cost, measured). Then the 1.6.1 build opens the walked vault and
-  refuses `EmbedderMismatch` with exit 1, appending no drawer, embedding or audit record. Counterfactual:
-  without the `(v3, v4)` row the open refuses `EmbedderMismatch` instead of walking.
-- **P-U7, the maintainer's go (a long run).** The walk at about 10⁵ drawers, sealed and hmac-only,
-  with the PQ retrain. It sets `UPGRADING.md`'s figure and decides nothing else; 45.9 µs/drawer is the
-  old branch head's, on an unnamed corpus.
-- **P-U3 and P-U4, informational.** How many texts and stems in the corpora on hand hold a codepoint
-  new in 17, and that stored bytes, chunk boundaries and `match_key` are identical across the two
-  toolchains. A zero is a fact about those corpora, not the fleet.
-
-**Dissent.** Lens 2 holds no walk; refuted above.
-
-**Fails silently if** the `(v3, v4)` row is omitted (loud, every vault refuses) or the v1 and v2 rows
-are hand-written to `v3`; `FTS_KEY_VERSION` stays; the gate corpus lacks a codepoint new in 17; the
-pin ships in a tag without this walk; the multi-tenant server meets the walk inside each vault's first
-request with no warning in `UPGRADING.md`; or the Han-arm change ships later as a second identity.
-
-**What remains.** Which release carries it with O294 (the maintainer's); P-U1, P-L2, P-U7; the
-sentence beside O163; `CLAUDE.md` 276-288 through the maintainer's approval of the pull request.
-
-**Version class.** PATCH-class: O166 records that a `v4` "is not refused as MAJOR (it migrates)"; no
-document names a Unicode version (searched `docs/`, `website/src/`, README, `UPGRADING.md`); the
-change restores the documented promises (byte-reproducible, an upgrade chooses no new space) and
-removes reach from no released population (pending P-U1's assigned-in-16 row: a character that leaves
-Alphabetic between 16 and 17 would remove reach from the images' vaults, and is then named in
-CHANGELOG); an older binary's refusal follows the O233 precedent.
-`UPGRADING.md` owes: every hash vault walks once at its first writable open (P-U7's figure; on the
-multi-tenant server inside the first request per vault, so one writable open per vault before
-serving); prefilter vaults retrain; mirrors are refused `IndexStale` until `index push`; a binary
-before this release refuses a walked vault (`EmbedderMismatch`, exit 1), and on an hmac-only vault
-its writable open first rebuilds `drawers_fts` — upgrade every binary sharing a data directory together, no supported
-downgrade without FORCE plus `repair` on the older binary; read-only replicas warn until a writer
-opens; an older archive restores and walks at the stage, which `RestoreReport` states. `config check`
-cannot detect any of it: it opens no database, the exemption O154 argues and O163 applied. Rides
-`1.7.0`, already MINOR.
-
-#### RULED 2026-10-12 by the maintainer
-
-**The question.** P-U7 — the walk at about 10⁵ drawers, sealed and hmac-only, with the PQ retrain — a
-long run, which the ruling above left to the maintainer's go.
-
-**The maintainer's answer, as relayed to O294's build by the integrator on 2026-10-12:** the ~10⁵
-walk-cost measurements may run when the machine is otherwise idle.
-
-**Decided.** P-U7 is permitted, on its condition: it runs only while no other run, battery or unit is
-using the machine. It sets `UPGRADING.md`'s figure and decides nothing else, as the ruling says.
-
-**What remains open.** Which release carries this entry with O294's pin, the maintainer's; the build;
-P-U1 is done (O294's record: the ruling stands, and U+0295's class is the one CHANGELOG must name).
-
 ### O422 — the token path, room derivation and refine's lowercasing read std's Unicode tables, so every Rust release that moves them is an identity decision
 
 **Filed 2026-10-12 by the ruling on O294 and O166.** With O294's compile-time assertion, a toolchain
@@ -52520,8 +52591,12 @@ identity and walk the fleet. Decoupling — the sites read a pinned Unicode-data
 version, so the toolchain moves freely — needs a data source, which is a dependency and licence
 choice.
 
-**Relations:** sequenced after O421 — at version 17.0.0 a decoupled path must reproduce that
-identity byte for byte, so it needs no walk of its own.
+**Noted 2026-10-12 by O294's build — a relation the ruling declared here.** Sequenced after O421 — at
+version 17.0.0 a decoupled path must reproduce that identity byte for byte, so it needs no walk of its
+own. O421 sits under `## 1.7.0 — unreleased`, its target release, so this is a note rather than a
+`Relations:` line, which names entries under `## Open` only.
+
+**Relations:** shares a question with O426 — the tables this entry generates are what that entry's id recipes would read, at a version that entry rules.
 
 #### PANEL ANALYSIS 2026-10-12 — escalated to the maintainer
 
@@ -52562,20 +52637,35 @@ value in P-U1's format, equal at 17.0.0.
 std, under which licence and `NOTICE` text — and, separately, whether `icu_properties` and
 `icu_normalizer` owe attribution.
 
-**The maintainer's answer, as relayed to O294's build by the integrator on 2026-10-12:** the token path
-reads in-tree tables generated from the Unicode Character Database 17.0.0 files, each pinned by
-sha256 (the O189 precedent), proven equal to Rust 1.98.1's std; and `icu_properties` and
-`icu_normalizer` (Unicode-3.0) get `NOTICE` attribution.
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-12 to the list of
+questions that day's rulings escalated, each shown with its recommended answer, this one among them,
+and relayed with the list to O294's build by the integrator.
 
-**Decided.** The recommended answer: generated tables, so no crate a `cargo update` can move holds the
-definition. Exactness binds as the analysis states — `is_alphanumeric` as Alphabetic with
-General_Category Nd, Nl and No, the derived Uppercase property, `str::to_lowercase`'s SpecialCasing
-and Final_Sigma — and P-U6 is the proof: the generated tables against 1.98.1's std over every scalar
-value, in P-U1's format (O294's record), equal at 17.0.0. The attribution of the two ICU4X crates
-already compiled in through `url` is owed whether or not this entry is built.
+**Decided — as recommended, in the integrator's words:** the token path reads in-tree tables generated
+from the Unicode Character Database 17.0.0 files, each pinned by sha256 (the O189 precedent), proven
+equal to Rust 1.98.1's std; and `icu_properties` and `icu_normalizer` (Unicode-3.0) get `NOTICE`
+attribution. So no crate a `cargo update` can move holds the definition. Exactness binds as the
+analysis states — `is_alphanumeric` as Alphabetic with General_Category Nd, Nl and No, the derived
+Uppercase property, `str::to_lowercase`'s SpecialCasing and Final_Sigma — and P-U6 is the proof: the
+generated tables against 1.98.1's std over every scalar value, in P-U1's format (O294's record), equal
+at 17.0.0.
 
 **What remains open.** The build, before the first Rust release carrying Unicode 18 is wanted, and the
-`NOTICE` line, which no unit has yet taken.
+`NOTICE` attribution (below).
+
+**Noted 2026-10-12 by O294's build — the attribution can land on its own, and it is not one line.** It
+waits for nothing here: the crates are compiled into every binary today, through `url`, whatever this
+entry's build does. The Unicode License V3 (`icu_properties` 2.2.0's `LICENSE`, read from the registry
+under the pin) grants its permission "provided that either (a) this copyright and permission notice
+appear with all copies of the Data Files or Software, or (b) this copyright and permission notice
+appear in associated Documentation", so `NOTICE` owes the copyright line and the whole notice, a block
+of the `calendrical_calculations` shape; and the resolved graph holds 19 packages declaring
+Unicode-3.0 (`cargo metadata` under 1.98.1): the seven `icu_*` crates, `litemap`, `potential_utf`,
+`tinystr`, `writeable`, `yoke`, `zerofrom`, `zerotrie` and `zerovec`, the three `-derive` proc-macro
+crates beside them, and `unicode-ident` (MIT or Apache-2.0, AND Unicode-3.0). The answer named two.
+Which of the 19 a `NOTICE` block must name — the proc-macro crates and `unicode-ident` run at build
+time — is the attributing unit's to read and state, so O294's build leaves the block to that unit
+rather than writing a one-line entry that would be short.
 
 ### O423 — `script_of`'s Han arm stops at Extension F, so CJK Extensions G, H, I and J tokenize as one whole-run `Other` token
 
@@ -52591,7 +52681,9 @@ of the toolchain. Fixing it moves assigned characters' tokens, so it carries an 
 O421 item 5 asks that it be ruled before that entry's unit is built, so that a fix rides the
 same walk.
 
-**Relations:** sequenced before O421 — if fixed, the fix rides that entry's identity.
+**Noted 2026-10-12 by O294's build — a relation the ruling declared here.** Sequenced before O421 — if
+fixed, the fix rides that entry's identity. O421 sits under `## 1.7.0 — unreleased`, its target
+release, so this is a note rather than a `Relations:` line, which names entries under `## Open` only.
 
 **For a ruling**: whether to widen the arm, and whether Extension J (Unicode 17 only) joins it. **Gate**:
 a drawer holding a two-character Extension G word inside a longer run answers a query for that word,
@@ -52635,6 +52727,35 @@ stated decision that pins move only when a person reviews a release. The toolcha
 feed either way; a bump is one change across the file and the image references, which the preflight
 holds. **Gate**: on enabling, a deliberately stale pin on a scratch branch draws an alert or a pull
 request; on a decision not to, the decision is recorded here with its argument.
+
+### O426 — a mined drawer's room and a refined fact's id are derived through std's Unicode lowercasing, so a Unicode version that moves moves an identifier
+
+**Filed 2026-10-12 by O294's build, from its second independent review.** Two id recipes take an input
+std's Unicode tables decide. `room_for_file` (`crates/undercroft-cli/src/main.rs` 5136-5141) derives a
+mined drawer's room from its file stem through `normalize_wing_name`
+(`crates/undercroft-core/src/normalize.rs` 625-635: `str::to_lowercase`, then `is_alphanumeric`), and
+the room is a component of the drawer id; `refine` lowercases a triple's subject and predicate with
+`str::to_lowercase` (`crates/undercroft-cli/src/refine.rs` 244-245) before `kg_add_grounded` derives
+the triple id from them. Between 1.90.0 and 1.98.1 (O294's P-U1) both move for the 4,672 codepoints
+newly alphanumeric, the 28 newly cased letters and one character assigned in Unicode 16: U+0295 before
+a capital sigma, `ʕΣ` lowercasing to `ʕς` under 1.90.0 and `ʕσ` under 1.98.1. An identifier is a
+durable reference — held by the audit chain, receipts, supersession links, exports and agents across
+sessions (`CLAUDE.md`) — and no embedder identity or walk can heal one that moved. O421's ruling item 4
+states the 1.90-to-1.98.1 move as a cost for the images' vaults and forbids a walk that moves an id.
+What no entry asks is whether a LATER move may happen at all: O294's assertion holds both inputs at
+Unicode 17.0.0 only as long as the toolchain is held, and O422's generated tables, once the token path
+moves to Unicode 18, would carry the room and the triple id with it unless these recipes read a table
+frozen for identifiers. O422's title names room derivation and refine's lowercasing among the sites;
+its question is the data source, not whether an identifier may move.
+
+**For a ruling.** Whether an id recipe's Unicode input is frozen for the life of `NORMALIZE_VERSION`
+(room derivation and refine's lowercasing reading O422's tables at 17.0.0 forever while the token path
+moves on), versioned with the recipe (a `NORMALIZE_VERSION` bump, which moves every id and which O421's
+ruling rejected for this move), or moved with a cost stated per Unicode version as O421 did. **Gate**: a
+stem and a triple subject holding `ʕΣ` and a codepoint new in Unicode 17 derive byte-identical rooms and
+triple ids under every build that compiles; counterfactual, the derivation over 1.90.0's tables.
+
+**Relations:** shares a question with O422 — the tables that entry generates are what this entry's id recipes would read, at a version this entry rules.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

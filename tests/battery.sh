@@ -798,9 +798,10 @@ fi
 #                job-level `env:` carries the token;
 #   toolchain    `rust-toolchain.toml` is the pin, read through
 #                `.github/scripts/pinned-toolchain.sh --channel` (its one
-#                reader, the one CI installs with); every `rust:` image in a
-#                Dockerfile, a compose file or a workflow names exactly that
-#                version; no workflow names a toolchain any other way; and every
+#                reader, the one CI installs with); every Rust image a
+#                Dockerfile, a compose file or a workflow names is tagged with
+#                exactly that version on the runtime stage's distribution; no
+#                workflow names a toolchain any other way; and every
 #                job that runs cargo outside a container calls that script
 #                before its first cargo line;
 #   containers   every container this script launches names its image through
@@ -973,42 +974,72 @@ sc_permissions() {
 # copy (the review's plants). Such an image must be Docker Hub's official one,
 # tagged with the pinned version in full. A reference built from a variable is
 # not judged; none exists in the tree, and the residual is stated.
+#
+# The second review's plants widened it again: an image is also NAMED by a
+# flow mapping (`container: {image: "rust:…"}`, which the key reader took as
+# the word `{image:`), by `COPY --from=` and by a `RUN --mount=…,from=`; and a
+# Rust image must carry the runtime stage's distribution in its tag
+# (`<pin>-slim-<dist>` or `<pin>-<dist>`), because a builder on a newer
+# distribution than the runtime stage links a glibc the runtime does not have —
+# which fails at start, not at build (O294's ruling, its decision rule). A
+# `--from=` that names a stage is a word whose last component is not `rust`,
+# and is passed over like any other image.
 SC_FROM_RE='^[[:space:]]*[Ff][Rr][Oo][Mm][[:space:]]+((--[^[:space:]]+[[:space:]]+)*)([^[:space:]]+)'
-SC_IMGKEY_RE='^[[:space:]]*(-[[:space:]]+)?(image|container):[[:space:]]*"?([^"[:space:]#]+)'
+SC_IMGKEY_RE='^[[:space:]]*(-[[:space:]]+)?(image|container):[[:space:]]*"?([^"{[:space:]#][^"[:space:]#]*)'
+SC_FLOWIMG_RE='[{,][[:space:]]*image:[[:space:]]*"?([^",}[:space:]#]+)'
+SC_FROMFLAG_RE='(--from=|,from=)"?([^",[:space:]]+)'
+SC_RUNTIME_RE='^[Ff][Rr][Oo][Mm][[:space:]]+debian:([a-z]+)-slim([[:space:]]|$)'
 SC_MECH_RE='uses:[[:space:]]*"?[^"[:space:]]*(rust-toolchain|setup-rust|actions-rs)|^[[:space:]]*toolchain:|rustup[[:space:]]+(default|override|toolchain|install|update|target|set|run)([[:space:]]|$)|RUSTUP_TOOLCHAIN|(cargo|rustc)[[:space:]]+\+'
-sc_images() {  # <pinned version> <file>...
-  local want=$1 f ln n ref base last name tag prefix v seen=0
-  shift
+sc_image_refs() {  # <line> — every image reference the line names, one per line
+  local ln=$1 rest
+  if [[ $ln =~ $SC_FROM_RE ]]; then printf '%s\n' "${BASH_REMATCH[3]}"
+  elif [[ $ln =~ $SC_IMGKEY_RE ]]; then printf '%s\n' "${BASH_REMATCH[3]}"
+  fi
+  if [[ $ln =~ $SC_FLOWIMG_RE ]]; then printf '%s\n' "${BASH_REMATCH[1]}"; fi
+  rest=$ln
+  while [[ $rest =~ $SC_FROMFLAG_RE ]]; do
+    printf '%s\n' "${BASH_REMATCH[2]}"
+    rest=${rest#*"${BASH_REMATCH[0]}"}
+  done
+}
+sc_images() {  # <pinned version> <runtime distribution> <file>...
+  local want=$1 dist=$2 f ln n ref base last name tag prefix v seen=0
+  shift 2
   for f in "$@"; do
     n=0
     while IFS= read -r ln || [ -n "$ln" ]; do
       n=$((n + 1))
       case "${ln#"${ln%%[![:space:]]*}"}" in "#"*) continue ;; esac
-      if [[ $ln =~ $SC_FROM_RE ]]; then ref=${BASH_REMATCH[3]-}
-      elif [[ $ln =~ $SC_IMGKEY_RE ]]; then ref=${BASH_REMATCH[3]-}
-      else continue
-      fi
-      base=${ref%%@*}
-      case "$base" in *'$'*) continue ;; esac
-      last=${base##*/}; name=${last%%:*}
-      [ "$name" = rust ] || continue
-      seen=$((seen + 1))
-      case "$last" in *:*) tag=${last#*:} ;; *) tag="" ;; esac
-      case "$base" in */*) prefix=${base%/*} ;; *) prefix="" ;; esac
-      case "$prefix" in
-        ""|library|docker.io/library) ;;
-        *) echo "  $f:$n: $ref is a Rust image from $prefix, not Docker Hub's official image"; continue ;;
-      esac
-      if [ -z "$tag" ]; then
-        echo "  $f:$n: $ref names no version at all; name rust:$want in full"; continue
-      fi
-      v=${tag%%-*}
-      [ "$v" = "$want" ] \
-        || echo "  $f:$n: $ref names $v, where rust-toolchain.toml pins $want; name the pinned version in full"
+      while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
+        base=${ref%%@*}
+        case "$base" in *'$'*) continue ;; esac
+        last=${base##*/}; name=${last%%:*}
+        [ "$name" = rust ] || continue
+        seen=$((seen + 1))
+        case "$last" in *:*) tag=${last#*:} ;; *) tag="" ;; esac
+        case "$base" in */*) prefix=${base%/*} ;; *) prefix="" ;; esac
+        case "$prefix" in
+          ""|library|docker.io/library) ;;
+          *) echo "  $f:$n: $ref is a Rust image from $prefix, not Docker Hub's official image"; continue ;;
+        esac
+        if [ -z "$tag" ]; then
+          echo "  $f:$n: $ref names no version at all; name rust:$want-slim-$dist in full"; continue
+        fi
+        v=${tag%%-*}
+        if [ "$v" != "$want" ]; then
+          echo "  $f:$n: $ref names $v, where rust-toolchain.toml pins $want; name the pinned version in full"
+        elif [ "$tag" != "$want-slim-$dist" ] && [ "$tag" != "$want-$dist" ]; then
+          echo "  $f:$n: $ref is not built on $dist, the runtime stage's distribution; name rust:$want-slim-$dist"
+        fi
+      done < <(sc_image_refs "$ln")
     done < "$f"
   done
   echo "examined=$seen"
 }
+# `RUSTUP_TOOLCHAIN` is matched in any case as well: Windows reads environment
+# names case-insensitively, so `rustup_toolchain:` in a Windows job's `env:` IS
+# the variable (the second review's plant).
 sc_mechanisms() {
   local f ln n seen=0
   for f in "$@"; do
@@ -1016,7 +1047,7 @@ sc_mechanisms() {
     while IFS= read -r ln || [ -n "$ln" ]; do
       n=$((n + 1)); seen=$((seen + 1))
       case "${ln#"${ln%%[![:space:]]*}"}" in "#"*) continue ;; esac
-      if [[ $ln =~ $SC_MECH_RE ]]; then
+      if [[ $ln =~ $SC_MECH_RE ]] || [[ ${ln^^} == *RUSTUP_TOOLCHAIN* ]]; then
         echo "  $f:$n: a toolchain named outside rust-toolchain.toml: ${ln#"${ln%%[![:space:]]*}"}"
       fi
     done < "$f"
@@ -1185,28 +1216,39 @@ if [ "$(bash "$SC_TMP/pin-good/.github/scripts/pinned-toolchain.sh" --channel 2>
   echo "FAIL  premise: the pin's reader did not read 1.2.3 from a well-formed toolchain file"
   SC_FAIL=1
 fi
-# The review's plants among them: an untagged `FROM rust`, another registry's
-# Rust image, a `latest` behind a `--platform` flag.
+# The two reviews' plants among them: an untagged `FROM rust`, another
+# registry's Rust image, a `latest` behind a `--platform` flag, an image named
+# by `COPY --from=` and by `RUN --mount=…,from=`, a builder on another
+# distribution than the runtime stage, one naming none, and a flow mapping.
 printf '%s\n' 'FROM rust:1.2-slim-bookworm AS b' 'FROM rust AS c' \
   'FROM ghcr.io/rust-lang/rust:1.2.3 AS d' 'FROM --platform=linux/amd64 rust:latest AS e' \
+  'COPY --from=rust:1.2-slim-bookworm /usr/local/cargo /usr/local/cargo' \
+  'RUN --mount=type=bind,from=rust:1.2.4-slim-bookworm,target=/x true' \
+  'FROM rust:1.2.3-slim-trixie AS t' 'FROM rust:1.2.3 AS u' 'COPY --from=b /x /y' \
   'FROM debian:bookworm-slim' > "$SC_TMP/Dockerfile.bad"
 printf '%s\n' 'services:' '  s:' '    image: "rust:1.2.4"' > "$SC_TMP/compose-bad.yml"
+printf '%s\n' 'jobs:' '  a:' '    container: {image: "rust:1.2-slim-bookworm"}' > "$SC_TMP/wf/img-bad.yml"
 printf '%s\n' '# FROM rust:9.9.9' 'FROM rust:1.2.3-slim-bookworm AS b' \
-  'FROM docker.io/library/rust:1.2.3 AS c' 'from --platform=linux/arm64 library/rust:1.2.3-slim AS d' \
+  'FROM docker.io/library/rust:1.2.3-slim-bookworm AS c' \
+  'from --platform=linux/arm64 library/rust:1.2.3-bookworm AS d' 'COPY --from=b /x /y' \
+  'COPY --from=rust:1.2.3-slim-bookworm /usr/local/cargo /c' \
   'FROM my/rusty:0.1 AS e' 'FROM debian:bookworm-slim' > "$SC_TMP/Dockerfile.good"
-sc_tally "the image arm on five planted images" \
-  "$(sc_images 1.2.3 "$SC_TMP/Dockerfile.bad" "$SC_TMP/compose-bad.yml")" 5 5
-sc_tally "the image arm on a clean sample" "$(sc_images 1.2.3 "$SC_TMP/Dockerfile.good")" 0 3
+printf '%s\n' 'jobs:' '  a:' '    container: {image: "rust:1.2.3-slim-bookworm", options: --cpus 1}' \
+  > "$SC_TMP/wf/img-good.yml"
+sc_tally "the image arm on ten planted images" \
+  "$(sc_images 1.2.3 bookworm "$SC_TMP/Dockerfile.bad" "$SC_TMP/compose-bad.yml" "$SC_TMP/wf/img-bad.yml")" 10 10
+sc_tally "the image arm on a clean sample" \
+  "$(sc_images 1.2.3 bookworm "$SC_TMP/Dockerfile.good" "$SC_TMP/wf/img-good.yml")" 0 5
 # And the review's toolchain plants: `rustup run`, another setup action, a
 # `toolchain:` input.
 printf '%s\n' '      - uses: dtolnay/rust-toolchain@stable' '        run: rustup default stable' \
   '        run: cargo +nightly build' '        env:' '          RUSTUP_TOOLCHAIN: stable' \
   '        run: rustup run nightly cargo build' \
   "      - uses: actions-rust-lang/setup-rust-toolchain@$SC_HEX40 # v1" '        with:' \
-  '          toolchain: stable' > "$SC_TMP/wf/mech-bad.yml"
+  '          toolchain: stable' '    env:' '      rustup_toolchain: 1.2.3' > "$SC_TMP/wf/mech-bad.yml"
 printf '%s\n' '      - run: rustup component add rustfmt clippy' '      # rustup default stable' \
   '      - run: cargo build --release' '        with:' '          tool: cargo-audit' > "$SC_TMP/wf/mech-good.yml"
-sc_tally "the mechanism arm on seven planted toolchains" "$(sc_mechanisms "$SC_TMP/wf/mech-bad.yml")" 7 9
+sc_tally "the mechanism arm on eight planted toolchains" "$(sc_mechanisms "$SC_TMP/wf/mech-bad.yml")" 8 11
 sc_tally "the mechanism arm on a clean sample" "$(sc_mechanisms "$SC_TMP/wf/mech-good.yml")" 0 5
 printf '%s\n' 'jobs:' '  a:' '    steps:' '      - run: cargo build' '  b:' '    steps:' \
   '      - run: cargo build' '      - run: bash .github/scripts/pinned-toolchain.sh' > "$SC_TMP/wf/cargo-bad.yml"
@@ -1241,11 +1283,23 @@ SC_PIN=$(bash .github/scripts/pinned-toolchain.sh --channel 2>&1)
 SC_PIN_RC=$?
 SC_PIN_MSG=$SC_PIN
 [ "$SC_PIN_RC" -eq 0 ] || SC_PIN="(no pin)"
+# The runtime stage's distribution, which every Rust image's tag must name: the
+# Dockerfile's one `FROM debian:<dist>-slim`. None, or two, is a premise
+# failure — the distribution check would otherwise compare against nothing.
+SC_DIST=""; SC_DIST_N=0
+while IFS= read -r sc_ln || [ -n "$sc_ln" ]; do
+  if [[ $sc_ln =~ $SC_RUNTIME_RE ]]; then SC_DIST=${BASH_REMATCH[1]}; SC_DIST_N=$((SC_DIST_N + 1)); fi
+done < Dockerfile
+if [ "$SC_DIST_N" -ne 1 ]; then
+  echo "FAIL  premise: the Dockerfile names $SC_DIST_N runtime base(s) of the form debian:<dist>-slim, where"
+  echo "      the toolchain arm needs exactly one to read the distribution every Rust image must match."
+  SC_FAIL=1; SC_DIST="(none)"
+fi
 # The file lists are tracked paths, newline-separated and free of spaces, so
 # they are word-split on purpose.
 SC_A=$(sc_actions $SC_WFS)
 SC_P=$(sc_permissions $SC_WFS)
-SC_I=$(sc_images "$SC_PIN" $SC_IMGFILES)
+SC_I=$(sc_images "$SC_PIN" "$SC_DIST" $SC_IMGFILES)
 SC_M=$(sc_mechanisms $SC_IMGFILES)
 SC_N=$(sc_native_cargo $SC_WFS)
 SC_C=$(sc_containers tests/battery.sh)
@@ -1283,7 +1337,7 @@ if [ "$SC_FAIL" -ne 0 ]; then
   echo "BATTERY FAILED — preflight"
   exit 1
 fi
-echo "ok    rust $SC_PIN everywhere ($SC_I_N image(s), $SC_N_N native cargo job(s) through the script);"
+echo "ok    rust $SC_PIN on $SC_DIST everywhere ($SC_I_N image(s), $SC_N_N native cargo job(s) through the script);"
 echo "      $SC_A_T third-party action(s) by SHA in $SC_A_N uses: across $SC_P_N workflow(s) of $SC_P_J job(s),"
 echo "      no workflow-level write; $SC_C_N container launch(es) by digest, read-only and offline"
 
