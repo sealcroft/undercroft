@@ -3274,10 +3274,12 @@ pub struct VerifyReport {
     /// **A bare drawer id is the case that reason did not describe**, and it
     /// discriminates because destruction is a choke point: the crate has one
     /// `DELETE FROM drawers WHERE id` (`destroy_in`, ROADMAP O255) and it
-    /// appends `del/{id}` in the same transaction, inherited by both of its
-    /// callers — the public delete (`delete_drawer_ruled`, which
-    /// `delete_by_source` loops) and the attested destruction `forget`, the
-    /// retention sweep and admission deny share. So no live row
+    /// appends `del/{id}` in the same transaction, inherited by all four of its
+    /// callers — the public delete (`delete_drawer_ruled`), the whole-source
+    /// delete (`delete_by_source`, one lock since ROADMAP O259), the allow's
+    /// removal of its queue row (one lock since O260), and the attested
+    /// destruction `forget`, the retention sweep and admission deny share
+    /// (`attest_in`). So no live row
     /// AND no tombstone is unreachable legitimately; it is a relabel onto a drawer
     /// nothing destroyed. Enumerated from every `chain_append` call site,
     /// which is also what establishes that a label with no `/` can only be a
@@ -7465,6 +7467,49 @@ impl VaultStore {
         })
     }
 
+    /// One drawer write inside a write lock the CALLER holds (ROADMAP O260):
+    /// [`Self::write_drawer_stmts`] on that lock's transaction, never committed
+    /// and never anchored here — the caller's lock decides whether all of its
+    /// writes land or none, and the anchor and the derived-row bookkeeping
+    /// (`post_write`) follow its COMMIT. Returns whether the id was new.
+    ///
+    /// **A locked write is never screened.** A screen can consult the tier-2
+    /// advisor — a network call that must never run under the write lock —
+    /// and can divert, a second write the caller did not plan. So only the
+    /// operator's ruling reaches here, stated as at the choke point: the
+    /// `Screen` is still a required argument, and `OperatorRuling` still
+    /// carries the expectation the boundary checks inside this same
+    /// transaction (ROADMAP O224). Anything else is a defect in the caller.
+    /// The match is exhaustive, so a new bypass does not compile until it is
+    /// ruled here too.
+    pub(crate) fn write_drawer_in(
+        &self,
+        snap: &chain::Snapshot<'_>,
+        drawer: &Drawer,
+        embedding: &[f32],
+        screen: Screen,
+    ) -> Result<bool, StoreError> {
+        let defect = |what: &str| {
+            StoreError::Invalid(format!(
+                "{what} inside a write lock (ROADMAP O260); this is a defect in the caller, \
+                 not in the vault"
+            ))
+        };
+        if snap.origin() != chain::Origin::WriteLocked {
+            return Err(defect("a locked write ran outside"));
+        }
+        let ruling = match screen {
+            Screen::Bypass(BypassReason::OperatorRuling(expected)) => expected,
+            Screen::Apply => return Err(defect("a write is never screened")),
+            Screen::Bypass(BypassReason::AlreadyDiverted) => {
+                return Err(defect("a diversion is never written"))
+            }
+        };
+        crate::manage::live(snap)?;
+        let (is_new, _, _) = self.write_drawer_stmts(drawer, embedding, false, Some(ruling))?;
+        Ok(is_new)
+    }
+
     /// The counter **and** the live frame for one written drawer, decided by
     /// ONE classification of where the row actually landed.
     ///
@@ -7539,7 +7584,7 @@ impl VaultStore {
     }
 
     fn write_drawer_stmts(
-        &mut self,
+        &self,
         drawer: &Drawer,
         embedding: &[f32],
         // Did the admission screen's own diversion produce this drawer? Only
@@ -11057,10 +11102,10 @@ impl VaultStore {
                 // discriminating because deletion is a choke point:
                 // `destroy_in` holds the only `DELETE FROM drawers WHERE id`
                 // in the crate (ROADMAP O255) and appends `del/{id}` in the
-                // SAME transaction, and both of its callers (the public
-                // delete, which `delete_by_source` loops, and the attested
-                // destruction `forget`, the retention sweep and admission
-                // deny share) inherit it.
+                // SAME transaction, and all four of its callers (the public
+                // delete, the whole-source delete, the allow's removal of its
+                // queue row, and the attested destruction `forget`, the
+                // retention sweep and admission deny share) inherit it.
                 //
                 // So: no live row AND no tombstone is not ordinary operation.
                 // It is a relabel onto a drawer that was never destroyed —
@@ -18223,10 +18268,11 @@ mod tests {
 
     /// The C3.3 gate's crash-window clause: the allow/deny state machine
     /// converges from every partial state, and the chain stays green
-    /// through every one of them. The doc comment on `admission_allow`
-    /// promises exactly this ("a crash between the two steps leaves both
-    /// copies present and the pending entry intact — re-running the allow
-    /// converges"); this is that promise under test rather than in prose.
+    /// through every one of them. Since ROADMAP O255 (deny) and O260 (allow)
+    /// each ruling is one write lock, so this build leaves none of these
+    /// states; an older binary interrupted mid-ruling did, and a vault it
+    /// wrote still holds them — so the module doc's promise that re-running
+    /// the allow converges stays under test rather than in prose.
     #[test]
     fn the_admission_state_machine_converges_from_every_crash_window() {
         let (_d, mut s) = store(SecurityLevel::Sealed);

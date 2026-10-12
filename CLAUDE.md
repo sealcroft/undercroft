@@ -1396,7 +1396,8 @@ Consequences that are binding, not advisory:
   arguments name the reserved wing or an `*id` resident in it, so the
   agent whose write was diverted can neither read the evidence back nor
   delete it; allow/deny chain-audited
-  with the verdict inside the ruling tag; operator surfaces only, never
+  with the verdict inside the ruling tag, each ruling ONE write lock with
+  its effect (deny since O255, allow since O260); operator surfaces only, never
   MCP; default off = byte-identical write contract; **a pending row's text
   changes only by a ruling (O220)** — the queue id is a function of the
   filing, so a second flagged text for one filing (an edited re-mine, two
@@ -1472,7 +1473,22 @@ Consequences that are binding, not advisory:
   `is_autocommit()` before each write, because a statement that fails can
   make SQLite roll the whole transaction back and the next one would then
   commit on its own (measured). The label guard stays OUTSIDE the lock,
-  where a miss replays in a read snapshot),
+  where a miss replays in a read snapshot. **The two unattested
+  destructions take the same lock since O259/O260**: `delete_by_source`
+  refuses review evidence at a door in front of its lock (a failing fence
+  query refuses — it read as "not pending"; a refusal takes no lock and
+  drops no cache), then reads the members again and destroys them in one
+  lock (`delete_source_in`), and `admission allow` re-files, rules and
+  removes the queue row in one lock (`allow_in`) through `write_drawer_in`,
+  which takes only the operator's ruling and never screens, after
+  re-reading the row and requiring it to be byte for byte the row its door
+  judged — so a deny of the same row either wins whole or is refused, and
+  the trail holds one verdict. **And the pending-evidence fence is a
+  WITNESS, not a call-site check**: `destroy_in` takes the `Fenced` value
+  `fence` mints inside the lock (refusing a pending drawer under `Protect`)
+  and no id, nothing else constructs one, and `Ruled` is stated by the two
+  rulings alone — the first build of O259/O260 had made it a call-site
+  check again, and one swallowed `?` destroyed a pending member),
   retention policies (retention.rs — C3.2 phase 2: per wing/room on the
   wing-trust pattern, operator-only + HMAC-tagged + audited, flip fails
   list AND sweep; enforcement is an **explicit sweep** through

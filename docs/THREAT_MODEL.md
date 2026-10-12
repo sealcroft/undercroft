@@ -939,8 +939,14 @@ write path at all.
   each chain-logged with the verdict inside the ruling tag's canonical;
   a human allows (the accountable override) or denies — and a deny
   destroys through C3.2's attested forgetting, handing back the
-  receipt. Crash-safe by the same reconciliation the rotation path
-  proves.
+  receipt. Each ruling is ONE write lock — a deny's ruling and
+  destruction (ROADMAP O255), an allow's re-filed write, ruling and
+  removal of the queue row (O260) — so a crash leaves none of a ruling,
+  and an allow and a deny racing on one row leave exactly one verdict:
+  the one that loses is refused with nothing written or destroyed. (An
+  allow was three transactions; a deny landing between them left both
+  verdicts in the trail and the denied text live at its destination.)
+  Crash-safe by the same reconciliation the rotation path proves.
 - **The operator/agent boundary is counted, not remembered** (BUILT) —
   the operator-only capabilities are recorded in the surface-parity
   inventory, `OPERATOR_ONLY` in `crates/undercroft-cli/src/parity.rs`,

@@ -6981,7 +6981,7 @@ delivery, and by the CLI after it (O262); the mirrored forget's remote delete
 ahead of the lock (O175); the sweep's membership as of its walk; the hold,
 linear in the destruction (O264); receipts minted earlier beside a writer (O261);
 `delete_by_source` (O259) and `admission_allow` (O260) still several
-transactions; a planted trigger inside the database (O263 — the record
+transactions (both one lock since 2026-10-08, closed); a planted trigger inside the database (O263 — the record
 assertion catches it writing into a receipt's interval, and nothing names one
 that copies destroyed content). The read-only refusal reuses O184's door, whose
 wording ("what it sent first could not be recorded") describes an egress and
@@ -16070,6 +16070,257 @@ prints its secrets to stdout and writes no file. O212's read-only refusal stays 
 
 PATCH inside the unreleased 1.7.0: a keygen over a link exits 1 where it wrote through a dangling one;
 `UPGRADING.md` carries it beside O210's; `config check` cannot see a flag on one command.
+
+### O259 — CLOSED 2026-10-08: `delete_by_source` is one write lock — a failure anywhere, a failing fence query included, deletes nothing of the source
+
+**Filed 2026-09-25 by O255's ruling (the security and agentic-memory lenses and
+the refuter); read in code, not measured.** Its doc promises the call "is
+refused BEFORE anything is deleted rather than half-way through"
+(`crates/undercroft-store/src/manage.rs`), and it keeps that promise only for
+pending review evidence. Each drawer is deleted by `delete_drawer` in its own
+write lock, so a busy lock or a failing statement at drawer k leaves k−1 drawers
+of the source deleted and returns an error; and its pending-evidence pre-flight
+reads the fence through `.unwrap_or(false)`, so a fence query that FAILS counts
+as "not pending" and lets the loop reach a pending drawer, which the choke point
+then refuses mid-loop.
+
+**Shape**: the same one-lock destruction body O255 built, the whole source in one
+transaction, the pre-flight's errors propagated. Unattested either way — this
+path mints no receipt.
+
+**Gate**: a `RAISE(ABORT)` injected on the k-th drawer leaves every drawer of the
+source present; a fence query made to fail refuses the call with nothing deleted.
+**Counterfactual**: today, k−1 drawers deleted and an error.
+
+#### BUILT 2026-10-08, to the filed shape — the ruling that filed it answers its design, so no panel was convened
+
+**Grounding.** O255's ruling (item 1: one destruction body, its callers holding
+the lock; item 4: nothing swallowed inside the lock, `is_autocommit()` before
+every write) is the shape, and O259's own filing names it. P01's reconciled
+record of 2026-10-08 (`.handover/rulings-2026-10-07/final/P01-queue-identity.md`)
+says the fence's `unwrap_or(false)` "becomes `?` in this unit … O259 keeps its
+one-lock half" — followed: the `?` is built here.
+
+**What landed** (`manage.rs`). `delete_by_source` is one
+`under_destruction_lock`: inside it, the source's members (`SELECT … WHERE
+json_extract(meta_json, '$.source_file')`, on the lock's snapshot), the
+pending-evidence fence over every member with its error propagated, then
+`destroy_in` per member and one `settle_derived`. A pending member refuses the
+call with the message it always had; a fence query that fails refuses with its
+own error; a busy `BEGIN`, a failing statement or a transaction SQLite rolled
+back (the tripwire) refuses with nothing deleted. One anchor and the RAM caches
+after the COMMIT, as for every destruction. An empty source commits nothing
+and anchors nothing. Unattested, as filed.
+
+**The gate** (`destruction_tests.rs`, three tests, looped ten times with the
+O260 arms: 10 of 10 green). `o259_an_injected_failure_mid_source_deletes_nothing`
+— `RAISE(ABORT)` and `RAISE(ROLLBACK)` on the fourth of six members, sealed and
+hmac-only: refused, six of six present, no record, `verify` green, then the clean
+delete takes six. `o259_a_failing_fence_query_refuses_with_nothing_deleted` — an
+authorizer denies the second read of `drawers.wing`, the fence on the pending
+member, with the unarmed refusal asserted first as the premise.
+`o259_a_source_delete_held_off_at_any_step_deletes_all_or_nothing` — a raw
+connection takes the write lock from every step on. The source gate
+`o255_the_locked_bodies_open_no_door_and_one_place_deletes_a_drawer` now reads
+`delete_by_source`'s body too. **e2e** (`tests/e2e.sh`, seven checks): a failure
+planted on the fourth drawer of a source with `sqlite3` refuses the CLI, MCP's
+`undercroft_delete_by_source` and `/v1`'s `DELETE …/drawers?source=` with six of
+six left; dropped, `/v1` deletes six; `verify` green. Run against a release
+binary built from the tree before this unit, the CLI, MCP and `/v1` checks each
+found 3 of 6 left, twice.
+
+**Counterfactuals.** The tree before this unit (`5f5fe2f`'s store, these tests):
+the injected failure left **3 of 6**; the failed fence query left **2 of 3** with
+the pending member's refusal returned; the held-off arm, 6,401 steps, the lock
+taken in 61 runs, **49 partial deletions** among 51 refusals. The fix's own: the
+fence's `?` put back to `unwrap_or(false)` inside the lock — the call answers
+**Ok(3)**, deleting the pending member with the others, worse than the defect it
+replaces.
+
+**A real corpus.** The LoCoMo feed mined into seven wings — six one-source parts
+of 14–15 drawers and the whole feed as one 85-drawer source, 171 drawers —
+beside a `/v1` save loop in the server (400 saves, all 2xx): a failure planted
+on the middle member of a 14-drawer source refused the CLI delete in 47 ms with
+14 of 14 left; dropped, the delete took 14 in 94 ms; `/v1` deleted the 85-drawer
+source in 66 ms; `VERIFY OK`. Small, and stated as such.
+
+**Found in passing, filed rather than fixed**: `/v1`'s source delete does not
+percent-decode its `source`, so a path a URL must encode answers `deleted: 0`
+(O-NEW-o259-1).
+
+**Reviewed 2026-10-12** — the independent review's findings on this entry and
+O260 are recorded once, in O260's `REVIEWED` subsection: the pending-evidence
+fence is a witness `destroy_in` requires, `delete_by_source` refuses review
+evidence at a door in front of its lock again (an empty source takes no lock),
+and its in-lock body is `delete_source_in`, which the source gate reads.
+
+### O260 — CLOSED 2026-10-08: `admission allow` is one write lock — its re-filed write, its ruling and the queue row's removal commit together, after the row is re-read and found byte for byte the row its door judged
+
+**Filed 2026-09-25 by O255's ruling (the security and agentic-memory lenses and
+the refuter); read in code, not measured.** `admission_allow`
+(`crates/undercroft-store/src/admission.rs`) re-files the drawer, appends its
+ruling, and deletes the queue row, each its own transaction. A `deny` of the same
+row from another handle can land between them: the trail then records both
+`allowed` and `denied`, and the deny's receipt attests the destruction of content
+that survives, re-filed under its ordinary id. O255 moved `deny`'s ruling into
+its destruction's lock; the allow is the other half of the race.
+
+**Shape**: the allow's three writes in one write lock, the queue row re-checked
+inside it (the O224 `destination_state` door already runs inside
+`write_drawer_stmts`).
+
+**Gate**: an allow and a deny of one queue row interleaved at every step
+(O253's harness): exactly one verdict in the trail, and a deny that loses
+refuses with nothing destroyed.
+**Counterfactual**: to be measured.
+
+**Appended 2026-10-08 by O225's ruling, as that record asked:** O225's ruling
+(2026-10-08) asks this build to re-check, inside the single lock and before the
+`Ruled` delete, that the queue row still holds byte-equal the text just
+re-filed — existence alone is not the check — which closes the residual
+import-declared re-occupation of an unreadable `Q0` between the allow's write
+and its delete. (The rulings also recorded relations from this entry to O229
+and O258; they were removed when this entry closed, each partner carrying a
+note — 2026-10-12.)
+
+#### BUILT 2026-10-08, to the filed shape and O225's ruling's ask — no panel convened
+
+**Grounding.** The filing's shape, O255's ruling (items 1, 4 and 5 — a ruling
+appended inside the lock that carries out its effect, nothing swallowed, the
+tripwire), O224's ruling (the destination's precondition inside the write's
+transaction, the expectation on `BypassReason::OperatorRuling`), and the
+2026-10-08 reconciled records in `.handover/rulings-2026-10-07/final/` (PR #262,
+not on `main` when this was built): **M2's O225 ruling asks this build to
+re-check, inside the single lock and before the queue row's removal, that the
+row still holds byte-equal the text just re-filed — "existence alone is not the
+check"**; built. **M2's O229 recommendation** (a compare-and-swap whose
+expectation travels on `BypassReason::OperatorRuling` and is decided by the
+existing comparison inside `write_drawer_stmts`) is left buildable: the
+carrier and the boundary are unchanged.
+
+**What landed.** `admission_allow` keeps its door — posture, the queue row read,
+the intended destination and the whole declaration validated, the destination
+state for the message — and then runs ONE `under_destruction_lock`: the row is
+read again and must equal the door's read as a whole drawer (content and every
+covered field), else it refuses `Invalid` "changed while this allow ran",
+nothing written; a deny that won leaves `NotFound`; the row's stored vector
+(O167); the re-filed write through **`write_drawer_in`** (`lib.rs`), a locked
+write that requires a `WriteLocked` snapshot, checks the tripwire, and takes the
+`Screen` like the choke point — only `Bypass(OperatorRuling(expected))`, every
+screen and `AlreadyDiverted` refused as a caller defect, because a screen may
+consult the tier-2 advisor, a network call that must not run under the write
+lock; the ruling through `admission_ruling_in`; the queue row through
+`destroy_in`. After the COMMIT, one anchor, the destruction's RAM caches, then
+`post_write` for the re-filed drawer. `write_drawer_stmts` takes `&self`. The
+committed-on-its-own `admission_ruling` is gone (its test helper keeps the
+lock-and-anchor shape). The custody inventory's `admission_allow` row left with
+its `write_drawer(` call (`remote.rs` says why: `write_drawer_in` refuses every
+screen, so it is no custody door). The module doc, `Applied`'s doc and the
+crash-window test's doc say what one lock changes: this build leaves no
+half-ruled state, and a vault an older binary wrote still converges.
+
+**The gate** (`destruction_tests.rs`, four tests, O253's progress-handler harness
+with a real second `VaultStore` at zero busy timeout, driven densely over every
+step before the door's first write and strided over the whole door; looped ten
+times, 10 of 10 green). The trail is COUNTED per row — exactly one verdict and
+the queue row's tombstone adjacent to it — and the destination read: allow
+driven, deny at every step (163 runs: the deny held off 130, won 27, every one
+of those 27 refused inside the allow's lock, which a rollback hook with no
+commit observes); deny driven, allow at every step (209 runs: 150 held off, 44
+won, 44 refused inside the deny's lock); the re-occupation arm — at every step
+the other handle denies the row and files a different flagged text of the same
+filing, which re-occupies the id while O225 is open: 27 allows refused as
+changed inside their lock, and the re-occupying text is never destroyed unread;
+and **a real second thread** — an allow thread and a deny thread on their own
+handles with the production busy timeout, a barrier before each of 24 rows, four
+rounds per run: 96 rows, 57–70 of them allowed across the ten runs, every row
+one verdict. The source gate reads `admission_allow`, `write_drawer_in` and
+`write_drawer_stmts`. **e2e** (three checks): CLI denies walking twelve queued
+rows from the end race `/v1` allows from the start, every row one verdict and
+its destination held exactly when allowed (6 and 6 in the ad hoc run). Against
+a binary built from the tree before this unit it found a row with two verdicts
+in one of two runs — a cross-process race through the surfaces, so a
+probabilistic check there; the store tests are the deterministic gate.
+
+**Counterfactuals.** The tree before this unit, three runs: the allow-driven arm
+broke on **14 of 143** runs — the trail on one row read `denied`, `del/`, then
+`allowed`, the denied text live at the destination; the thread soak on **31, 33
+and 36 of 96** rows, both rulings answering success; the re-occupation arm on
+**39 of 143**, each a text destroyed unread under "allowed"; the deny-driven arm
+passed, as expected of a deny already one lock. The fix's own: the in-lock
+re-check reduced to existence — **27 of 163** runs destroyed the re-occupying
+text unread.
+
+**A real corpus** (O259's vault: the LoCoMo feed mined into seven wings, 171
+drawers, beside a `/v1` writer making 400 saves that all answered 2xx): forty
+flagged saves raced by CLI denies from the end against `/v1` allows from the
+start — 24 allowed, 16 denied, none broken, the queue empty, the `/v1` allows
+answering in 24–331 ms beside the CLI's processes and the writer; `VERIFY OK`.
+(An earlier run of the same harness, whose planted trigger `sqlite3` failed to
+create beside the writer for want of a busy timeout, split 19 and 21; the
+harness's own defect, fixed and re-run.)
+
+**What remains, stated.** The door's read and the lock's read are compared as
+decoded drawers, so a re-write that leaves every covered field and the text
+equal — a convergence of byte-identical declaration — is not a change and
+proceeds, which is correct. The allow's `post_write` runs after the COMMIT, as
+`write_drawer`'s always has: a derived-row write that fails there arms the next
+search's verification and is not undone. A deny losing to an allow answers
+`NotFound`, which says the row is gone, not that it was allowed — `admission
+list` and the trail say which. P08's O258 record lists `delete_by_source` and
+`admission_allow` among the doors that commit in steps; neither does now, and
+O258 and O229 carry notes saying so.
+
+#### REVIEWED 2026-10-12 — four defects of mine an independent review found, fixed in this unit with O259's
+
+The review re-ran the gates on a recompiled copy and read the diff; what it
+found is mine, and each is fixed and gated.
+
+1. **The thread soak asserted the race's winner distribution.** Its premise
+   `allowed > 0 && denied > 0` failed at random: in 20 recompiled debug runs
+   the deny thread won no row in 3 (allowed 90–96 of 96), because the deny's
+   door replays the chain after every foreign commit. The test now asserts the
+   invariant only — every row ruled, one winner, one verdict beside its
+   tombstone, the destination as that verdict owes — and reports the split.
+   Looped 50 times in a debug build: 50 green, the deny winning 0 to 22 rows of
+   96, and none in 4 of the runs — each of which the old premise failed.
+2. **The pending-evidence fence was a call-site check again.** O259's and this
+   entry's first build called `destroy_in` with a bare id, so the fence was
+   whatever each caller remembered; the review's counterfactual (the fence's
+   `?` read as `unwrap_or(false)`) made `delete_by_source` destroy a pending
+   member, `Ok(3)`. Now `destroy_in` takes a `Fenced` witness and no id;
+   `VaultStore::fence` mints it, inside a write lock only, refusing a pending
+   drawer under `Protect`; nothing else constructs one; and `Ruled` is stated
+   by the two rulings alone. `o259_the_pending_evidence_fence_is_a_required_witness`
+   holds all of it by source count and by behaviour; with it, the review's
+   counterfactual stays refused inside the lock, nothing deleted.
+3. **A pending-evidence refusal had moved inside the lock**, whose error arm
+   drops the RAM caches — so an agent could empty them at will through
+   `undercroft_delete_by_source`, taking the write lock each time. The door is
+   back in front of the lock (and `delete_drawer`'s too), an empty source takes
+   no lock, and the in-lock fence remains the authority for a member filed in
+   between: `o259_a_refusal_for_pending_evidence_takes_no_lock_and_drops_no_cache`
+   (the write lock held by another connection: refused at once, not busy, the
+   PQ cache standing) and `o259_a_member_filed_for_review_after_the_door_is_refused_in_the_lock`
+   (a flagged chunk of the same source filed at every step: 27 filed, 26 of
+   them refused inside the lock, the pending member never destroyed).
+4. **The source gate read all of `admission_allow`, its door included**, where
+   O228's ruling places the label guard. The in-lock bodies are their own
+   functions now — `allow_in`, `delete_source_in` — and the gate reads those,
+   `fence` and `destroy_in`.
+
+Also fixed: two `lib.rs` comments and one in `manage.rs` still said
+`destroy_in` had two callers "which `delete_by_source` loops"; it has four.
+
+**Counterfactuals for the fixes**, on a copy with the store recompiled (one
+`Compiling undercroft-store` line in each log): the door's refusal removed —
+the no-lock test is RED, the refusal arriving as `database is locked` after the
+held lock's timeout; the in-lock fence told `Ruled` — the race test is RED, the
+flagged member destroyed with the source (`Ok(7)`) in 29 of the 31 runs that
+filed it, and the witness gate counts three `Ruled`; the review's own
+(`unwrap_or(false)` at the door) — the failed-fence test stays GREEN, the
+in-lock fence refusing it with nothing deleted, which is what the witness is
+for.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -40823,7 +41074,13 @@ today, no override exists.
 
 **Relations:** shares a question with O227 — this entry's compare-and-swap relieves that entry's refused rows one by one and does not meet its gate.
 
-**Relations:** sequenced with or after O260 — both change `admission_allow`, and this entry's compare-and-swap lands with or after that entry's single lock.
+**Noted 2026-10-12 by O260's build** (this replaces the relation to O260 the
+2026-10-08 rulings recorded, since O260 is closed): the single lock this entry
+was sequenced after has landed. `admission_allow` re-files, rules and removes
+the queue row in one write lock, and the expectation still travels on
+`BypassReason::OperatorRuling` into `write_drawer_stmts`' `destination_state`
+check inside that lock, through `write_drawer_in` — so a compare-and-swap's
+`Expected::Held(over)` lands there with no new carrier.
 
 #### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
 
@@ -42190,10 +42447,6 @@ writers.
 
 **Relations:** sequenced before O264 — the busy handler this entry adds is what any chunked or looped destruction needs.
 
-**Relations:** shares a diff surface with O259 — its door meets this entry's new busy variant after partial progress.
-
-**Relations:** shares a diff surface with O260 — its door meets this entry's new busy variant after partial progress.
-
 **Relations:** shares a question with O146 — it proposes the same 503 with `Retry-After` for a tenant lease, and this entry's class argument is its precedent.
 
 #### FOUND 2026-09-24 by O253's soak — the read-audit record is a starved writer too
@@ -42221,6 +42474,17 @@ SQLite's own type; typing busy errors across every write door stays this
 entry's. O255's P-hold also measured the other direction: today's per-drawer
 destruction refused a paced concurrent writer past its busy timeout 6 times at
 4,000 drawers and 55 times at 40,000, and one lock refused it never.
+
+**Noted 2026-10-08 by O259 and O260:** `delete_by_source` and `admission
+allow` now take ONE write lock each as well — the whole source, and the
+allow's re-filed write, ruling and queue-row removal — so a busy wait fails
+them at `BEGIN` with nothing changed, where it could fail them part-way
+through. Neither commits in steps any more. So the ruling below, written while
+both were open, holds for them as for the other one-transaction doors: its
+item 9 list of doors that "commit in steps" no longer includes either, and the
+two relations it recorded to them ("their doors meet the new variant after
+partial progress") were removed when they closed (2026-10-12) — the ruling's
+text is left as ruled.
 
 #### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
 
@@ -42574,58 +42838,6 @@ needs the maintainer's explicit go.
 MCP text changes. The O254 entry, "every process that writes one vault must run the same build", gains one sentence:
 a new writer starves an old one harder. `undercroft config check` has nothing to detect, because no declaration is
 involved.
-
-### O259 — `delete_by_source` can delete part of a source and report an error, against its own promise
-
-**Filed 2026-09-25 by O255's ruling (the security and agentic-memory lenses and
-the refuter); read in code, not measured.** Its doc promises the call "is
-refused BEFORE anything is deleted rather than half-way through"
-(`crates/undercroft-store/src/manage.rs`), and it keeps that promise only for
-pending review evidence. Each drawer is deleted by `delete_drawer` in its own
-write lock, so a busy lock or a failing statement at drawer k leaves k−1 drawers
-of the source deleted and returns an error; and its pending-evidence pre-flight
-reads the fence through `.unwrap_or(false)`, so a fence query that FAILS counts
-as "not pending" and lets the loop reach a pending drawer, which the choke point
-then refuses mid-loop.
-
-**Shape**: the same one-lock destruction body O255 built, the whole source in one
-transaction, the pre-flight's errors propagated. Unattested either way — this
-path mints no receipt.
-
-**Gate**: a `RAISE(ABORT)` injected on the k-th drawer leaves every drawer of the
-source present; a fence query made to fail refuses the call with nothing deleted.
-**Counterfactual**: today, k−1 drawers deleted and an error.
-
-**Relations:** shares a diff surface with O258 — this entry's door meets that entry's new busy variant after partial progress.
-
-### O260 — `admission_allow` is three transactions, and a concurrent `deny` of the same queue row leaves both verdicts in the trail
-
-**Filed 2026-09-25 by O255's ruling (the security and agentic-memory lenses and
-the refuter); read in code, not measured.** `admission_allow`
-(`crates/undercroft-store/src/admission.rs`) re-files the drawer, appends its
-ruling, and deletes the queue row, each its own transaction. A `deny` of the same
-row from another handle can land between them: the trail then records both
-`allowed` and `denied`, and the deny's receipt attests the destruction of content
-that survives, re-filed under its ordinary id. O255 moved `deny`'s ruling into
-its destruction's lock; the allow is the other half of the race.
-
-**Shape**: the allow's three writes in one write lock, the queue row re-checked
-inside it (the O224 `destination_state` door already runs inside
-`write_drawer_stmts`).
-
-**Gate**: an allow and a deny of one queue row interleaved at every step
-(O253's harness): exactly one verdict in the trail, and a deny that loses
-refuses with nothing destroyed.
-**Counterfactual**: to be measured.
-
-**Relations:** sequenced with or before O229 — both change `admission_allow`, and that entry's compare-and-swap lands with or after this entry's single lock.
-
-**Relations:** shares a diff surface with O258 — this entry's door meets that entry's new busy variant after partial progress.
-
-**O225's ruling (2026-10-08) asks this build to re-check, inside the single lock and before the
-`Ruled` delete, that the queue row still holds byte-equal the text just re-filed — existence alone is not the
-check — which closes the residual import-declared re-occupation of an unreadable `Q0` between the allow's write
-and its delete.**
 
 ### O261 — a receipt minted beside another writer before O255 is genuine and reports as forged forever
 
@@ -51053,6 +51265,32 @@ fired here is unmeasured.
 **Shape**: measure first — loop the test 200 times under the full parallel suite and capture which
 request reset — then make the helper's request one the server reads whole, or read the reply before the
 close. **Gate**: 200 looped runs under load with no reset.
+
+### O-NEW-o259-1 — `/v1` hands most query values to the store still percent-encoded, so a source path a URL must encode answers `deleted: 0`
+
+**Filed 2026-10-08 by O259's real-corpus run; measured once, the rest read in
+code.** `DELETE /v1/vaults/{id}/drawers?source=` reads its value with
+`query_param` (`crates/undercroft-cli/src/tenant.rs`), which returns the raw query
+text, and never passes it through `pct_decode`, the helper the knowledge-graph
+routes use for their free-text values. Measured on the LoCoMo feed mined as one
+85-drawer source: the DELETE sent with `curl --data-urlencode` answered **200
+`{"deleted":0,"source":"%2ffeed%2flocomo_feed.txt"}`** with all 85 drawers still
+there; the same path sent unencoded deleted all 85. So a source whose path holds
+a character a URL must encode — a space, `&`, `#`, `%`, non-ASCII — cannot be
+named through `/v1` at all, and the miss is silent: a 200 that reads as "nothing
+was mined from there". Read, not measured: the same raw `query_param` feeds
+`wing` (the drawer listing and four other routes), `room`, `agent` on the diary,
+`subject` on the history, `start` on the tunnel walk and the KG relationship
+route's `predicate` and `as_of`, while `entity`, `grounding`, `as_of` on the
+entity routes and `sender` are decoded — one route family decodes and its
+neighbours do not. What
+the orchestrator's `/t/*` relay does to the query was not read.
+
+**Shape**: one query reader that decodes, used by every route, with `+`'s meaning
+decided once (`pct_decode` reads it as a space, which a literal `+` in a path
+would then need as `%2B`). **Gate**: a source whose path holds a space, deleted
+through `/v1` with the value encoded, deletes its drawers; a wing with a space
+listed through `/v1` likewise; counterfactual, today's `deleted: 0`.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

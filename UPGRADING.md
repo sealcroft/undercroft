@@ -238,6 +238,32 @@ very large `forget` into several; one destruction near 75,000 drawers holds
 the lock past another writer's busy timeout (ROADMAP O264). `undercroft config
 check` cannot see this: it depends on the data, not on a declaration.
 
+### `drawer delete-by-source` and `admission allow` change everything or nothing (O259, O260)
+
+**Symptom, one of:** a `drawer delete-by-source` — or `DELETE
+/v1/vaults/{id}/drawers?source=`, or MCP's `undercroft_delete_by_source` —
+that fails part-way (the write lock held past the busy timeout, a statement
+failing, the pending-evidence check unable to run) exits 1 (a `/v1` 500) with
+every drawer of the source still there, where it used to delete the drawers
+before the failure and then report the error. An `admission allow` racing a
+`deny` of the same row from another process exits 1 with `not found` (a `/v1`
+404) and writes nothing when the deny got there first — it used to exit 0 with
+both verdicts in the trail and the denied text re-filed at its destination. An
+allow whose queue row changed while it ran exits 1 (a `/v1` 400) saying it
+`changed while this allow ran`, nothing written. While a large source delete
+runs, other writers wait for it.
+
+**Cause:** ROADMAP O259 and O260. Each drawer of a source was deleted in its own
+write lock, and an allow committed its re-filed drawer, its ruling and the queue
+row's removal as three transactions; both are now one write lock, the shape
+O255 gave `forget`, the retention sweep and `admission deny`.
+
+**Fix:** none for ordinary use. Re-run a source delete that was refused — it
+changed nothing. After a refused allow, run `admission list` and rule again: a
+row a deny took is gone, and a row that changed is the text to read before
+ruling. `undercroft config check` cannot see this: it is a command's behaviour,
+not a declaration.
+
 ### an archive taken by 1.6.1 or earlier while anything held the vault may be torn (O256)
 
 **Symptom:** `backup restore` of an older archive refuses with exit 2 (a `/v1`

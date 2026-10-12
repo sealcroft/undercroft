@@ -87,6 +87,20 @@ pub(crate) fn live(snap: &crate::chain::Snapshot<'_>) -> Result<(), StoreError> 
     Ok(())
 }
 
+/// The ids of every drawer mined from `source_file`, in the table's order —
+/// read by `delete_by_source`'s door and again inside its lock (ROADMAP O259).
+fn source_members(
+    conn: &rusqlite::Connection,
+    source_file: &str,
+) -> Result<Vec<String>, StoreError> {
+    let mut stmt =
+        conn.prepare("SELECT id FROM drawers WHERE json_extract(meta_json, '$.source_file') = ?1")?;
+    let ids = stmt
+        .query_map(params![source_file], |r| r.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(ids)
+}
+
 /// What a destruction says when SQLite rolled its transaction back under it.
 pub(crate) fn rolled_back() -> StoreError {
     StoreError::Sqlite(rusqlite::Error::SqliteFailure(
@@ -103,15 +117,46 @@ pub(crate) fn rolled_back() -> StoreError {
 /// admission ruling. Stated by every caller of the delete choke point —
 /// a required argument cannot be forgotten the way a call-site check can,
 /// and `Ruled` is one greppable token naming the only legitimate reason.
+///
+/// It reaches the choke point through [`Fenced`]: `destroy_in` takes the
+/// witness [`VaultStore::fence`] mints, and nothing else mints one, so a new
+/// destruction does not compile until its author has asked the fence and
+/// stated which of these two it is (ROADMAP O259/O260's review).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PendingEvidence {
     /// Refuse quarantine-pending drawers: destroying evidence that has no
     /// ruling behind it leaves an audit trail that cannot tell an
     /// admission decision from routine housekeeping.
     Protect,
-    /// The caller IS the ruling path (`admission allow`/`deny`), which has
-    /// already appended its `admission/<id>/<verdict>` record.
+    /// The caller IS a ruling path — `admission deny` or `admission allow` —
+    /// which appends its `admission/<id>/<verdict>` record in the same lock.
     Ruled,
+}
+
+/// Proof that the pending-evidence fence answered for ONE drawer inside a
+/// destruction's write lock — the only thing [`VaultStore::destroy_in`]
+/// accepts in place of an id.
+///
+/// Why a witness rather than a check at each call site: the fence WAS a
+/// call-site check before O255 and again after O259/O260 first landed, and a
+/// call-site check is one swallowed `?` away from destroying review evidence
+/// (the review's counterfactual: `delete_by_source`'s fence read through
+/// `unwrap_or(false)` destroyed a pending member, `Ok(3)`). Its field is
+/// private and it is minted in one place, so the compiler holds the rule; the
+/// lifetime ties it to the borrow of the lock's snapshot it was minted under,
+/// and it is consumed by the destruction it licenses.
+#[must_use = "a fence witness licenses one destruction; drop it only by refusing"]
+pub(crate) struct Fenced<'s> {
+    id: String,
+    _lock: std::marker::PhantomData<&'s ()>,
+}
+
+/// What every door says about review evidence it will not destroy.
+pub(crate) fn pending_refusal(id: &str) -> StoreError {
+    StoreError::Invalid(format!(
+        "{id} is quarantine-pending — rule on it with `admission allow`/`deny`; \
+         pending review evidence is not deletable"
+    ))
 }
 
 /// A drawer as listed: id, place, a content preview and provenance — never the whole content.
@@ -1037,27 +1082,34 @@ impl VaultStore {
     /// destroy pending review evidence, so a new delete path does not compile
     /// until its author decides — the same shape the write choke point uses
     /// for the admission screen. `delete_drawer` states `Protect` and inherits
-    /// the fence; `admission allow` states `Ruled` for the queue row it has
-    /// just re-filed.
+    /// the fence; the rulings destroy the queue row inside their own locks,
+    /// each stating `Ruled` to [`VaultStore::fence`] — `admission deny`
+    /// through `attest_in`, `admission allow` in its own lock (ROADMAP O260).
     ///
-    /// **One write lock, one body** (ROADMAP O255): the fence, the existence
-    /// check and the destruction run inside the lock, through
+    /// **One write lock, one body** (ROADMAP O255): the existence check, the
+    /// fence and the destruction run inside the lock, through
     /// [`VaultStore::destroy_in`], which holds the crate's only
-    /// `DELETE FROM drawers WHERE id`. The attested paths — `forget`, the
-    /// retention sweep, `admission deny` — run the same body for every drawer
-    /// of a destruction inside ONE lock (`forget.rs`).
+    /// `DELETE FROM drawers WHERE id` and takes the fence's witness. The
+    /// attested paths — `forget`, the retention sweep, `admission deny` — run
+    /// the same body for every drawer of a destruction inside ONE lock
+    /// (`forget.rs`), and so do the two unattested ones that destroy as part of
+    /// something larger: `delete_by_source`, the whole source in one lock
+    /// (ROADMAP O259), and `admission allow`, whose re-filed write, ruling and
+    /// queue-row removal are one lock (ROADMAP O260).
+    ///
+    /// Pending evidence is refused BEFORE the lock too, so a refusal neither
+    /// takes the write lock nor reaches the lock's error arm, which drops the
+    /// RAM caches; the in-lock fence is the authority, for a row that became
+    /// pending in between.
     pub(crate) fn delete_drawer_ruled(
         &mut self,
         id: &str,
         evidence: PendingEvidence,
     ) -> Result<bool, StoreError> {
+        if evidence == PendingEvidence::Protect && self.is_quarantine_pending(id)? {
+            return Err(pending_refusal(id));
+        }
         self.under_destruction_lock(|s, snap| {
-            if evidence == PendingEvidence::Protect && s.is_quarantine_pending(id)? {
-                return Err(StoreError::Invalid(format!(
-                    "{id} is quarantine-pending — rule on it with `admission \
-                     allow`/`deny`; pending review evidence is not deletable"
-                )));
-            }
             let present: bool = snap.conn().query_row(
                 "SELECT EXISTS(SELECT 1 FROM drawers WHERE id = ?1)",
                 params![id],
@@ -1066,10 +1118,41 @@ impl VaultStore {
             if !present {
                 return Ok((false, Vec::new()));
             }
+            let fenced = s.fence(snap, id, evidence)?;
             let tables = DerivedTables::read(s)?;
-            let gone = s.destroy_in(snap, &tables, id)?;
+            let gone = s.destroy_in(snap, &tables, fenced)?;
             s.settle_derived(snap, &tables, std::slice::from_ref(&gone))?;
             Ok((true, vec![gone]))
+        })
+    }
+
+    /// **The pending-evidence fence, as a witness** — the one place a
+    /// [`Fenced`] is minted, and so the one door into
+    /// [`VaultStore::destroy_in`]. Inside a write lock only, on that lock's
+    /// snapshot: under `Protect` a drawer the clear `wing` column names as
+    /// awaiting a ruling is refused (the column the reviewer's queue
+    /// enumerates on — see [`VaultStore::is_quarantine_pending`]), and any
+    /// error reading it propagates; under `Ruled` the caller is a ruling and
+    /// says so in one greppable token.
+    pub(crate) fn fence<'s>(
+        &self,
+        snap: &'s crate::chain::Snapshot<'_>,
+        id: &str,
+        evidence: PendingEvidence,
+    ) -> Result<Fenced<'s>, StoreError> {
+        if snap.origin() != crate::chain::Origin::WriteLocked {
+            return Err(StoreError::Invalid(
+                "the pending-evidence fence answers only inside a destruction's write lock \
+                 (ROADMAP O259); this is a defect in the caller, not in the vault"
+                    .into(),
+            ));
+        }
+        if evidence == PendingEvidence::Protect && self.is_quarantine_pending(id)? {
+            return Err(pending_refusal(id));
+        }
+        Ok(Fenced {
+            id: id.to_string(),
+            _lock: std::marker::PhantomData,
         })
     }
 
@@ -1093,12 +1176,18 @@ impl VaultStore {
     ///
     /// A row count other than one refuses: a drawer another handle destroyed
     /// after the caller's check is not this destruction's to attest.
-    pub(crate) fn destroy_in(
+    ///
+    /// It takes no id: it takes the [`Fenced`] witness [`VaultStore::fence`]
+    /// minted for the drawer, so the pending-evidence fence is asked by
+    /// construction rather than by each caller remembering to (O259/O260's
+    /// review).
+    pub(crate) fn destroy_in<'s>(
         &self,
-        snap: &crate::chain::Snapshot<'_>,
+        snap: &'s crate::chain::Snapshot<'_>,
         tables: &DerivedTables,
-        id: &str,
+        fenced: Fenced<'s>,
     ) -> Result<Destroyed, StoreError> {
+        let id = fenced.id.as_str();
         if snap.origin() != crate::chain::Origin::WriteLocked {
             return Err(StoreError::Invalid(
                 "a drawer is destroyed only inside a write lock (ROADMAP O255); this is a \
@@ -1258,40 +1347,74 @@ impl VaultStore {
     /// review evidence. The whole call is refused BEFORE anything is
     /// deleted rather than half-way through: failing mid-loop would destroy
     /// part of a source and then report an error, leaving the operator
-    /// unsure what survived. That holds for pending evidence only: each drawer
-    /// is still its own write lock, so a busy lock or a failing statement at
-    /// drawer k leaves k−1 deleted, and the fence query below reads a failure
-    /// as "not pending" — ROADMAP O259.
+    /// unsure what survived.
+    ///
+    /// **The whole source is ONE write lock** (ROADMAP O259, O255's body).
+    /// The promise above held for pending evidence alone: each drawer was
+    /// deleted in its own write lock, so a busy lock or a failing statement
+    /// at drawer k left k−1 deleted and returned an error, and the
+    /// pending-evidence pre-flight read a failed fence query as "not pending"
+    /// (`unwrap_or(false)`), letting the loop reach a pending drawer the
+    /// choke point then refused mid-loop. Now the destruction is one lock in
+    /// which the source's members are read again and each passes the fence
+    /// (its witness is what `destroy_in` takes), every error propagates, and a
+    /// refusal anywhere — the fence, a busy `BEGIN`, a failing statement —
+    /// deletes nothing. Unattested, as before: this path mints no receipt.
+    ///
+    /// **The door runs first, outside the lock**: the members and the fence
+    /// over every one of them, errors propagated, so the refusal names every
+    /// pending member and neither takes the write lock nor reaches the lock's
+    /// error arm, which drops the RAM caches — an agent driving
+    /// `undercroft_delete_by_source` at a source holding review evidence must
+    /// not be able to empty them at will. An empty source takes no lock. The
+    /// in-lock fence is the authority, for a member that became pending — a
+    /// flagged re-mine of the same file — between the two.
     pub fn delete_by_source(&mut self, source_file: &str) -> Result<u64, StoreError> {
-        let ids: Vec<String> = self
-            .conn
-            .prepare("SELECT id FROM drawers WHERE json_extract(meta_json, '$.source_file') = ?1")?
-            .query_map(params![source_file], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
-        let pending: Vec<&String> = ids
-            .iter()
-            .filter(|id| self.is_quarantine_pending(id).unwrap_or(false))
-            .collect();
+        let ids = source_members(&self.conn, source_file)?;
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut pending: Vec<&str> = Vec::new();
+        for id in &ids {
+            if self.is_quarantine_pending(id)? {
+                pending.push(id);
+            }
+        }
         if !pending.is_empty() {
             return Err(StoreError::Invalid(format!(
                 "{source_file} has {} drawer(s) awaiting admission review \
                  ({}) — rule on them with `admission allow`/`deny` first; \
                  nothing was deleted",
                 pending.len(),
-                pending
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                pending.join(", ")
             )));
         }
-        let mut count = 0u64;
-        for id in ids {
-            if self.delete_drawer(&id)? {
-                count += 1;
-            }
+        self.under_destruction_lock(|s, snap| s.delete_source_in(snap, source_file))
+    }
+
+    /// `delete_by_source`'s body inside its write lock: the members read
+    /// again on the lock's snapshot, the fence over every one before any is
+    /// destroyed, then the destruction.
+    fn delete_source_in(
+        &self,
+        snap: &crate::chain::Snapshot<'_>,
+        source_file: &str,
+    ) -> Result<(u64, Vec<Destroyed>), StoreError> {
+        let ids = source_members(snap.conn(), source_file)?;
+        if ids.is_empty() {
+            return Ok((0, Vec::new()));
         }
-        Ok(count)
+        let mut fenced = Vec::with_capacity(ids.len());
+        for id in &ids {
+            fenced.push(self.fence(snap, id, PendingEvidence::Protect)?);
+        }
+        let tables = DerivedTables::read(self)?;
+        let mut gone = Vec::with_capacity(fenced.len());
+        for f in fenced {
+            gone.push(self.destroy_in(snap, &tables, f)?);
+        }
+        self.settle_derived(snap, &tables, &gone)?;
+        Ok((gone.len() as u64, gone))
     }
 
     /// Whether `id` names a drawer currently awaiting an admission ruling.
@@ -2836,7 +2959,8 @@ impl Namespace {
     pub const fn is_destruction(self) -> bool {
         match self {
             // `destroy_in` (the crate's one `DELETE FROM drawers WHERE id`,
-            // ROADMAP O255, inherited by the public delete and by the attested
+            // ROADMAP O255, inherited by the public delete, the whole-source
+            // delete, the allow's removal of its queue row and the attested
             // destruction `forget`, the retention sweep and admission deny
             // share) and `delete_tunnel`.
             Namespace::Del => true,
