@@ -436,7 +436,7 @@ Consequences that are binding, not advisory:
   where the link error reads as "unsupported" (measured `EPERM` on vfat,
   `ENOSYS` on a FUSE exFAT) does it fall back to O204's exclusive in-place
   create, warning — never to a rename, which replaces; which writer a
-  linkless filesystem should get is open (O-NEW-O210-3). Every other link
+  linkless filesystem should get is open (O412). Every other link
   error refuses with the temp kept and named, and the fallback removes
   nothing, because a name it created may already have been loaded (the
   review of its first build found both). Nothing sweeps a crash's leftover
@@ -2819,8 +2819,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1337 run,
-                                      # 17 #[ignore]d = 1354 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1370 run,
+                                      # 17 #[ignore]d = 1387 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2966,7 +2966,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (794 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (823 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (189 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (62 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate

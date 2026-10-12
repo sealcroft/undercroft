@@ -4012,7 +4012,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**436** of the **451** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**444** of the **459** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -15715,8 +15715,8 @@ along and removed with the aside — O291's residual for the delete, the same wi
 refused with nothing changed but in the raw class, not the survey's. A link put over a held
 vault's `-wal` AFTER the route's survey and before its eviction is still unlinked by that close —
 the same window, narrowed to the route's next two statements. `DELETE /v1/vaults/{id}` has the
-twin of the defect this unit closed on restore's route, filed as O-NEW-O273-3, because closing it
-changes O291's ruled order. The statuses these refusals answer are O-NEW-O273-2's question.
+twin of the defect this unit closed on restore's route, filed as O409, because closing it
+changes O291's ruled order. The statuses these refusals answer are O408's question.
 Windows is unmeasured (O275).
 
 ### O211 — CLOSED 2026-10-08: a process derives a passphrase's key once — every open still classifies the key files and reads the salt, and only the Argon2id output is held, against both of its inputs
@@ -15920,7 +15920,7 @@ error that reads as "unsupported", and every other link error refuses. The "neve
 argument was false: no document named FAT, exFAT or removable media as a destination before this unit,
 so refusing there would not have stopped a documented destination being accepted. Which writer a
 filesystem without links should get — the in-place create as built, a no-replace rename, or a refusal —
-is not settled by the tree, and is O-NEW-O210-3's question for a ruling and the maintainer. And "costs
+is not settled by the tree, and is O412's question for a ruling and the maintainer. And "costs
 that one write its crash protection and nothing else" was wrong twice over: on a filesystem that links,
 the fallback opened the torn-key window for a full disk or an I/O error, and its own error path deleted
 a name a concurrent start may already have loaded.
@@ -15971,8 +15971,8 @@ warning, `bundle recipient` reads it, and a second keygen there is refused.
 every surface reaches (the CLI, `serve-http`'s `/v1` and `/mcp`, `serve-mcp`); the orchestrator writes
 no key file, its keys being declarations. No report struct a renderer projects changed. `config check`
 reads which key files exist and never their length, so it says ok over a torn key the start refuses —
-a gap between the pre-flight and the start that predates this unit, filed as O-NEW-O210-1. Its refusal,
-like every `KeyError`, prints twice in the CLI's error chain — filed as O-NEW-O210-2.
+a gap between the pre-flight and the start that predates this unit, filed as O410. Its refusal,
+like every `KeyError`, prints twice in the CLI's error chain — filed as O411.
 
 PATCH inside the unreleased 1.7.0: a key file's write stops leaving a short key, and the refusal of one
 names it. `UPGRADING.md` carries one entry with O321's; `config check` cannot detect it.
@@ -15998,7 +15998,7 @@ names it. `UPGRADING.md` carries one entry with O321's; `config check` cannot de
    `o210_a_link_error_that_is_not_unsupported_refuses_and_keeps_the_temp` (`Fault::SecretLinkIo`; RED
    with the fallback put back on every error) and `o210_only_an_unsupported_link_takes_the_fallback`
    (the table, Linux's names for its numbers, and ENOENT, EIO, EACCES, ENOSPC, EROFS, EXDEV, EMLINK
-   refusing). The record above is corrected beside; the rest of the question is O-NEW-O210-3.
+   refusing). The record above is corrected beside; the rest of the question is O412.
 3. **LOW: the publisher was `pub` and took no witness**, so it could write `<root>/master.key` past
    O204's classifier, held only by a basename-keyed source count. It is private now; its doors are the
    witness-taking `create_master` and `keys::write_new_identity`, the keygens' door, which writes an
@@ -16008,7 +16008,7 @@ names it. `UPGRADING.md` carries one entry with O321's; `config check` cannot de
    `o321_every_secret_file_is_written_by_the_one_publisher` (the publisher in `keys.rs` alone, the
    identity door called once, from `write_identity`).
 4. **Never-sweep stands (O204)**, and that nothing REPORTS a leftover `<name>.tmp.<32 hex>` — one left
-   just after the publish is a second hard link to the live key — is filed as O-NEW-O210-4.
+   just after the publish is a second hard link to the live key — is filed as O413.
 5. **Trivial: the temp name is 37 bytes longer than the target's**, so an `--out` file name over 218
    bytes (on a 255-byte limit) failed with a bare ENAMETOOLONG. Stated in the publisher's doc, and the
    error now names the temp it could not create: `o210_a_name_too_long_for_its_temp_is_refused_naming_the_temp`.
@@ -16018,7 +16018,7 @@ unit and 49 integration tests, clippy on the default and telemetry builds, rustf
 cross-check of both crates. One CLI integration test,
 `a_partial_refine_is_recorded_on_the_cli_and_over_v1_and_an_empty_one_is_not`, failed once inside the
 full parallel run with `ConnectionReset` in its `raw_http` helper and passed 20 of 20 alone; it touches
-no key path, and is filed as O-NEW-O210-5.
+no key path, and is filed as O414.
 
 ### O321 — CLOSED 2026-10-08: `bundle keygen` and `bundle sign-keygen` refuse an existing path, a link included, before a byte is written, and write the secret owner-only from its creation
 
@@ -50897,7 +50897,7 @@ no-op. **Gate**: an edited tunnel row, then an import of the vault's own export 
 `verify` OK, the import reporting one replaced; the same repeat through MCP → the integrity class,
 the row untouched. Counterfactual: today's refusal.
 
-### O-NEW-O273-1 — an archive's identity is an unauthenticated `vault.json` read with no bound, so a planted entry under `backups/` can stall `/v1`, allocate without bound, or make a backup prune every real archive
+### O407 — an archive's identity is an unauthenticated `vault.json` read with no bound, so a planted entry under `backups/` can stall `/v1`, allocate without bound, or make a backup prune every real archive
 
 **Filed 2026-10-12 by O273's independent review, widening the builder's own flag; found by
 reading, not measured.** `backups::archive_vault_id` (`crates/undercroft-vault/src/backups.rs`)
@@ -50928,7 +50928,7 @@ would no longer be counted, or pruned), so they need a ruling.
 under later stamps, leave every real archive in place across a `backup create`; a FIFO and a
 `/dev/zero` link under `backups/` answer `GET …/backups` within a bound on a thread.
 
-### O-NEW-O273-2 — one ruling owed: the `/v1` class of a refusal about what the installation holds at a name the engine owns
+### O408 — one ruling owed: the `/v1` class of a refusal about what the installation holds at a name the engine owns
 
 **Filed 2026-10-12 by O273's independent review.** Three refusals that are neither a caller's error
 nor a verdict about a vault's bytes answer three different ways:
@@ -50952,7 +50952,7 @@ and a live vault's entry met at the door or at the swap — and whether the door
 **Gate**: each of those refusals answers the ruled status on `/v1` and through the orchestrator's
 relay, and the ruled exit on the CLI, a test per surface.
 
-### O-NEW-O273-3 — `DELETE /v1/vaults/{id}` lets go of its own handle before it surveys, so a link over a held vault's `-wal` is unlinked and the delete answers "deleted"
+### O409 — `DELETE /v1/vaults/{id}` lets go of its own handle before it surveys, so a link over a held vault's `-wal` is unlinked and the delete answers "deleted"
 
 **Filed 2026-10-12 by O301's build, from its independent review's finding on restore's route; read
 in code, not measured.** O291's ruled `/v1` order (item 12) evicts the server's own cached handle
@@ -50970,7 +50970,7 @@ again.
 **Gate**: a `/v1` server that has served the vault, a link put over its live `-wal`: the delete
 refuses with the link kept and the handle not released; with the link gone it deletes.
 
-### O-NEW-O210-1 — `config check` says ok over a key file a start refuses for its length
+### O410 — `config check` says ok over a key file a start refuses for its length
 
 **Filed 2026-10-08 by O210's build; measured by reading and by the binary.** O204's ruling says the
 pre-flight's palace arm "is fatal exactly where a writable start refuses". It asks `keys::plan`, which
@@ -50985,7 +50985,7 @@ refuses with the start's own `CorruptKeyFile` text on a mismatch, one length tab
 11-byte `master.key`, and over a 1-byte `kdf.salt` under a passphrase, exits 1 naming the file;
 counterfactual, today's arm, which exits 0.
 
-### O-NEW-O210-2 — every wrapped error prints its message twice in the CLI's error chain
+### O411 — every wrapped error prints its message twice in the CLI's error chain
 
 **Filed 2026-10-08 by O210's build; measured on one instance, the tree-wide reach unmeasured.** The
 error enums format a wrapped source into their own message AND expose it through `#[from]`'s
@@ -51000,7 +51000,7 @@ wrapping variants become `#[error(transparent)]` or carry a context phrase witho
 prints the head alone where a link repeats the next. **Gate**: the torn-key refusal and an O204
 refusal each print their sentence once, and every e2e check matching on a refusal's words still passes.
 
-### O-NEW-O210-3 — which writer a filesystem without hard links gets for a key: in-place create, a no-replace rename, or a refusal
+### O412 — which writer a filesystem without hard links gets for a key: in-place create, a no-replace rename, or a refusal
 
 **Filed 2026-10-12 by the independent review of O210's build; for a ruling panel, and the maintainer.**
 O210 publishes a key file by hard-linking a fsynced temp, so its name never holds a short key. Where
@@ -51025,7 +51025,7 @@ three a linkless filesystem gets:
 either no file at the name or a whole one (or the refusal, writing nothing); on a real vfat mount the
 same. Windows' link error on FAT is unmeasured and owed by whichever option is ruled.
 
-### O-NEW-O210-4 — nothing reports a secret file's leftover temp, including one that is a second hard link to the live key
+### O413 — nothing reports a secret file's leftover temp, including one that is a second hard link to the live key
 
 **Filed 2026-10-12 by the independent review of O210's build.** O210's publisher leaves a
 `<name>.tmp.<32 hex digits>` file beside a key or an identity when a crash interrupts it, and nothing
@@ -51040,7 +51040,7 @@ naming each leftover temp of `master.key` or `kdf.salt` — and say whether it i
 (a hard link, by device and inode where the platform gives them) or a separate copy — never removing it.
 **Gate**: a planted leftover of each kind is named by both, the files byte-identical afterwards.
 
-### O-NEW-O210-5 — `a_partial_refine_is_recorded_on_the_cli_and_over_v1_and_an_empty_one_is_not` failed once with a reset connection
+### O414 — `a_partial_refine_is_recorded_on_the_cli_and_over_v1_and_an_empty_one_is_not` failed once with a reset connection
 
 **Filed 2026-10-12 by O210's revision; measured once, the mechanism unmeasured.** In one full run of the
 CLI's integration tests (in parallel with the other tests) this test failed at its `raw_http` helper

@@ -2,9 +2,9 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and forty fixes. The witness
+MINOR: one new capability, backward compatible, and forty-five fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Ten fixes change what a deployment must do: every process writing a
+start-up. Fourteen fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
@@ -19,10 +19,16 @@ exits 141 where it panicked with 101 (O287); the systemd unit template runs
 fails at boot leaves the unit failed rather than restarting it (O200);
 `forget`, `admission deny` and `retention sweep` read `--sign` before they
 destroy, so a bad identity exits 1 even where nothing would be destroyed, and a
-sweep that is not clean and cannot write `--out` exits 2 (O262); and `verify`,
+sweep that is not clean and cannot write `--out` exits 2 (O262); `verify`,
 `backup create` and `backup restore` refuse a drawer whose HMAC verifies over covered
 meta that does not parse, so a backup can refuse a vault the previous binary archived,
-and `verify --read-only` is the pre-flight before the upgrade (O231) — all in
+and `verify --read-only` is the pre-flight before the upgrade (O231); `backup create`
+refuses a `backups/.staging` that is a link or anything but a directory (O273), and a
+restore refuses a live vault holding any entry that is not a regular file (O301);
+`bundle keygen` and `bundle sign-keygen` refuse a link at the identity's path, a dangling
+one included (O321); and a key file is published whole by a hard link of a fsynced temp,
+so a first start whose link fails for any reason but a filesystem without hard links exits
+1 naming the temp that holds the key (O210) — all in
 `UPGRADING.md`, beside O279's note that a filesystem whose inode numbers are not
 stable now refuses every open (which `config check` pre-flights), O255's note that
 a destruction now holds the write lock for as long as it runs, O256's that an
@@ -39,9 +45,11 @@ until O279, which closed four entries, "seventeen" until O281, "eighteen" until 
 by counting the entries — "twenty-seven" until O305, "twenty-eight" until O309, "twenty-nine"
 until O314, "thirty" until O212, "thirty-one" until O287, which closed two entries, and
 "thirty-three" until train 1's integration, which closed six — O331, O199, O200, O177,
-O236 and O262 — and "thirty-nine" until O231; it said "Three fixes change what a deployment must do" until O283 made
+O236 and O262 — "thirty-nine" until O231, and "forty" until the units of O273, O211 and O210,
+which closed five — O273, O301, O211, O210 and O321; it said "Three fixes change what a deployment must do" until O283 made
 it four, "Four" until O291 made it five, "Five" until O212 made it six, "Six"
-until O287 made it seven, "Seven" until train 1 made it nine (O200, O262), and "Nine" until O231 made it ten. O303's
+until O287 made it seven, "Seven" until train 1 made it nine (O200, O262), "Nine" until O231 made it ten, and "Ten" until those units made it fourteen (O273, O301,
+O321, O210). O303's
 note was missing from it from O303 until train 1's integration, which found it by reading
 `UPGRADING.md`'s entries against this line.)
 
@@ -2234,11 +2242,11 @@ on a FUSE exFAT), the publisher falls back to the exclusive in-place create ever
 used, never to a rename, which would replace a concurrent first start's key, and says so in a
 warning; on such a filesystem a crash inside that write can still leave a torn file, which the next
 start refuses by name. Which writer such a filesystem should get is filed for a ruling
-(O-NEW-O210-3). Every other link error — a full disk, an I/O error — refuses, and once the temp is
+(O412). Every other link error — a full disk, an I/O error — refuses, and once the temp is
 whole a failure keeps it and names it; the in-place fallback never removes the name it created,
 which a concurrent start may already have loaded. A crash can leave a `<name>.tmp.<nonce>` file
 beside the key; nothing removes it, because it may hold the only copy of a key, and nothing reports
-it yet (O-NEW-O210-4). A file name over 218 bytes is refused, naming the temp it could not create.
+it yet (O413). A file name over 218 bytes is refused, naming the temp it could not create.
 
 Gated by a crash seam beside the vault crate's fault seam, which stops the writer at each step as a
 killed process would — its cleanup included: at every step, for both key sources, the name never
@@ -2256,8 +2264,8 @@ by a fault seam and RED with the first build's code put back.
 Measured on a real 32 MiB vfat filesystem in a container: `ln` refused, `init` and `bundle keygen
 --out` succeed through the fallback with its warning, and `VERIFY OK`. Filed beside it: `config check`
 reads which key files exist and not their length, so it says ok over a key the start refuses
-(O-NEW-O210-1); a wrapped error prints its message twice in the CLI's error chain (O-NEW-O210-2); and
-one refine integration test reset its connection once under the full parallel suite (O-NEW-O210-5).
+(O410); a wrapped error prints its message twice in the CLI's error chain (O411); and
+one refine integration test reset its connection once under the full parallel suite (O414).
 
 PATCH inside the unreleased 1.7.0: a crash no longer leaves a short key, and a keygen over a link
 exits 1 where it wrote through a dangling one. `UPGRADING.md` carries the entry; `config check`

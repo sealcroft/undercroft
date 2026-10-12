@@ -745,7 +745,7 @@ pub enum Published {
     Linked,
     /// The filesystem has no hard links, so the final name was created
     /// exclusively and written in place — O204's writer, kept as the
-    /// fallback until O-NEW-O210-3 is ruled. A crash inside that write leaves
+    /// fallback until O412 is ruled. A crash inside that write leaves
     /// a torn file, which the next load refuses by name; a warning says so
     /// when this happens.
     InPlace,
@@ -792,7 +792,7 @@ pub fn write_new_identity(path: &Path, data: &[u8]) -> io::Result<Published> {
 ///   bytes and an fsync, and it warns. Never a rename, which replaces an
 ///   existing file on Unix — a concurrent start's key, sealed under by then,
 ///   among them. Which writer a linkless filesystem SHOULD get is
-///   O-NEW-O210-3's question; this one is what every release before 1.7.0
+///   O412's question; this one is what every release before 1.7.0
 ///   used. Its residual, stated: a crash inside the in-place write leaves a
 ///   torn file, which [`master_key`] refuses by name.
 /// - **Any other link error refuses**, the temp kept: a full disk or an I/O
@@ -808,7 +808,7 @@ pub fn write_new_identity(path: &Path, data: &[u8]) -> io::Result<Published> {
 /// bytes nothing was ever sealed under; after it and before the temp name is
 /// removed, a second name for the published secret, owner-only like it.
 /// Nothing sweeps either (O204: never delete key material on a guess); that
-/// nothing REPORTS them is O-NEW-O210-4.
+/// nothing REPORTS them is O413.
 fn publish_new_secret(path: &Path, data: &[u8]) -> io::Result<Published> {
     use std::io::Write;
     let name = path.file_name().ok_or_else(|| {
@@ -948,7 +948,7 @@ fn publish_new_secret(path: &Path, data: &[u8]) -> io::Result<Published> {
         );
     }
     // Best effort: a removal this sync does not make durable leaves the temp
-    // behind after a power loss, a leftover O-NEW-O210-4 names; the secret
+    // behind after a power loss, a leftover O413 names; the secret
     // is durable under its name either way.
     let _ = sync_dir(dir);
     Ok(published)
