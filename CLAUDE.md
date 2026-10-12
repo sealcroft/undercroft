@@ -1448,7 +1448,19 @@ Consequences that are binding, not advisory:
   provable forgetting (forget.rs — C3.2 phase 1: `forget`/
   `verify-forgetting`, chain-attested destruction with heads + tombstone
   interval + unkeyed content fps; vault-verifiable by keyed replay, third
-  parties verify the operator's Ed25519 signature. **The keyed replay has a
+  parties verify the operator's Ed25519 signature. **A document carrying
+  what this build does not know is NOT CHECKED, never forged and never
+  verified (O315)**: the three types, and the witness, capture every key
+  they do not declare instead of dropping it, and `age_fence` — the
+  verifier's first statement, ahead of the vault, the signature and every
+  tag — refuses an unknown `version` or key unread (`Invalid`: exit 1,
+  `/v1` 400 with no class), saying a newer build may have minted it OR it
+  was altered, never which. Signature-first over a canonical recomputed
+  without the key is how 1.1.0's `mirror` reads as forged to every older
+  build. The cost, stated: a forgery that adds a key no build declares is
+  exit 1 from every build, present and future, where without it it is
+  exit 2 — whether "not checked" needs its own exit class is filed for the
+  maintainer (O429). **The keyed replay has a
   SHORTER LIFETIME than the document it checks, and pretending otherwise was
   a CRITICAL** (O13): rotation destroys the mac key that made the tombstones,
   so every genuine receipt reported `ATTESTATION FAILED` at exit 2 — the
@@ -1839,7 +1851,8 @@ Consequences that are binding, not advisory:
   closes the REWIND direction below the witnessed height and nothing above
   it; three records that said it closes forged-append were corrected beside.
   Own door on the `verify-forgetting` precedent, CLI always read-only, typed
-  verdict, foreign vault = integrity finding; on `/v1` as `GET`/`POST
+  verdict, foreign vault = integrity finding, an unknown version or key NOT
+  CHECKED before the signature (O315, the receipt's fence); on `/v1` as `GET`/`POST
   …/witness` (the fourth POST that reads) and the orchestrator's ops plane;
   **not on MCP** by the maintainer's ruling. The emit refuses a genesis
   chain and a pending A10 walk, whose relabel moves the digest)

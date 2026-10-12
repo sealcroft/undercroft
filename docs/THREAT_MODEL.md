@@ -1120,7 +1120,19 @@ straight, each carrying what it actually is.
   `POST /v1/vaults/{id}/verify-forgetting`, the fleet's
   `ops/verify-forgetting`, and the admin console — where until 1.1.0 the
   HTTP plane could MINT a receipt and only the CLI could check one
-  (ROADMAP O14). **A whole destruction is one write lock (ROADMAP O255,
+  (ROADMAP O14). **A receipt carrying what this build does not know is
+  NOT CHECKED, never forged (ROADMAP O315, 1.7.0)**: the version and every
+  key are read BEFORE the signature, and one this build does not know is
+  refused unread — exit 1, `/v1` 400 with no class — where a field a later
+  release signed used to fail the signature and read as the tamper verdict
+  (1.6.1 and older still read it so). The witness's check shares the
+  fence. Reading them ahead of the signature can buy a refusal and never
+  an acceptance. **Its cost, stated exactly**: a forger who adds a key no
+  build will ever declare, or a version none will ever mint, gets exit 1
+  from EVERY build, present and future, where the same forgery without it
+  is exit 2 — and exit 1 is the class a compliance script may retry and
+  then ignore. Whether "not checked" needs its own exit class is open in
+  the ROADMAP for the maintainer. **A whole destruction is one write lock (ROADMAP O255,
   2026-09-25).** Until then each drawer was destroyed in its own
   transaction, so a receipt minted while another handle committed carried
   that writer's records — and labels — inside its interval and could never

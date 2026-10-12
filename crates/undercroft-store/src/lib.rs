@@ -91,7 +91,7 @@ pub use admission::{
 };
 pub use backup::{BackupOutcome, BackupReport};
 pub use delete::{delete_vault, Deleted};
-pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete};
+pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete, ATTESTATION_VERSION};
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
 pub use manage::{
     effective_trust_floor, DedupReport, DrawerSummary, Hallway, Namespace, Tunnel, TunnelOutcome,
@@ -3125,7 +3125,7 @@ pub(crate) enum CoveredRow {
     /// (ROADMAP O221's review: it failed `admission list`, `history` and
     /// `drawer delete` where the clear-column fence answered). `verify` and
     /// the retention sweep still RAISE `error`, as they did before O221: a
-    /// verdict for such a row in those legs is ROADMAP O-NEW-o221-2's.
+    /// verdict for such a row in those legs is ROADMAP O427's.
     Undecodable {
         id: String,
         seq: i64,
@@ -11090,7 +11090,7 @@ impl VaultStore {
                 }),
                 CoveredRow::Verified { drift, .. } => mirror_drift.extend(drift),
                 // As before ROADMAP O221 split it out: a retyped column fails
-                // the walk with its conversion error (O-NEW-o221-2).
+                // the walk with its conversion error (O427).
                 CoveredRow::Undecodable { error, .. } => return Err(error),
             }
             Ok(())

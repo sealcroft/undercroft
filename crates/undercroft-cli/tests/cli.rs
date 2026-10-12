@@ -4486,3 +4486,223 @@ fn o287_export_help_and_serve_mcp_into_a_closed_reader() {
     assert_eq!(code_of(&out), 0, "{out:?}");
     no_panic(&out);
 }
+
+/// **ROADMAP O315 through the binary: `verify-forgetting` answers a receipt
+/// carrying a field or a version it does not know with exit 1, "NOT
+/// checked", never exit 2** — the gate's documents: the genuine receipt (0); a
+/// newer build's receipt, a field it signed, alone and with a version bump
+/// (1); a key added beside a genuine signature (1); a forged receipt (2); a
+/// forgery that also adds a key (1, the stated COST); a truncated one (1 as a
+/// parse failure, 2 when a record is cut and re-signed).
+///
+/// Exit 2 is this CLI's integrity verdict, the one a compliance script must
+/// never retry, and a genuine receipt carrying a field a newer build signed
+/// reached it: the signature was checked over a canonical recomputed without
+/// the field, before the version was read. A version bump ALONE, genuinely
+/// re-signed, was already exit 1 there (the version arm) and is not the
+/// defect; it is kept as the arm that pins the wording.
+///
+/// COUNTERFACTUAL, run against `5108dfa`'s binary: the signed field and the
+/// field-plus-bump exit 2 `ATTESTATION FAILED: signature`, the annotated
+/// receipt exits 0 `ATTESTATION VERIFIED`, and the forgery-plus-key exits 2.
+#[test]
+fn verify_forgetting_answers_a_newer_builds_receipt_with_exit_1_never_2() {
+    let home = TempDir::new().unwrap();
+    let work = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    let out = cmd(&home)
+        .args([
+            "remember",
+            "a note the subject asked us to erase",
+            "--wing",
+            "w",
+        ])
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let id = text
+        .split("Filed drawer ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("no drawer id in output: {text}"))
+        .to_string();
+    let key = work.path().join("sign.key");
+    cmd(&home)
+        .args(["bundle", "sign-keygen", "--out", key.to_str().unwrap()])
+        .assert()
+        .success();
+    let secret = std::fs::read_to_string(&key).unwrap().trim().to_string();
+    let att_path = work.path().join("att.json");
+    cmd(&home)
+        .args([
+            "forget",
+            &id,
+            "--sign",
+            key.to_str().unwrap(),
+            "--out",
+            att_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let raw = std::fs::read_to_string(&att_path).unwrap();
+    let att: undercroft_store::ForgetAttestation = serde_json::from_str(&raw).unwrap();
+    assert!(att.sig.is_some(), "premise: the receipt is signed");
+    let genuine: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let verify = |doc: &str, name: &str| {
+        let p = work.path().join(name);
+        std::fs::write(&p, doc).unwrap();
+        cmd(&home)
+            .args(["verify-forgetting", p.to_str().unwrap()])
+            .assert()
+    };
+    // What a newer build mints: `base` plus one field, signed over the
+    // canonical with the field appended (the `mirror` extension's shape).
+    let as_newer = |base: &undercroft_store::ForgetAttestation| {
+        let mut v = serde_json::to_value(base).unwrap();
+        v["archive"] = serde_json::json!("1 archive(s), oldest 2026-10-01");
+        let mut bytes = base.canonical();
+        bytes.extend_from_slice("\u{1f}archive\u{1e}1 archive(s), oldest 2026-10-01".as_bytes());
+        v["sig"] =
+            serde_json::json!(undercroft_vault::bundle::sign_detached(&secret, &bytes).unwrap());
+        v.to_string()
+    };
+
+    // The genuine receipt: exit 0, the premise for every refusal below.
+    verify(&raw, "genuine.json")
+        .success()
+        .stdout(predicate::str::contains("ATTESTATION VERIFIED"));
+
+    // A newer build's field, inside its signature: exit 1, not checked,
+    // and NOT the tamper line.
+    verify(&as_newer(&att), "newer-field.json")
+        .code(1)
+        .stderr(predicate::str::contains("was NOT checked"))
+        .stderr(predicate::str::contains(
+            "may have minted it, or it was altered",
+        ))
+        .stdout(predicate::str::contains("ATTESTATION FAILED").not());
+
+    // The field with a version bump, both signed: exit 1.
+    let mut bumped = att.clone();
+    bumped.version = undercroft_store::ATTESTATION_VERSION + 1;
+    bumped.sign(&secret).unwrap();
+    verify(&as_newer(&bumped), "newer-field-and-version.json")
+        .code(1)
+        .stderr(predicate::str::contains("was NOT checked"));
+    // The bump alone, re-signed: exit 1 — as it already was; not the defect.
+    verify(
+        &serde_json::to_string(&bumped).unwrap(),
+        "newer-version.json",
+    )
+    .code(1)
+    .stderr(predicate::str::contains("was NOT checked"));
+
+    // A key added beside the signature, outside it: it verified before.
+    let mut annotated = genuine.clone();
+    annotated["ticket"] = serde_json::json!("JIRA-1");
+    verify(&annotated.to_string(), "annotated.json")
+        .code(1)
+        .stderr(predicate::str::contains("\"ticket\""))
+        .stdout(predicate::str::contains("ATTESTATION VERIFIED").not());
+
+    // Forged, every key known: still exit 2, so the fence softened nothing.
+    let mut forged = genuine.clone();
+    forged["head_after"] = serde_json::json!("00".repeat(32));
+    verify(&forged.to_string(), "forged.json")
+        .code(2)
+        .stdout(predicate::str::contains("ATTESTATION FAILED"));
+    // The COST, pinned: the same forgery carrying a key no build declares is
+    // exit 1, not checked — on this build and on every later one.
+    let mut forged_keyed = forged.clone();
+    forged_keyed["zz-never-declared"] = serde_json::json!(true);
+    verify(&forged_keyed.to_string(), "forged-keyed.json")
+        .code(1)
+        .stderr(predicate::str::contains("was NOT checked"));
+
+    // Truncated two ways: the file cut mid-document is a parse failure,
+    // exit 1 and no "not checked" claim; the record list cut and re-signed
+    // is a document that does not describe what this vault did, exit 2.
+    verify(&raw[..raw.len() / 2], "truncated-bytes.json")
+        .code(1)
+        .stderr(predicate::str::contains("is not an attestation"))
+        .stderr(predicate::str::contains("NOT checked").not());
+    let mut cut = att.clone();
+    cut.records.clear();
+    cut.sign(&secret).unwrap();
+    verify(
+        &serde_json::to_string(&cut).unwrap(),
+        "truncated-records.json",
+    )
+    .code(2)
+    .stdout(predicate::str::contains("ATTESTATION FAILED"));
+}
+
+/// **ROADMAP O315 on the witness, through the binary.** `witness check` read
+/// the version before the signature already, but the document type dropped
+/// an undeclared key: a later build's signed field failed the signature as
+/// the integrity family (exit 2) and a key added beside a genuine signature
+/// was checked around (exit 0). Both are exit 1, NOT CHECKED, now; a forged
+/// witness with every key known is still exit 2.
+///
+/// COUNTERFACTUAL, run against `5108dfa`'s binary: the signed field exits 2
+/// and the annotated witness 0.
+#[test]
+fn witness_check_answers_a_key_it_does_not_know_with_exit_1_never_2() {
+    let home = TempDir::new().unwrap();
+    let work = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["remember", "the ledger names the harbour master"])
+        .assert()
+        .success();
+    let key = work.path().join("sign.key");
+    cmd(&home)
+        .args(["bundle", "sign-keygen", "--out", key.to_str().unwrap()])
+        .assert()
+        .success();
+    let secret = std::fs::read_to_string(&key).unwrap().trim().to_string();
+    let w_path = work.path().join("w.json");
+    cmd(&home)
+        .args([
+            "witness",
+            "emit",
+            "--sign",
+            key.to_str().unwrap(),
+            "--out",
+            w_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let raw = std::fs::read_to_string(&w_path).unwrap();
+    let w: undercroft_store::ChainWitness = serde_json::from_str(&raw).unwrap();
+    assert!(w.sig.is_some(), "premise: the witness is signed");
+    let genuine: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let check = |doc: &str, name: &str| {
+        let p = work.path().join(name);
+        std::fs::write(&p, doc).unwrap();
+        cmd(&home)
+            .args(["witness", "check", p.to_str().unwrap()])
+            .assert()
+    };
+    check(&raw, "genuine.json").success();
+
+    let mut newer = genuine.clone();
+    newer["cadence"] = serde_json::json!("daily");
+    let mut bytes = w.canonical();
+    bytes.extend_from_slice("\u{1f}cadence\u{1e}daily".as_bytes());
+    newer["sig"] =
+        serde_json::json!(undercroft_vault::bundle::sign_detached(&secret, &bytes).unwrap());
+    check(&newer.to_string(), "newer.json")
+        .code(1)
+        .stderr(predicate::str::contains("was NOT checked"));
+
+    let mut annotated = genuine.clone();
+    annotated["note"] = serde_json::json!("kept in the safe");
+    check(&annotated.to_string(), "annotated.json")
+        .code(1)
+        .stderr(predicate::str::contains("\"note\""));
+
+    let mut forged = genuine.clone();
+    forged["rows"] = serde_json::json!(w.rows + 1);
+    check(&forged.to_string(), "forged.json").code(2);
+}

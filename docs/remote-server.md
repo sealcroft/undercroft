@@ -295,7 +295,11 @@ POST   /v1/vaults/{id}/verify-forgetting  check an attestation this vault
                                         issued: Verified, or Recorded when a
                                         key rotation has destroyed the replay
                                         key (exit 0 either way); 409 if the
-                                        document does not describe this vault
+                                        document does not describe this vault;
+                                        400, NOT checked, if it carries a
+                                        field or version this build does not
+                                        know (a newer build's, or altered) —
+                                        refused before its signature
 
 ── maintenance / portability ────────────────────────────────────────────
 POST   /v1/vaults/{id}/refine           LLM distillation → KG

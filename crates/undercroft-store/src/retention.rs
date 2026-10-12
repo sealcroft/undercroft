@@ -830,7 +830,7 @@ fn classify(
 ) -> Result<Member, StoreError> {
     let (id, meta, drift) = match row {
         // As before ROADMAP O221 split it out: a retyped column fails the
-        // sweep with its conversion error (ROADMAP O-NEW-o221-2).
+        // sweep with its conversion error (ROADMAP O427).
         crate::CoveredRow::Undecodable { error, .. } => return Err(error),
         crate::CoveredRow::TagFailed { id, .. } => {
             return Ok(Member::Unverifiable(RetentionUnverifiable {

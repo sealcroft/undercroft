@@ -627,7 +627,7 @@ mod cases {
         assert!(
             matches!(&err, StoreError::IntegrityFinding(m)
                 if m.contains("re-import its genuine exported queue record")
-                    && m.contains("O-NEW-o221-1")
+                    && m.contains("O426")
                     && !m.contains("admission allow")),
             "{err:?}"
         );

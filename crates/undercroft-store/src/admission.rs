@@ -193,7 +193,7 @@ pub const UNVERIFIABLE_REMEDIES: &str =
 /// door does yet. The explicit act the maintainer approved (O221(c), D4) is
 /// filed, so the refusal names it rather than advising a door that fails.
 pub const UNVERIFIABLE_NO_DESTROY: &str =
-    "No door destroys such a row yet: the explicit act that will is filed as ROADMAP O-NEW-o221-1";
+    "No door destroys such a row yet: the explicit act that will is filed as ROADMAP O426";
 
 /// Where a row stands with respect to the review queue — the answer of the
 /// ONE predicate every destruction and write fence asks (ROADMAP O221 ruling,

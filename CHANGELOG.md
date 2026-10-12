@@ -2360,7 +2360,7 @@ older than the tampering.
 
 Ruled 2026-10-08 by two independent panels of three lenses each and a reconciling refuter, recorded
 in ROADMAP O221. Part (c) — an explicit act that destroys an unverifiable row, approved by the
-maintainer as D4 — is a separate MINOR unit, filed as O-NEW-o221-1.
+maintainer as D4 — is a separate MINOR unit, filed as O426.
 
 Measured through the release binary. The LoCoMo feed mined into 32 wings of a sealed vault
 (2,720 drawers) and four flagged saves, then the offline writer with `sqlite3`: a clean queue lists
@@ -2407,9 +2407,9 @@ raw conversion error, where `5108dfa` answered all three. Such a row is now a ro
 verify (`CoveredRow::Undecodable`): the list reports it as `column-retyped` when either copy places
 it in the queue, the history omits its records, and the fence's unreadable arm decides it — deletable
 outside the queue, refused with its remedies inside it. `verify` and the retention sweep still raise
-the conversion error, as they did before this unit (filed as O-NEW-o221-2). A pending row whose tag
+the conversion error, as they did before this unit (filed as O427). A pending row whose tag
 verifies and whose content does not decrypt was refused with advice to use `allow`/`deny`, both of
-which refuse it; it now names the remedies and the filed explicit act (O-NEW-o221-1). The sweep's
+which refuse it; it now names the remedies and the filed explicit act (O426). The sweep's
 withheld reason named `allow`/`deny` for a row no ruling can act on; it now depends on the row. And
 the first record said all eleven O221 tests fail on the old logic: the sweep-window test passes there
 too, because the recheck drops the member before any fence is asked — it pins the behaviour, it does
@@ -2467,6 +2467,44 @@ check of the same, run against the release binary, passes; against `5108dfa`'s b
 re-mine having moved the row's `filed_at`.
 
 PATCH inside the unreleased 1.7.0; no surface field is added, and nothing that runs today stops.
+
+### A receipt or a witness carrying what this build does not know is NOT CHECKED, never forged and never verified (O315)
+
+`verify-forgetting` checked a signed erasure receipt's Ed25519 signature BEFORE it read the receipt's
+`version`, over a canonical recomputed from a type that silently dropped every key it did not declare. So
+a field a newer build SIGNS — alone or with a version bump, the version being inside the same signature —
+made every older build answer `ATTESTATION FAILED`, exit 2, the tamper verdict, over a genuine receipt;
+and a key added beside a signature was ignored while the document `VERIFIED`. A version bump alone,
+genuinely re-signed, was already refused by the version check (exit 1) and was never the defect. It had
+happened once: 1.1.0's `mirror` note shipped with no version change, so every build before 1.1.0 reads a
+genuine mirror-bearing signed receipt as forged.
+
+Now an **age fence** runs first, before the vault check, the signature and every tag (O267's ruling, on
+the O238 precedent): a `version` above 2, or a key the receipt's types do not declare — at the top, in a
+drawer or in a record, named by path — is refused as **NOT CHECKED**: "a newer build of Undercroft may
+have minted it, or it was altered", never a claim about who minted it. Exit 1, `/v1` 400 with no class
+(through the orchestrator's ops relay too, whose CLI exits 1), an error on MCP, and "NOT CHECKED" on the
+admin console, which toasted "ATTESTATION FAILED" on every error until now and says so only on the
+integrity class. `witness check` and `POST /v1/…/witness` get the same fence: the witness read its
+version first already, but dropped an undeclared key, so a later build's signed field answered the
+integrity family there too. Reading the version and the key set ahead of the signature can buy a refusal
+and never an acceptance. **Its cost, stated exactly**: a forger who adds a key no build will ever declare,
+or a version none will ever mint, gets exit 1 "not checked" from EVERY build, present and future, where
+the same forgery without it is exit 2 — and exit 1 is the class a compliance script may retry and then
+ignore. Whether "not checked" deserves its own exit class is filed for the maintainer (O429). Every key any
+release ever minted is known (read at all 13 tags), and no minted byte moves.
+
+Measured on the LoCoMo feed mined into four wings (340 drawers) and one signed `forget` of 40, the newer
+build's documents re-signed with openssl over a canonical rebuilt from the receipt and proved against the
+binary's own signature first: a signed extra field exits 1 (2 on `5108dfa`), the same field with a version
+bump 1 (2 there), a key added beside the signature 1 (0 there, `VERIFIED`), a forged receipt 2 (2), a
+forgery that also bumps the version 1 (2 there — the cost), a truncated file 1 (1); `/v1` answers 400,
+400, 400, 409 + `integrity`, 400, 400 (409, 409, 200, 409, 409, 400 there).
+
+PATCH inside the unreleased 1.7.0: a genuine document was read as forged, which the code's own comment
+said must not happen. `UPGRADING.md` records the moved observables and that 1.7.0 is the first release
+that answers such a receipt as not checked; `config check` cannot detect it. The export bundle's
+manifest keeps the old parse — filed as O428.
 
 ## 1.6.1 — 2026-09-22
 

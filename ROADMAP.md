@@ -16322,7 +16322,7 @@ filed it, and the witness gate counts three `Ruled`; the review's own
 in-lock fence refusing it with nothing deleted, which is what the witness is
 for.
 
-### O221 — CLOSED 2026-10-12: parts (a) and (b) — `admission list` reports a row it cannot verify beside the readable queue and never fails on one, and ONE predicate (the covered wing where the row verifies, the clear column where it does not) decides every destruction and write fence; part (c), the maintainer's D4, is filed as O-NEW-o221-1
+### O221 — CLOSED 2026-10-12: parts (a) and (b) — `admission list` reports a row it cannot verify beside the readable queue and never fails on one, and ONE predicate (the covered wing where the row verifies, the clear column where it does not) decides every destruction and write fence; part (c), the maintainer's D4, is filed as O426
 
 **Filed 2026-09-18 by O216's ruling panel; measured by its probes P2 and P3 on
 the `4ff51ab` binary.**
@@ -16640,7 +16640,7 @@ stops."
 the answer approved the shape without naming one. It is still the maintainer's; the building unit asks it with
 its pull request.
 
-#### BUILT 2026-10-12 — parts (a) and (b), exactly as ruled; part (c) filed as O-NEW-o221-1
+#### BUILT 2026-10-12 — parts (a) and (b), exactly as ruled; part (c) filed as O426
 
 **The predicate (ruling items 1–2).** `VaultStore::queue_standing(conn, id)` in
 `crates/undercroft-store/src/admission.rs` answers `QueueStanding::{Pending, PendingUnverifiable,
@@ -16745,15 +16745,15 @@ conversion error, where `5108dfa` answered all three — against part (a)'s "nev
 item 3's "fails no history call" and the FOLLOWED "an unreadable row stays deletable". Such a row is
 now `CoveredRow::Undecodable`, a row that does not verify: reported as `column-retyped`, omitted from
 the agent history, decided by the fence's unreadable arm; `verify` and the sweep still raise the
-conversion error (O-NEW-o221-2, filed). A pending row whose content does not decrypt is refused with
+conversion error (O427, filed). A pending row whose content does not decrypt is refused with
 the remedies and the filed act, not with `allow`/`deny`, which both refuse it; the sweep's withheld
 reason depends on the row; `delete_by_source`'s first test, which asserted a refusal over a retyped
 ordinary member, is inverted. Merged over trains 1 and 2: `VaultStore::fence`, which mints O259's
 `Fenced` witness, asks `queue_standing` and answers through `queue_refusal`, so the witness and the
 predicate are one door.
 
-**What remains.** Part (c), D4, is O-NEW-o221-1. A retyped column in `verify` and the sweep is
-O-NEW-o221-2. The double flip stays O216's stated residual.
+**What remains.** Part (c), D4, is O426. A retyped column in `verify` and the sweep is
+O427. The double flip stays O216's stated residual.
 O334, O335 and O336 are this ruling's three filed entries and are untouched; the fences' own
 refusals render a malformed id by its length, which O336's gate will find already true at these
 sites.
@@ -16908,6 +16908,113 @@ again a second later converges: the row's `meta_json` is byte-identical across t
 `filed_at` the first mine's) and its record id holds two chain records, one per submission. The e2e
 check of the same, run against the release binary, passes; against `5108dfa`'s binary it fails, the
 re-mine having moved the row's `filed_at`.
+
+### O315 — CLOSED 2026-10-12: a receipt or a witness carrying a version or a field this build does not know is NOT CHECKED, never forged and never verified — an age fence reads both before the vault, the signature or a tag
+
+**Filed 2026-10-06 by O267's ruling (its refuter; the order read again by the integrator).**
+`verify_forget_attestation` checks the Ed25519 signature over `att.canonical()`
+(`crates/undercroft-store/src/forget.rs` 650-656) before it matches the version (684-693), and the
+attestation type drops unknown fields (no `deny_unknown_fields`, 179). A receipt minted by a build that
+signs one more field is recomputed shorter by an older build, fails the signature, and is reported
+`ATTESTATION FAILED`, exit 2 — the tamper verdict — which the comment at 681-683 ("a document a newer
+build minted is not a forgery") says must not happen, and which a version bump does not prevent. It has
+happened once: the `mirror` extension (256-258) shipped in `30c560f`, first tagged `v1.1.0`, with no
+version change, so every pre-1.1.0 verifier reads a genuine mirror-bearing signed receipt as forged.
+
+**Shape**: an age fence on the O241 ruling 4 and O238 precedent — an unknown version, or a field this
+build does not know, refused as "a newer build minted it" (exit 1) BEFORE the signature is checked —
+landing in a release before any further canonical extension; O316's signed archive note waits for it.
+**Gate**: a signed receipt carrying an extra canonical field is refused with exit 1 by the fenced build,
+and the same document without the field verifies; counterfactual, today's order answers exit 2 (O267's
+P-Q1d).
+
+#### BUILT 2026-10-12, as ruled (O267 ruling 4) — with the renderer the entry did not name, the witness's half of the sibling sweep, and one defect of this unit's own found by its independent review
+
+**What landed.** `crates/undercroft-store/src/forget.rs`: `ForgetAttestation`, `ForgottenDrawer` and
+`AttestedRecord` capture every key they do not declare (`#[serde(flatten)] unknown: UnknownFields`) instead
+of dropping it — empty on every receipt a release minted, and serialised to nothing, so no minted byte
+moves. `ForgetAttestation::age_fence` is the first statement of `verify_forget_attestation`, ahead of the
+vault check, the signature and every tag: a `version` above `ATTESTATION_VERSION` (2), or any key the types
+do not declare — at the top, in a drawer or in a record, named by path, three at most, each cut to 64
+characters and printed through `Debug` — is refused as **NOT CHECKED**. The refusal claims nothing about the
+document, because nothing in it was read: "a newer build of Undercroft may have minted it, or it was
+altered", never "a newer build minted it" alone (`not_checked_version`, `not_checked_keys`, the one wording).
+Version 0 is refused in the same class without the "newer build" half. The class is `StoreError::Invalid`,
+the one the old version arm answered: exit 1, `/v1` 400 with no class and so through the orchestrator's
+ops relay (whose CLI exits 1), an error on MCP. **The renderer the entry did not name**: `ui.html`'s receipt
+checker toasted "ATTESTATION FAILED" on EVERY error, a refused receipt, a malformed body and a refused
+bearer included; it says so now only on `class: "integrity"` and "NOT CHECKED" otherwise, `api()` carrying
+the status and the class on what it throws.
+
+**The witness, the sibling sweep's half that was free only now.** `ChainWitness` read its `version` before
+its signature already, but dropped an undeclared key, so a later build's signed field without a version
+bump answered `Attestation` (exit 2, 409 + `integrity`) and a key added beside a genuine signature was
+checked around (`Extends`). It captures the same `UnknownFields`, and `witness_check` refuses an unknown
+key — and an unknown version, reworded through the same helper — before the vault, the signature or a row.
+The witness first ships in 1.7.0, so this moved no released contract. The export bundle's manifest, the
+released half, is O428.
+
+**Why the order is sound, and its cost, stated exactly.** O238's argument for the manifest: `version` and
+the key set are read before verification, which can buy a refusal and never an acceptance. The cost: a
+forger who adds a key no build will ever declare, or a version none will ever mint, gets exit 1 "not
+checked" from EVERY build, present and future — never exit 2 — and exit 1 is the class a compliance script
+may retry and then ignore, the shape the CLI's `verify-forgetting` arm records exit 2 being introduced to
+close. This record's first version said the forger got "not checked" only "where an up-to-date build
+answers exit 2", which is false: no build ever answers it otherwise. Whether "not checked" deserves its own
+exit class is a documented exit contract, filed for the maintainer as O429.
+
+**A defect of this unit's own, found by its independent review.** Its first build's e2e and real-corpus
+"newer build" documents were a `sed` over a SIGNED receipt's `version`: the version is the canonical's first
+field, so that document was a FORGERY, `5108dfa` answered it exit 2 / 409 — correctly — and the checks called
+that correct verdict the defect. A version bump alone, genuinely re-signed, was already exit 1 / 400 there
+(the store test's arm 4 said so), and two test docstrings said otherwise. Rebuilt: the newer build's
+documents are now RE-SIGNED — in Rust with `sign_detached`, in the shell suites with openssl over a
+canonical rebuilt from the document's JSON and proved against the binary's own signature first — and the
+`sed` forgery is kept, labelled as what it is: the stated cost, exit 1 where the same forgery without it is
+exit 2.
+
+**No genuine document is fenced.** Read at all 13 release tags `v1.0.0`..`v1.6.1` and all 22 revisions of
+`forget.rs`: the receipt types never lost a field, and `mirror` (1.1.0) is the only one ever added.
+`every_key_a_released_build_minted_is_known_and_no_minted_byte_moves` pins the receipt's key sets as
+literals and its minted JSON byte for byte; the witness test pins the emitted key set.
+
+**Tests, each RED on the unfixed code.** Store: `a_document_a_newer_build_minted_is_refused_as_age_before_the_signature`
+(a signed top-level, record and drawer field; a signed field with a bump, and a bump alone — not the
+defect; an unsigned extra key; a key added beside a genuine signature; version 0; the cost — a forgery
+adding a key, a forgery bumping the version, a document naming another vault with an unknown key; four
+forgeries with every key known still `Attestation`; hostile keys escaped and cut), the key-set test, and
+`a_witness_carrying_a_key_this_build_does_not_know_is_not_checked`. CLI `tests/cli.rs`
+`verify_forgetting_answers_a_newer_builds_receipt_with_exit_1_never_2` and
+`witness_check_answers_a_key_it_does_not_know_with_exit_1_never_2`; `/v1`
+`verify_forgetting_answers_a_newer_builds_receipt_as_the_callers_400` (with the witness route); MCP
+`a_receipt_a_newer_build_minted_is_refused_as_age_over_mcp`; console
+`the_console_calls_only_an_integrity_verdict_a_failed_attestation`. Counterfactuals, each applied by a script
+that asserted its anchor, forced a recompile and restored with `cmp`: the fence after the signature, the keys
+not captured, the witness's key arm removed and the old console catch → both store tests and all five
+CLI-side tests RED, with `Attestation("signature: …")`, 409 + `integrity` and exit 2 where the defect reads
+them; no `flatten` → the byte pin RED; raw keys in the message → the hostile-key arm RED. e2e gained 27 checks and
+e2e-orchestrator 12, run ad hoc against both release binaries: on `5108dfa`'s, 13 and 5 fail exactly as the
+defect reads (the re-signed field exit 2 and 409 + `integrity`, the annotated receipt and witness exit 0 and
+200, the cost arms 2 and 409, the ops CLI exit 0 and 2).
+
+**Real corpus.** The LoCoMo feed mined into four wings (340 drawers) and one signed `forget` of 40. CLI on
+this build: genuine 0; a re-signed extra field 1; the field with a bump 1; a key added beside the signature
+1; forged 2; a forgery with a bumped version 1 (the cost); truncated 1. On `5108dfa`'s: 0, 2, 2, 0 VERIFIED,
+2, 2, 1. `/v1` on this build 200, 400, 400, 400, 409 + `integrity`, 400, 400; on `5108dfa`'s 200, 409, 409,
+200, 409, 409, 400. `verify` OK after.
+
+**What it does not do, stated.** It fixes no older build: 1.6.1 and earlier still read a newer build's
+signed field as forged, and every build before 1.1.0 reads 1.1.0's `mirror` that way — `UPGRADING.md`
+records 1.7.0 as the first release that answers it as not checked. O316's unsigned archive note must not
+ride as a top-level key of `POST …/forget`'s reply, which IS the attestation, or this build's own verifier
+refuses the reply it minted — noted there.
+
+**Version.** PATCH inside 1.7.0: the defect was a genuine document read as forged, which the comment beside
+the code already said must not happen, and an undeclared key that was ignored was never documented as
+accepted. Three observables move, all in `UPGRADING.md`: a receipt carrying a field a newer build signed
+exits 1 (400) where it exited 2 (409 + `integrity`); a receipt carrying a key added beside its signature
+exits 1 (400) where it verified; and a forgery that also carries an unknown key or version exits 1 (400)
+where it exited 2 — the cost.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -36567,7 +36674,7 @@ screen off carry it too; its relation line left with it.
 
 **Relations:** shares a question with O223 — through that entry's arm, a self-restore of a vault with a queue is a no-op in both screening postures.
 
-**Relations:** shares a question with O-NEW-o221-1 — that entry's screen-off remedy exists once this entry's hold lands, and that entry owns its wording.
+**Relations:** shares a question with O426 — that entry's screen-off remedy exists once this entry's hold lands, and that entry owns its wording.
 
 **Relations:** shares a question with O227 — that entry's cost lands at every destination once this entry's hold lands.
 
@@ -43389,6 +43496,13 @@ still refused.
 
 **Relations:** shares a question with O356 — both change what `verify_forget_attestation` answers for a genuine document.
 
+**Noted 2026-10-12 by O315's build.** `verify_forget_attestation` now runs an age fence first — a version or
+a key this build does not know is refused as NOT CHECKED (`StoreError::Invalid`) before the vault, the
+signature or a tag — so this entry's verdict is reached only by a document past it. The three types gained a
+flattened `unknown` map, empty on every minted receipt and serialised to nothing; `AttestationVerdict` is
+untouched and keeps `Copy`. Every receipt this entry's gate mints with `v1.5.2` and `v1.6.1` passes the
+fence: no key any release minted is unknown to it.
+
 #### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
 
 **The question.** A receipt minted before O255 while another handle committed carries that handle's records inside
@@ -44517,6 +44631,10 @@ which neither `secure_delete` nor `VACUUM` reaches — save a unique token, `for
 docs sweep, including `forget.rs` 798-799's comment), O317 (an archive-removal surface). This entry stays
 open for its engineering half — `secure_delete`, a TRUNCATE checkpoint after a destruction, and P-Q1e's
 FTS5 residue.
+
+**Noted 2026-10-12 by O315's build.** Item 4's fence is built (O315, under `## 1.7.0`): a version or a key
+this build does not know is refused as NOT CHECKED before the vault, the signature or a tag, so a signed
+archive extension may follow it from 1.7.0 on.
 
 #### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
 
@@ -48501,25 +48619,6 @@ the tree, which no arm judges — filed as its own entry, not ruled here.
 **Version class.** PATCH-class: a preflight change with no bump of its own; a CHANGELOG line; no
 `UPGRADING.md` entry.
 
-### O315 — a signed erasure receipt is checked for its signature before its version, so a field a newer build adds makes every older build call it forged
-
-**Filed 2026-10-06 by O267's ruling (its refuter; the order read again by the integrator).**
-`verify_forget_attestation` checks the Ed25519 signature over `att.canonical()`
-(`crates/undercroft-store/src/forget.rs` 650-656) before it matches the version (684-693), and the
-attestation type drops unknown fields (no `deny_unknown_fields`, 179). A receipt minted by a build that
-signs one more field is recomputed shorter by an older build, fails the signature, and is reported
-`ATTESTATION FAILED`, exit 2 — the tamper verdict — which the comment at 681-683 ("a document a newer
-build minted is not a forgery") says must not happen, and which a version bump does not prevent. It has
-happened once: the `mirror` extension (256-258) shipped in `30c560f`, first tagged `v1.1.0`, with no
-version change, so every pre-1.1.0 verifier reads a genuine mirror-bearing signed receipt as forged.
-
-**Shape**: an age fence on the O241 ruling 4 and O238 precedent — an unknown version, or a field this
-build does not know, refused as "a newer build minted it" (exit 1) BEFORE the signature is checked —
-landing in a release before any further canonical extension; O316's signed archive note waits for it.
-**Gate**: a signed receipt carrying an extra canonical field is refused with exit 1 by the fenced build,
-and the same document without the field verifies; counterfactual, today's order answers exit 2 (O267's
-P-Q1d).
-
 ### O316 — an erasure says nothing of the copies it leaves, and a restore reverses receipted erasures in silence
 
 **Filed 2026-10-06 by O267's ruling (items 2 and 3).** A vault DELETE answers `deleted: true` while the
@@ -48545,6 +48644,13 @@ step; every over-claim above is corrected and the `Dangling` scope stated; the c
 new field gets its `HAND_PROJECTED` rows; `ui.html` renders neither, which is written down. **Gate**:
 P-Q1a and P-Q1b driven through the CLI and `/v1`; the new fields asserted present and, with nothing left,
 empty or "unknown" as ruled; a text check over the surfaces above.
+
+**Noted 2026-10-12 by O315's build.** The age fence refuses any key a receipt does not declare, before its
+signature, as NOT CHECKED, and `POST /v1/vaults/{id}/forget` answers with the attestation itself — so this
+entry's unsigned archive note cannot ride as a top-level key of that reply, or this build's own
+`verify-forgetting` refuses the reply it minted. Where the note travels instead is this entry's build to
+settle. A SIGNED note, declared in a later release, is answered as not checked by every verifier from 1.7.0
+up to that release and as forged by 1.6.1 and older, which its `UPGRADING.md` entry owes.
 
 **Relations:** shares a diff surface with O147 — both add fields to the reply of `DELETE /v1/vaults/{id}`.
 
@@ -51891,7 +51997,7 @@ import keeping what its payload says. **Gate**: a `valid_from` that is not a dat
 refusal is ruled, one holding a C0 byte — is refused on MCP, the CLI and `/v1`, and an import of the
 vault's own export still lands; counterfactual, today's acceptance.
 
-### O-NEW-o221-1 — a review-queue row whose tag fails can be neither allowed, denied, deleted nor forgotten: the explicit destroy-unverifiable act the maintainer approved (O221(c), D4)
+### O426 — a review-queue row whose tag fails can be neither allowed, denied, deleted nor forgotten: the explicit destroy-unverifiable act the maintainer approved (O221(c), D4)
 
 **Filed 2026-10-12 by O221's build**, which built that entry's parts (a) and (b) and not part (c),
 whose ruling is the maintainer's of 2026-10-08, recorded in O221: "approve all as recommended",
@@ -51932,7 +52038,7 @@ stops.
 
 **Relations:** shares a question with O148 — the screen-off remedy for a row this act would destroy exists once that entry's hold lands, and this entry owns the remedies' wording (`admission::UNVERIFIABLE_REMEDIES`).
 
-### O-NEW-o221-2 — one covered column retyped offline makes `verify` and the retention sweep fail with a conversion error instead of naming the row
+### O427 — one covered column retyped offline makes `verify` and the retention sweep fail with a conversion error instead of naming the row
 
 **Filed 2026-10-12 by O221's build, after its independent review; measured by that review's probe.**
 `walk_covered` reads `meta_json` as TEXT and `content` and `tag` as BLOBs. An offline writer who
@@ -51952,6 +52058,46 @@ blocks on it, O232's question), and the sweep's `unverifiable` arm (O206 ruling 
 **Gate**: a row whose `content` is TEXT, and one whose `meta_json` is a BLOB: `verify` names each
 with its reason and exits 2; a sweep names each as unverifiable and destroys the rest.
 **Counterfactual**: today, both fail with the conversion error.
+
+### O428 — the export bundle's manifest drops a key it does not declare and reads no version, so a newer build's signed field reads as a bad signature
+
+**Filed 2026-10-12 by O315's build (its sibling sweep); read in code, unmeasured.** O315 fenced the erasure
+receipt and the chain witness; the third signed document this tree verifies keeps the parse they replaced.
+`BundleManifest` (`crates/undercroft-vault/src/bundle.rs` 523) captures no undeclared key and its `version`
+is read by nothing: `BundleManifest::attest` verifies the signature over `canonical()` unconditionally, so a
+field a newer build signs makes every older importer answer "manifest attestation failed" naming the
+signature — exit 1, `/v1` 400 (`tenant.rs`, `verify_attestation`) — over a genuine bundle, naming the wrong
+cause, and an UNSIGNED newer manifest imports with the field ignored, which matters the day a field
+constrains an import as `expires` does. Unlike the receipt and the witness, the bundle shipped in 1.0.0, so
+its fence changes what a released importer answers.
+
+**Shape, for a ruling panel**: O315's — capture undeclared keys and read the version, refusing either as
+not checked before the signature, in the import's refusal class — with that class, and what an unsigned
+bundle carrying an unknown key now does, ruled. **Gate**: a signed bundle manifest carrying one extra
+signed field, and one carrying a version above 1, refused as not checked; the same manifests without them
+imported; counterfactual, today's order answers a bad signature.
+
+### O429 — "not checked" shares exit 1 with a run that failed, so a forged receipt that carries a key no build declares is retried and ignored rather than alarmed on
+
+**Filed 2026-10-12 by O315's independent review; a documented exit contract, escalated to the maintainer.**
+O315's age fence refuses a receipt or a witness carrying a version or a field the build does not know as
+NOT CHECKED, `StoreError::Invalid`: exit 1, `/v1` 400 with no class. That is sound for a genuine document a
+newer build minted. Its cost is exact and permanent: a forger who adds a key no build will ever declare,
+or a version none will ever mint, gets exit 1 from EVERY build, present and future, where the same forgery
+without it is exit 2. And exit 1 is "the run failed — retry", the class the CLI's `verify-forgetting` arm
+(`crates/undercroft-cli/src/main.rs`, the comment above its `ATTESTATION FAILED` line) records a compliance
+script retrying and then ignoring a forged document under, which is why exit 2 was given to this command.
+
+**The question**: does "not checked" deserve its own exit class (and a `/v1` class beside `integrity`) —
+neither 1 ("retry") nor 2 ("tampered") — so a script can tell "this build cannot read the document" from
+"the run failed"? It is a documented exit contract (`docs/AGENTS.md` §7.3 lists exactly four classes since
+O287), so it is the maintainer's, with the panel's analysis. Options visible from the code: keep exit 1
+and document "not checked" as never-retry (no contract moves; the cost stays); a fifth exit class for both
+binaries and every surface that relays it (the orchestrator's ops CLI, `is_integrity_verdict`), MINOR or
+MAJOR by the versioning doctrine's test; or answer an unknown key as the integrity verdict and an unknown
+version alone as not checked (refutes O267 ruling 4's order for keys, and re-creates O315's false alarm
+for a genuine newer receipt). **Gate**, whichever is ruled: the forged-plus-key receipt and the genuine
+newer-build receipt each answer the ruled class on the CLI, `/v1`, MCP and the orchestrator's ops CLI.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
