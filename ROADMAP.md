@@ -4012,7 +4012,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**462** of the **477** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**465** of the **480** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -18682,7 +18682,7 @@ escalated in the panel analysis that follows.
     for a restore's stage, which `repair` would then perform in place, on the live vault, over a TABLE-side flip
     that reads exactly like index damage. The gate's "`repair` over an R3 index flip brings `verify` back to OK"
     falls with the premise; the build's gate is a restore of an archive taken before the damage. Whether index
-    damage should get a rebuild, and with what detection of a table-side flip first, is O-NEW-O269-2's question
+    damage should get a rebuild, and with what detection of a table-side flip first, is O434's question
     for a ruling panel.
 
 **The gate.** Each R3 flip on the LIVE vault fails `verify` as a verdict on all four renderers (exit 2,
@@ -18956,7 +18956,7 @@ a reason outside the file's bytes.
   named `row 11 missing from index idx_drawers_room`. VACUUM's transfer copies an index's b-tree as it stands.
   The first build answered that by adding `REINDEX` to `repair`; its review removed it, and the refutation, with
   the sqlite3.c evidence, is recorded beside item 11: index damage has no repair remedy, the remedy is a
-  restore, and a rebuild is O-NEW-O269-2's question.
+  restore, and a rebuild is O434's question.
 - **The gate's "on every renderer" for the truncated file** was already corrected by the ruling (MCP opens before
   it serves); P-O269f placed the truncation at the open, so it is met on the CLI and `/v1`.
 - **Item 3's "raised inside `verify_in`'s snapshot"** covered more than the legs: the snapshot's end raised it too
@@ -18964,7 +18964,7 @@ a reason outside the file's bytes.
 - **The property gate's "every TEXT column of every table"** cannot be met by `verify` for `chain_meta`: a
   retyped value there refuses BOTH opens with a conversion error before `verify` runs, and a retyped `meta.value`
   the writable one. Not this entry's item 2 (the reads `verify` makes) nor option B (corruption codes) — filed
-  as O-NEW-O269-1; the gate runs over every other table, opening read-only where the writable open refuses.
+  as O433; the gate runs over every other table, opening read-only where the writable open refuses.
 
 **Probes owed and their state.** P-O269a: the e2e block below. P-O269b and P-O269h: below; the late-interaction
 arm and a read-audited vault whose `audit` is ~10× its drawers were NOT run (no ColBERT model on this machine;
@@ -18976,7 +18976,7 @@ four, and the FTS-prefiltered search answered differently from before on three o
 under-returns while the leg reports it. P-O269e and P-L2c, P-L2d: tests below. P-O286x: not run — no
 write-protected mount here; item 8 stays a deny-list.
 
-**Tests** (`crates/undercroft-store/src/storage_tests.rs`, 17 run and 4 `#[ignore]`d probes since the review): the open's doors
+**Tests** (`crates/undercroft-store/src/storage_tests.rs`, 18 run and 4 `#[ignore]`d probes since the review): the open's doors
 (truncation on both boundaries and a zeroed header, both levels, both postures — each names its door); the
 read-only first content read (a damaged `meta` root page; the writable open meets it partway, the stated
 residual, pinned); R3 on a live vault, both levels — the leg names the index, `ok()` false, backup refused, the
@@ -19054,14 +19054,14 @@ B); so does a damaged page the writable open reaches past its named doors (pinne
 page). An `immutable=1` handle's corruption codes are never a verdict (P-O269g): the open's doors mint none on
 such a handle, and since the review `verify` there answers `StorageUnverifiable` rather than a storage finding.
 Its OTHER legs still give verdicts on such a handle beside a writer, the chain leg on nearly every call
-(O-NEW-O269-3). Derived structures keyed by
+(O435). Derived structures keyed by
 `seq` or `fp` remain outside every leg (O349). A sealed fact or entity field that does not open is O406's leg
-(d), through this arm. The open's typed reads of `meta`/`chain_meta` values: O-NEW-O269-1.
+(d), through this arm. The open's typed reads of `meta`/`chain_meta` values: O433.
 
 **After an independent review of this build, the same day — all mine.** Four findings, each fixed in this unit:
 1. **`repair` ran `REINDEX`** (MED-HIGH): a change of remedy no ruling made, and the laundering item 7 refuses —
    removed; `repair` rebuilds no index. Item 11's premise is refuted beside it (dated, with the sqlite3.c
-   evidence) and the remedy question is filed as O-NEW-O269-2. The R3 test now asserts that `repair` leaves the
+   evidence) and the remedy question is filed as O434. The R3 test now asserts that `repair` leaves the
    finding and that a restore of an archive taken before the damage brings `verify` back to OK, and the e2e
    block drives the same through the CLI (SQLite's own check after each). Counterfactual: `REINDEX` put back,
    the R3 test fails at `repair`.
@@ -19087,7 +19087,7 @@ Its OTHER legs still give verdicts on such a handle beside a writer, the chain l
    16,773 beside 1,920 and 7,416 beside 884, every report checking exactly the 306 records the vault held at the
    open (measured on the last run) — such a handle read none of the writer's rows. What it answered instead, on
    all but the first few calls, was a CHAIN-leg failure, an integrity verdict on an intact vault: filed as
-   O-NEW-O269-3, outside this review's item.
+   O435, outside this review's item.
 4. **The LOW items**: `chain::set_head` and `set_writes` now refuse in the integrity class when their UPDATE
    moves other than one row (`one_meta_row`, as a rotation's phase 3 does); an FTS5 table whose pre-read meets a
    corruption code is its own finding and `integrity_check` still runs — and the rows the pragma returned before
@@ -19118,6 +19118,13 @@ checked over the bytes (item 2), a retype that CHANGED the bytes — O221's `con
 and the queue reports it `tag-fails`, while one that kept them stays `column-retyped`; O221's in-queue test asserts
 each. O427, which O221's review filed for `verify` and the sweep, is closed by this build (its entry, beside this
 one).
+
+**Integration, 2026-10-12.** The three entries this one filed took their ids here: O433 (the open's typed
+reads of `meta` and `chain_meta`), O434 (whether `repair` rebuilds an index) and O435 (`verify` on an
+`immutable=1` handle beside a writer). Counted at the integrated tree with the battery's own readers:
+`test` 1443 run / 21 ignored over 20 targets (was 1425 / 17; the 18 run and 4 ignored are this unit's store
+tests), `e2e` 901 (was 878; this unit's block is 23), so the landing tiles move 1425 → 1443 and 1330 → 1353,
+and the level-3 headings are 480, 465 of them with an id (were 477 and 462).
 
 **PATCH** inside the unreleased 1.7.0, by the 2026-09-08 ruling and the maintainer's of 2026-10-08.
 `UPGRADING.md` carries the entry (symptom, cause, the restore remedy and why `repair` is not it, the
@@ -53735,7 +53742,7 @@ triple ids under every build that compiles; counterfactual, the derivation over 
 
 **Relations:** shares a question with O422 — the tables that entry generates are what this entry's id recipes would read, at a version this entry rules.
 
-### O-NEW-O269-1 — an open reads `meta` and `chain_meta` values with typed reads, so one retyped value refuses every open with a conversion error, exit 1, and `verify` never runs
+### O433 — an open reads `meta` and `chain_meta` values with typed reads, so one retyped value refuses every open with a conversion error, exit 1, and `verify` never runs
 
 **Filed 2026-10-12 by O269's build; measured.** O269's property gate retyped every TEXT column of
 every table, one at a time, to a BLOB and to TEXT that is not UTF-8, and every column a `verify` leg
@@ -53759,7 +53766,7 @@ integrity verdict naming the key, or an open that proceeds and a `verify` that n
 conversion error. **Counterfactual**: today, exit 1 with SQLite's conversion text on both postures for
 `chain_meta`, and on the writable one for `meta`.
 
-### O-NEW-O269-2 — index damage has no repair remedy: whether `repair` should rebuild an index, and what it must rule out first
+### O434 — index damage has no repair remedy: whether `repair` should rebuild an index, and what it must rule out first
 
 **Filed 2026-10-12 by the review of O269's build, for a ruling panel.** `repair` has never rebuilt an index: its
 closing VACUUM copies each index's records as they stand (the record beside O269's item 11, with the sqlite3.c
@@ -53786,7 +53793,7 @@ column producing the same `integrity_check` lines is never conformed — the rul
 mirror drift. **Counterfactual**: a bare `REINDEX` in `repair`, which conforms the table-side flip and answers
 `VERIFY OK`.
 
-### O-NEW-O269-3 — `verify` on an `immutable=1` handle beside a writer fails the chain leg on an intact vault
+### O435 — `verify` on an `immutable=1` handle beside a writer fails the chain leg on an intact vault
 
 **Filed 2026-10-12 by the review of O269's build; measured.** A read-only open escalates to `immutable=1` where
 its ordinary connection cannot open the database (a write-protected mount, a snapshot), and its start-up warning

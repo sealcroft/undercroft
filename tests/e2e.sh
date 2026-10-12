@@ -2489,7 +2489,7 @@ else
 fi
 # `repair` rebuilds no index: its VACUUM copies one as it stands, and a
 # rebuild would conform the index to a table-side edit that reads exactly like
-# this damage (O269's review; O-NEW-O269-2). The remedy `UPGRADING.md` names is
+# this damage (O269's review; O434). The remedy `UPGRADING.md` names is
 # a restore.
 check "O269: repair leaves the index finding standing, exit 2" 2 "integrity: FAILED" -- \
   env UNDERCROFT_HOME="$O269_HOME" "$BIN" repair

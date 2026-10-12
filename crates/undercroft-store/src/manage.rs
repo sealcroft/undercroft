@@ -2215,7 +2215,7 @@ impl VaultStore {
         // storage leg names survives a repair; and REINDEX would conform the
         // indexes to a table-side flip that reads exactly like index damage —
         // the laundering O269's item 7 refused for a restore's stage. Which
-        // remedy index damage gets is O-NEW-O269-2's ruling; today it is a
+        // remedy index damage gets is O434's ruling; today it is a
         // restore.
         let missing: Vec<String> = self
             .conn

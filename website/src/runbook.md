@@ -99,7 +99,7 @@ damage. `undercroft repair` does not mend it, on purpose: its closing VACUUM
 copies an index as it stands, and rebuilding the index from its table would
 conform it to the table — while one byte changed on the TABLE side of an indexed
 column gives exactly this line, so a rebuild could turn an edit into a clean
-`verify` (ROADMAP O-NEW-O269-2 asks whether a rebuild that first rules that out
+`verify` (ROADMAP O434 asks whether a rebuild that first rules that out
 should exist). `STORAGE: <leg> not run: database disk image is malformed` is a
 leg that met damaged pages partway; and a file damaged at its first pages
 refuses to open at all, exit 2 with *the vault's database is damaged*. All of

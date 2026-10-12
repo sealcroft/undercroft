@@ -2,9 +2,9 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and fifty-six fixes. The witness
+MINOR: one new capability, backward compatible, and fifty-eight fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Seventeen fixes change what a deployment must do: every process writing a
+start-up. Eighteen fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
@@ -33,7 +33,10 @@ answer a document carrying a field or a version this build does not know as NOT 
 exit 1 and 400 over `/v1`, where a receipt with a key added beside its signature verified
 and a newer build's signed field read as forged (O315); a `--read-only` open of a vault
 nothing has written yet exits 1, a `/v1` 409 with no class, where it exited 2 with
-`class: "integrity"`, so an alert keyed on exit 2 stops firing for it (O213); and a native
+`class: "integrity"`, so an alert keyed on exit 2 stops firing for it (O213); `verify` checks the database file itself, so a vault
+with index damage, or a file that does not hold together, which the previous binary
+verified or answered with exit 1, now exits 2 and stops `backup create` and
+`vault rotate` (O269); and a native
 source build uses the Rust 1.98.1 that `rust-toolchain.toml` pins, fetching it the first
 time, and does not compile on a standard library of another Unicode version (O294) — all in
 `UPGRADING.md`, beside O279's note that a filesystem whose inode numbers are not
@@ -61,12 +64,13 @@ O236 and O262 — "thirty-nine" until O231, and "forty" until the units of O273,
 which closed five — O273, O301, O211, O210 and O321, "forty-five" until O259's unit closed O259 and
 O260, "forty-seven" until train 3's integration, which closed six — O221, O226, O315, O308,
 O213 and O322 — and "fifty-three" until O294's unit joined that train and closed three —
-O294, O326 and O327, beside O421, which sits open under this heading;
+O294, O326 and O327, and "fifty-six" until O269's unit closed two — O269 and
+O427 — beside O421, which sits open under this heading;
 it said "Three fixes change what a deployment must do" until O283 made
 it four, "Four" until O291 made it five, "Five" until O212 made it six, "Six"
 until O287 made it seven, "Seven" until train 1 made it nine (O200, O262), "Nine" until O231 made it ten, "Ten" until those units made it fourteen (O273, O301,
-O321, O210), "Fourteen" until train 3's integration made it sixteen (O315, O213), and "Sixteen" until
-O294 made it seventeen, O221's
+O321, O210), "Fourteen" until train 3's integration made it sixteen (O315, O213), "Sixteen" until
+O294 made it seventeen, and "Seventeen" until O269 made it eighteen, O221's
 entry joining the notes beside it — every answer it moves is on a queue an offline writer
 touched, and its cost is the kind O255's note records — and O308's amending O303's there;
 O322 moves only what a refusal's message says. O303's
@@ -2778,7 +2782,7 @@ transfer optimization), which the ruling's remedy had assumed otherwise. The rem
 taken before the damage. A rebuild was tried in this release's own build and taken out again by its review: it
 conforms an index to its table, and one byte changed on the table side of an indexed column produces exactly
 the lines index damage does, so a rebuild could turn an edit into a clean `verify` — whether a rebuild that
-first rules that out should exist is ROADMAP O-NEW-O269-2. Fixes that were this build's own: FTS5's integrity
+first rules that out should exist is ROADMAP O434. Fixes that were this build's own: FTS5's integrity
 pass reuses the index structure a connection cached, so a long-lived hmac-only handle beside another
 connection's writes reported its FTS table malformed on an intact vault — the leg reads each FTS5 table in its
 snapshot first, and a table that read meets damage is its own finding while the check of the rest still runs,

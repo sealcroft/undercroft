@@ -669,7 +669,7 @@ fn o269_a_value_no_read_takes_is_named_and_every_other_leg_still_reports() {
 ///
 /// One table is out, and not by choice: `chain_meta`, whose value retyped
 /// refuses BOTH opens with a conversion error before any `verify` can run —
-/// the open's own typed reads, filed as O-NEW-O269-1. A retyped `meta.value`
+/// the open's own typed reads, filed as O433. A retyped `meta.value`
 /// refuses the writable open the same way, so this opens read-only where the
 /// writable open refuses. The FTS tables are FTS5's own, which the storage
 /// leg's `integrity_check` reads.
@@ -1290,7 +1290,7 @@ struct BesideAWriter {
     /// Reports whose storage leg held a finding — each an integrity verdict on
     /// an intact vault.
     storage_verdicts: Vec<String>,
-    /// Reports with a finding in another leg only (O-NEW-O269-3's).
+    /// Reports with a finding in another leg only (O435's).
     other_legs: u64,
     /// Errors, by text: each is exit 1, never a verdict.
     errors: Vec<String>,
@@ -1381,7 +1381,7 @@ fn immutable_beside_a_writer(budget: std::time::Duration) -> BesideAWriter {
 /// rows at all. What it answered instead, on all but the
 /// first few verifies, was a report failing the CHAIN leg — the handle's rows
 /// replayed against an anchor the writer moved on disk — which is an
-/// integrity verdict on an intact vault, filed as O-NEW-O269-3. The race this
+/// integrity verdict on an intact vault, filed as O435. The race this
 /// build's review named is therefore pinned by
 /// `o269_an_immutable_handle_reports_the_storage_leg_not_verifiable`, whose
 /// damage is real only so its outcome is deterministic.

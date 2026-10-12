@@ -729,7 +729,7 @@ the table — while one byte changed on the TABLE side of an indexed column
 produces exactly the lines index damage does, so a rebuild would turn that edit
 into a vault `verify` calls clean. Whether index damage should get a rebuild
 that first rules out the table side is an open question (ROADMAP
-O-NEW-O269-2). A row named `UNREADABLE` with `holds a BLOB` or `holds TEXT` over bytes
+O434). A row named `UNREADABLE` with `holds a BLOB` or `holds TEXT` over bytes
 that are otherwise intact can be retyped back with `sqlite3` (`CAST(col AS
 TEXT)`/`AS BLOB`), after a `cp -a` evidence copy; otherwise restore an archive, or
 `drawer delete` it. A database that does not open: restore an archive.
