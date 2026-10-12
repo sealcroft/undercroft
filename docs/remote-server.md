@@ -38,7 +38,10 @@ claude mcp add --transport http undercroft http://HOST:8765/mcp \
   --header "Authorization: Bearer $UNDERCROFT_MCP_HTTP_TOKEN"
 ```
 
-- The server refuses non-loopback binds without the token.
+- The server refuses non-loopback binds without the token. Loopback means a
+  `--host` of exactly `127.0.0.1`, `localhost` or `::1`. Any other host
+  needs the token, including `127.0.0.2` and the bracketed `[::1]`, which
+  `--host` does not take. An unrecognised spelling counts as exposed.
 - It also refuses a token that is **empty** or ends in **whitespace**. The
   second is the one that bites: `UNDERCROFT_MCP_HTTP_TOKEN=$(cat
   /run/secrets/token)` over a file ending in a newline used to start a server
@@ -58,22 +61,39 @@ claude mcp add --transport http undercroft http://HOST:8765/mcp \
 - Backing store: the `undercroft-data` volume is the system of record. MCP and
   `/v1` recall search the vault directly and never consult Qdrant.
 
-Systemd alternative: `deploy/undercroft-server.service`. It does not run
-`init` yet, so run it once before enabling the unit, as the unit's user, with
-the unit's data directory and environment file — otherwise `init` creates a
+Systemd alternative: `deploy/undercroft-server.service`. Every start runs
+`undercroft init` first (`ExecStartPre`), as the unit's user, with the unit's
+data directory and environment file, so the first start creates a **sealed**
+`default` vault and later starts find it; `init` then exits 0 without writing.
+A failed `init` stops the start, with its own error in
+`journalctl -u undercroft-server`. Until 1.7.0 the unit served without `init`,
+so a fresh install exited `vault "default" not found` and systemd restarted it
+every three seconds. For another level, create the vault before the first
+start, in the same identity and environment — otherwise `init` creates a
 different installation, or one keyed differently from the one the unit opens:
 
 ```bash
 sudo systemd-run --wait --pipe --uid=undercroft --gid=undercroft \
   -p EnvironmentFile=/etc/undercroft/server.env \
   -E UNDERCROFT_HOME=/var/lib/undercroft \
-  /usr/local/bin/undercroft init
+  /usr/local/bin/undercroft init --level hmac-only
 ```
 
 `systemd-run` reads the environment file as root, as the unit does; the file
-is root-owned `0600`, so `sudo -u undercroft` could not source it.
+is root-owned `0600`, so `sudo -u undercroft` could not source it. A unit
+edited to serve a vault other than `default` (`--vault`) should drop its
+`ExecStartPre`, which would otherwise create an empty `default` beside it.
 
-ROADMAP O200 tracks running it from the unit.
+The unit also declares `RequiresMountsFor=/var/lib/undercroft`. If the data
+directory is its own mount, an `init` that ran before it would find the
+directory empty and create a second installation beneath the mount point — a
+new `master.key` and an empty `default` vault — and the server would serve
+that one. With the directive, systemd mounts the directory first, or does not
+start the unit. It knows only mounts it manages (an fstab entry or a `.mount`
+unit), so a directory mounted by hand must be mounted before the unit starts.
+Set `UNDERCROFT_HOME` in the unit, never in the environment file, so the
+directory the unit requires is the one it writes to. Under a passphrase every
+start derives the master key twice, once for `init` and once for the server.
 
 ## The optional Qdrant mirror
 
@@ -223,6 +243,10 @@ GET    /v1/vaults/{id}/index/status      remote mirror vs local counts. A read:
                                         null when NO mirror exists — which is
                                         not the same as a mirror holding zero
 POST   /v1/vaults/{id}/tunnels          connect two wings {from,to,label}
+                                         201 + {created:false} for a tunnel
+                                         already held: nothing written, no
+                                         chain record (O236); 409 integrity
+                                         if the held row fails its tag
 GET    /v1/vaults/{id}/tunnels          list tunnels (wing?)
 GET    /v1/vaults/{id}/tunnels/traverse wings reachable from start (start, depth?)
 DELETE /v1/vaults/{id}/tunnels/{tid}    remove one tunnel (404 if absent)
@@ -240,14 +264,16 @@ GET    /v1/vaults/{id}/hallways         entity co-occurrence (wing, top?)
 ── operator plane (mostly never on MCP — verify-forgetting is the one
    exception since 1.2.0/O68, as undercroft_check_erasure_receipt; the
    witness routes are off MCP by the maintainer's ruling, O245) ─────────
-POST   /v1/vaults/{id}/backups          snapshot exactly the state it verified (409 if it fails verify)
+POST   /v1/vaults/{id}/backups          snapshot exactly the state it verified (409 if it fails verify;
+                                        500 if backups/.staging is a link, O273)
 GET    /v1/vaults/{id}/backups          this vault's snapshots
 POST   /v1/vaults/{id}/backups/restore  {name}; the archive is verified before the
                                         vault is touched (409 + class integrity if
                                         it does not verify, the vault unchanged);
                                         400 if the backup holds another vault or
-                                        the vault is a symbolic link (O283), 409
-                                        while the vault is in use
+                                        the vault is a symbolic link (O283) or
+                                        holds any entry that is not a regular
+                                        file (O301), 409 while the vault is in use
 GET    /v1/vaults/{id}/history          audit chain (subject?, limit?, offset?)
 GET    /v1/vaults/{id}/trust            wing trust assignments
 POST   /v1/vaults/{id}/trust            assign one (closed vocabulary)
@@ -461,5 +487,6 @@ init`, which the command above runs on every start, derives the
 master key via Argon2id (64 MiB, t=3) from the passphrase and a random salt
 it persists at `/data/kdf.salt` (`0600`). No key material is written, so the
 passphrase must be supplied on every start — no TTY, no prompt, and the key
-is never emitted to logs. Provision each tenant's vaults over `/v1/vaults`
+is never emitted to logs. Each process derives it once (ROADMAP O211): the
+server at its start, however many vaults it then serves, and `init` once. Provision each tenant's vaults over `/v1/vaults`
 once the instance is up.

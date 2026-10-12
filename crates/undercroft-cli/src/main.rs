@@ -18,6 +18,7 @@ mod mcp;
 #[cfg(test)]
 mod open_race_surface_tests;
 mod parity;
+mod receipt;
 mod refine;
 mod search;
 mod tenant;
@@ -298,11 +299,15 @@ enum Command {
         ids: Vec<String>,
         #[arg(long, default_value = "default")]
         vault: String,
-        /// Write the attestation JSON here (default: stdout)
+        /// Write the attestation JSON here (default: stdout). If it cannot
+        /// be written, the attestation is printed on stdout instead and the
+        /// command exits 1 — the drawers are destroyed by then, and the
+        /// receipt is the only copy
         #[arg(long)]
         out: Option<PathBuf>,
         /// Signing identity file (`bundle sign-keygen`) — attests the
-        /// operator as sender, which is what a third party verifies
+        /// operator as sender, which is what a third party verifies. Read
+        /// and checked before anything is destroyed
         #[arg(long)]
         sign: Option<PathBuf>,
         /// Also delete these drawers from a remote index this vault was
@@ -920,14 +925,31 @@ enum AdmissionAction {
     /// receipt (the trail remains, the content does not)
     Deny {
         id: String,
-        /// Write the attestation JSON here (default: stdout)
+        /// Write the attestation JSON here (default: stdout). If it cannot
+        /// be written, the attestation is printed on stdout instead and the
+        /// command exits 1 — the row is destroyed by then, and the receipt
+        /// is the only copy
         #[arg(long)]
         out: Option<PathBuf>,
         /// Signing identity file (`bundle sign-keygen`) — attests the
-        /// operator as sender on the deny receipt
+        /// operator as sender on the deny receipt. Read and checked before
+        /// anything is destroyed
         #[arg(long)]
         sign: Option<PathBuf>,
     },
+}
+
+impl AdmissionAction {
+    /// The `--sign` identity a deny reads before the vault is opened
+    /// (ROADMAP O262). Spelled through `Self::` on purpose: `parity.rs`
+    /// windows a report's CLI projection from the FIRST place its action's
+    /// arm is named in this file.
+    fn sign(&self) -> Option<&Path> {
+        match self {
+            Self::Deny { sign, .. } => sign.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(clap::Subcommand)]
@@ -956,14 +978,31 @@ enum RetentionAction {
         /// Report what would be destroyed without destroying anything
         #[arg(long)]
         dry_run: bool,
-        /// Write the sweep report (with attestation) here (default: stdout)
+        /// Write the sweep report (with attestation) here (default: stdout).
+        /// If it cannot be written after the sweep destroyed anything, the
+        /// report is printed on stdout instead and the command fails — the
+        /// receipt in it is the only copy
         #[arg(long)]
         out: Option<PathBuf>,
         /// Signing identity file — attests the operator on the sweep's
-        /// destruction receipt
+        /// destruction receipt. Read and checked before anything is
+        /// destroyed, on a dry run too
         #[arg(long)]
         sign: Option<PathBuf>,
     },
+}
+
+impl RetentionAction {
+    /// The `--sign` identity a sweep reads before the vault is opened
+    /// (ROADMAP O262). Spelled through `Self::` for the reason
+    /// [`AdmissionAction::sign`] gives: `parity.rs` windows the sweep
+    /// report's projection from the first place its arm is named.
+    fn sign(&self) -> Option<&Path> {
+        match self {
+            Self::Sweep { sign, .. } => sign.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(clap::Subcommand)]
@@ -1003,26 +1042,29 @@ enum BundleAction {
     },
 }
 
-/// Write a secret to `path` with owner-only permissions (like the palace
-/// master key). Refuses to overwrite an existing identity.
+/// Write a NEW identity secret to `path` through the vault crate's identity
+/// door, which shares the master key's publisher (ROADMAP O321, O210):
+/// owner-only from the open, the bytes fsynced under a temp name and
+/// published by a hard link, and an existing entry refused — a link
+/// included, dangling or not — before a byte is written. It used to ask
+/// `exists()`, which follows a link, then write through it, then narrow the
+/// mode: a dangling link planted at the default path under the data
+/// directory was followed, and the secret sat under the umask until the
+/// chmod.
 fn write_identity(path: &std::path::Path, secret_hex: &str) -> Result<()> {
-    if path.exists() {
-        bail!(
-            "{} already exists — refusing to overwrite an identity key \
-             (bundles sealed to it would become unreadable)",
-            path.display()
-        );
-    }
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, secret_hex.as_bytes())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    match undercroft_vault::keys::write_new_identity(path, secret_hex.as_bytes()) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => bail!(
+            "{} already exists — refusing to overwrite an identity key \
+             (bundles sealed to it would become unreadable); a link there counts, \
+             followed or not, and nothing was written",
+            path.display()
+        ),
+        Err(e) => Err(e).with_context(|| format!("writing identity {}", path.display())),
     }
-    Ok(())
 }
 
 /// Build the full export payload: a manifest line, then typed records —
@@ -1388,18 +1430,54 @@ fn manager(cli: &Cli, posture: Posture) -> Result<VaultManager> {
     manager_at(&data_dir(cli), posture)
 }
 
-/// The same open, from the data directory alone.
+/// The same open, from the data directory alone — the binary's ONE manager
+/// open, and so the one place its master key is derived (ROADMAP O211).
 ///
-/// It exists so a caller that must OUTLIVE the parsed command line can hold
-/// what it needs without cloning it: `serve-http` hands `Tenancy` a re-opener
-/// for the co-resident vault (ROADMAP O242), and that closure is `'static`.
-/// One implementation either way — [`manager`] is the adapter, not a second
-/// copy of the open.
+/// [`open_store_as`] reaches it with a path rather than the parsed command
+/// line, and [`manager`] is the adapter, not a second copy of the open. (It
+/// also existed for a `'static` re-opener `serve-http` handed `Tenancy`,
+/// ROADMAP O242; O256 removed that re-opener.)
 fn manager_at(dir: &std::path::Path, posture: Posture) -> Result<VaultManager> {
-    let pw = passphrase()?;
-    VaultManager::open_as(dir, pw.as_deref(), posture.access())
+    manager_in(dir, posture, passphrase()?.as_deref(), &KEY_CACHE)
+}
+
+/// [`manager_at`] with its passphrase and key cache stated: the ONE body that
+/// opens a manager, so a test can drive it with a cache of its own instead of
+/// the process's.
+fn manager_in(
+    dir: &std::path::Path,
+    posture: Posture,
+    passphrase: Option<&str>,
+    keys: &undercroft_vault::keys::KeyCache,
+) -> Result<VaultManager> {
+    VaultManager::open_cached(dir, passphrase, posture.access(), keys)
         .with_context(|| format!("opening palace at {}", dir.display()))
 }
+
+/// The ONE master key this process derives from `UNDERCROFT_PASSPHRASE`
+/// (ROADMAP O211).
+///
+/// Every manager open ran Argon2id — 64 MiB, three passes — so `vault list`
+/// derived once for the list and once per vault it described, and `vault
+/// rotate` and a `serve-http` start twice each; the multi-tenant server's
+/// `/v1` opens already shared the one manager `Tenancy` holds. Every open in
+/// this binary goes through [`manager_in`] with this cache, and the three
+/// commands that open more than once take a hold on it across those opens, so
+/// each runs Argon2id once. What is held is the derivation alone:
+/// each open still classifies the data directory (ROADMAP O204) and reads
+/// `kdf.salt` before the cache is asked, and the cache answers only for the
+/// passphrase and salt its key came from.
+///
+/// **Outside a hold it keeps nothing** — the independent review of the first
+/// build found `serve-mcp`, `mine` and `refine` keeping the master key and a
+/// copy of the passphrase here for their whole run, where before the key went
+/// with the manager after the one open. Now a one-open command holds the key
+/// exactly as long as its manager does, and the last hold to drop zeroizes it
+/// — `serve-http`'s before it serves, its `Tenancy` manager keeping its own
+/// copy for the server's life as it always did. A `process::exit` inside a
+/// hold would skip that drop, as it skips every destructor; none of the three
+/// holds encloses one.
+static KEY_CACHE: undercroft_vault::keys::KeyCache = undercroft_vault::keys::KeyCache::new();
 
 /// Whether a store this process opens is allowed to write to the vault.
 ///
@@ -1457,11 +1535,25 @@ fn open_store(cli: &Cli, vault: &str) -> Result<VaultStore> {
 }
 
 fn open_store_as(dir: &std::path::Path, vault: &str, posture: Posture) -> Result<VaultStore> {
+    open_store_in(dir, vault, posture, passphrase()?.as_deref(), &KEY_CACHE)
+}
+
+/// [`open_store_as`] with its passphrase and key cache stated, as
+/// [`manager_in`] is for [`manager_at`]: the one body, which a test drives
+/// with a cache of its own (ROADMAP O211).
+fn open_store_in(
+    dir: &std::path::Path,
+    vault: &str,
+    posture: Posture,
+    passphrase: Option<&str>,
+    keys: &undercroft_vault::keys::KeyCache,
+) -> Result<VaultStore> {
     // An open that read the vault just before another process rotated its
     // keys is told to reopen (ROADMAP O257), and does, ONCE: the reopen reads
     // the current manifest, and a second race in a row is said rather than
-    // chased.
-    match open_store_once(dir, vault, posture) {
+    // chased. No key hold spans the two: the race is rare, and a second
+    // derivation is its whole cost.
+    match open_store_once(dir, vault, posture, passphrase, keys) {
         Err(e)
             if e.chain().any(|link| {
                 matches!(
@@ -1470,14 +1562,20 @@ fn open_store_as(dir: &std::path::Path, vault: &str, posture: Posture) -> Result
                 )
             }) =>
         {
-            open_store_once(dir, vault, posture)
+            open_store_once(dir, vault, posture, passphrase, keys)
         }
         other => other,
     }
 }
 
-fn open_store_once(dir: &std::path::Path, vault: &str, posture: Posture) -> Result<VaultStore> {
-    let mgr = manager_at(dir, posture)?;
+fn open_store_once(
+    dir: &std::path::Path,
+    vault: &str,
+    posture: Posture,
+    passphrase: Option<&str>,
+    keys: &undercroft_vault::keys::KeyCache,
+) -> Result<VaultStore> {
+    let mgr = manager_in(dir, posture, passphrase, keys)?;
     // The posture reaches the UNLOCK, not only the store open. Unlocking was
     // not passive: it deleted a `vault.json.next` it could not authenticate,
     // so a read-only process that stated its posture only one call later had
@@ -1999,7 +2097,10 @@ impl undercroft_core::rerank::Reranker for SharedReranker {
 /// class, 141 — the reader of stdout went away — is decided there alone.
 const EXIT_INTEGRITY: u8 = undercroft_obs::stdio::EXIT_INTEGRITY;
 /// Exit 1 — the run itself failed: bad arguments, a missing file, an
-/// unreadable vault. Retryable in the sense that a retry might succeed.
+/// unreadable vault. Retryable in the sense that a retry might succeed — with
+/// one exception a script must know: a destruction whose `--out` failed after
+/// the drawers were gone, whose receipt went to stdout instead (ROADMAP O262).
+/// Its retry answers not found, and that stdout is the only copy.
 const EXIT_FAILURE: u8 = undercroft_obs::stdio::EXIT_FAILURE;
 
 /// Is this error an integrity verdict, or an ordinary run failure?
@@ -2316,6 +2417,9 @@ fn run(cli: Cli) -> Result<()> {
                 );
             }
             VaultAction::List => {
+                // One open for the list and one per vault: one derivation
+                // between them, zeroized when this arm ends (ROADMAP O211).
+                let _keys = KEY_CACHE.hold();
                 let mgr = manager(&cli, cli.posture())?;
                 let vaults = mgr.list()?;
                 // Vaults whose own stored evidence contradicts itself.
@@ -2433,6 +2537,9 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             VaultAction::Rotate { name } => {
+                // The candidate's open and the store's: one derivation between
+                // them (ROADMAP O211).
+                let _keys = KEY_CACHE.hold();
                 let mgr = manager(&cli, cli.posture())?;
                 let candidate = mgr.rotation_candidate(name)?;
                 let mut store = open_store(&cli, name)?;
@@ -2839,9 +2946,23 @@ fn run(cli: Cli) -> Result<()> {
             let store = open_store(&cli, vault)?;
             let report = store.verify()?;
             outln!("records checked: {}", report.records_checked);
-            outln!("hmac failures:   {}", report.bad_records.len());
-            for id in &report.bad_records {
-                outln!("  TAMPERED: {id}");
+            // ROADMAP O231: one list, printed as two lines because only one
+            // of its reasons is a failed HMAC. A drawer whose HMAC verifies
+            // over covered meta that does not parse is refused by every read,
+            // and counting it as an HMAC failure would misname it. Matched
+            // with no `_`, so a new reason is placed here before it compiles.
+            let (hmac, unreadable): (Vec<_>, Vec<_>) =
+                report.bad_records.iter().partition(|b| match b.reason {
+                    undercroft_store::BadReason::TagFailed => true,
+                    undercroft_store::BadReason::MetaUnparseable => false,
+                });
+            outln!("hmac failures:   {}", hmac.len());
+            for b in &hmac {
+                outln!("  TAMPERED: {}", b.record);
+            }
+            outln!("unreadable:      {}", unreadable.len());
+            for b in &unreadable {
+                outln!("  UNREADABLE: {b}");
             }
             outln!(
                 "audit chain:     {}",
@@ -2941,6 +3062,11 @@ fn run(cli: Cli) -> Result<()> {
             sign,
             backend,
         } => {
+            // ROADMAP O262: the signing identity is read and checked before
+            // the vault is opened or a mirror is reached. Read after the
+            // destruction, a bad one exited 1 over drawers already gone, and
+            // their receipt — whose fingerprints are stored nowhere — with them.
+            let identity = receipt::signing_identity(sign.as_deref())?;
             let mut store = open_store(&cli, vault)?;
             // Named backend: the remote delete goes first, so a failure
             // there leaves the vault intact and the operator can retry.
@@ -2955,27 +3081,24 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 None => store.forget_with_proof(ids)?,
             };
+            // The drawers are gone: the receipt's delivery is attempted before
+            // anything else is written — `--out` first, stdout as its fallback
+            // (O262). Serializing cannot fail — every field is a string, a
+            // number or a list of them.
+            let signed = receipt::sign(&mut att, identity.as_ref());
+            let json = serde_json::to_string_pretty(&att)?;
+            let delivered = receipt::deliver(&json, out.as_deref(), signed, receipt::door);
             if let Some(note) = &att.mirror {
                 errln!("warning: {note}");
             }
-            if let Some(path) = sign {
-                let secret = std::fs::read_to_string(path)
-                    .with_context(|| format!("reading signing identity {}", path.display()))?;
-                att.sign(&secret)?;
-            }
-            let json = serde_json::to_string_pretty(&att)?;
-            match out {
-                Some(path) => {
-                    std::fs::write(path, &json)?;
-                    outln!(
-                        "{} drawer(s) destroyed; attestation written to {} \
-                         (verify with: undercroft verify-forgetting {})",
-                        att.drawers.len(),
-                        path.display(),
-                        path.display()
-                    );
-                }
-                None => outln!("{json}"),
+            if let receipt::Delivered::File(path) = delivered? {
+                outln!(
+                    "{} drawer(s) destroyed; attestation written to {} \
+                     (verify with: undercroft verify-forgetting {})",
+                    att.drawers.len(),
+                    path.display(),
+                    path.display()
+                );
             }
         }
         Command::VerifyForgetting { file, vault } => {
@@ -3153,6 +3276,9 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Admission { action, vault } => {
+            // ROADMAP O262: a deny's signing identity is checked before the
+            // vault is opened, never after the row is destroyed.
+            let identity = receipt::signing_identity(action.sign())?;
             let mut store = open_store(&cli, vault)?;
             match action {
                 AdmissionAction::List => {
@@ -3183,34 +3309,35 @@ fn run(cli: Cli) -> Result<()> {
                     let restored = store.admission_allow(id)?;
                     outln!("Allowed: re-filed as {restored} (ruling audited).");
                 }
-                AdmissionAction::Deny { id, out, sign } => {
+                AdmissionAction::Deny { id, out, .. } => {
                     let mut att = store.admission_deny(id)?;
-                    if let Some(path) = sign {
-                        let secret = std::fs::read_to_string(path).with_context(|| {
-                            format!("reading signing identity {}", path.display())
-                        })?;
-                        att.sign(&secret)?;
-                    }
+                    // The row is gone: the receipt's delivery is attempted
+                    // before anything else is written (O262). Without `--out`
+                    // stdout IS the destination, so the line before the JSON is
+                    // on the same stream: a stdout that fails it fails both.
+                    let signed = receipt::sign(&mut att, identity.as_ref());
                     let json = serde_json::to_string_pretty(&att)?;
-                    match out {
-                        Some(path) => {
-                            std::fs::write(path, &json)?;
-                            outln!(
-                                "Denied: content destroyed, ruling audited; attestation \
-                                 written to {} (verify with: undercroft verify-forgetting {})",
-                                path.display(),
-                                path.display()
-                            );
-                        }
-                        None => {
-                            outln!("Denied: content destroyed, ruling audited.");
-                            outln!("{json}");
-                        }
+                    if out.is_none() {
+                        outln!("Denied: content destroyed, ruling audited.");
+                    }
+                    if let receipt::Delivered::File(path) =
+                        receipt::deliver(&json, out.as_deref(), signed, receipt::door)?
+                    {
+                        outln!(
+                            "Denied: content destroyed, ruling audited; attestation \
+                             written to {} (verify with: undercroft verify-forgetting {})",
+                            path.display(),
+                            path.display()
+                        );
                     }
                 }
             }
         }
         Command::Retention { action, vault } => {
+            // ROADMAP O262: a sweep's signing identity is checked before the
+            // vault is opened — the dry run's too, so a scheduled preview
+            // meets the identity the real run will need.
+            let identity = receipt::signing_identity(action.sign())?;
             let mut store = open_store(&cli, vault)?;
             match action {
                 RetentionAction::Set { wing, room, days } => {
@@ -3246,14 +3373,37 @@ fn run(cli: Cli) -> Result<()> {
                         );
                     }
                 }
-                RetentionAction::Sweep { dry_run, out, sign } => {
+                RetentionAction::Sweep { dry_run, out, .. } => {
                     let mut sweep = store.retention_sweep(*dry_run)?;
-                    if let (Some(path), Some(att)) = (sign, sweep.attestation.as_mut()) {
-                        let secret = std::fs::read_to_string(path).with_context(|| {
-                            format!("reading signing identity {}", path.display())
-                        })?;
-                        att.sign(&secret)?;
-                    }
+                    // What it destroyed is gone (O262): the receipt is signed,
+                    // and `--out` is written FIRST — before any line is printed,
+                    // so no write that can fail stands between the destruction
+                    // and the file. A receipt exists exactly when something was
+                    // destroyed; without one — a dry run, or nothing aged out —
+                    // the report is no receipt, a failed `--out` loses nothing a
+                    // re-run cannot say again, and it must not claim a
+                    // destruction. Serializing cannot fail.
+                    let signed = match sweep.attestation.as_mut() {
+                        Some(att) => receipt::sign(att, identity.as_ref()),
+                        None => Ok(()),
+                    };
+                    let json = serde_json::to_string_pretty(&sweep)?;
+                    let (written, signed) = match (out.as_deref(), sweep.attestation.is_some()) {
+                        (Some(path), true) => (
+                            receipt::deliver(&json, Some(path), signed, receipt::door)
+                                .map(receipt::Delivered::file),
+                            Ok(()),
+                        ),
+                        (Some(path), false) => (
+                            receipt::write_durably(path, json.as_bytes())
+                                .with_context(|| {
+                                    format!("writing the sweep report to {}", path.display())
+                                })
+                                .map(|()| Some(path)),
+                            signed,
+                        ),
+                        (None, _) => (Ok(None), signed),
+                    };
                     if sweep.dry_run {
                         outln!("DRY RUN — nothing destroyed.");
                     }
@@ -3291,27 +3441,42 @@ fn run(cli: Cli) -> Result<()> {
                     for p in &sweep.policy_drift {
                         outln!("  POLICY: {p}");
                     }
-                    let json = serde_json::to_string_pretty(&sweep)?;
-                    match out {
-                        Some(path) => {
-                            std::fs::write(path, &json)?;
-                            outln!("Sweep report written to {}", path.display());
+                    // Without `--out`, stdout is the destination and the JSON
+                    // follows the lines above on it, as it always has.
+                    let printed = if out.is_none() && sweep.attestation.is_some() {
+                        receipt::deliver(&json, None, signed, receipt::door).map(|_| ())
+                    } else {
+                        Ok(())
+                    };
+                    let delivered = match written {
+                        Ok(written) => {
+                            if let Some(path) = written {
+                                outln!("Sweep report written to {}", path.display());
+                            }
+                            printed
                         }
-                        None if sweep.attestation.is_some() => outln!("{json}"),
-                        None => {}
-                    }
+                        Err(e) => Err(e),
+                    };
                     // The integrity verdict exits 2 AFTER the report and the
                     // receipt are out: a sweep that destroyed the clean set
                     // must still hand over the attestation for what it did.
                     // A dry run answers the same way, so a scheduled preview
-                    // reports drift before anything is destroyed.
+                    // reports drift before anything is destroyed. It also
+                    // OUTRANKS a failed delivery (O262): exit 1 would tell a
+                    // script to retry a run whose answer is a tamper verdict,
+                    // so the failure is printed beside it rather than in place
+                    // of it.
                     if !sweep.ok {
+                        if let Err(e) = &delivered {
+                            errln!("Error: {e:?}");
+                        }
                         outln!(
                             "RETENTION SWEEP NOT CLEAN — the rows named above were not \
                              destroyed or were destroyed over drift. Run `undercroft verify`."
                         );
                         std::process::exit(EXIT_INTEGRITY.into());
                     }
+                    delivered?;
                 }
             }
         }
@@ -3481,17 +3646,26 @@ fn run(cli: Cli) -> Result<()> {
                 Posture::ReadWrite
             };
             let dir = data_dir(&cli);
-            let store = open_store_as(&dir, vault, posture)?;
+            // Two opens at start, one derivation between them; the hold drops
+            // before the server serves, so the process cache keeps nothing and
+            // `Tenancy`'s manager keeps its own copy, as it always did
+            // (ROADMAP O211).
+            let (store, tenants) = {
+                let _keys = KEY_CACHE.hold();
+                (
+                    open_store_as(&dir, vault, posture)?,
+                    manager(&cli, posture)?,
+                )
+            };
             if let Ok(n) = store.warm_embedding_cache() {
                 undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
-            let mut tenancy =
-                tenant::Tenancy::new(manager(&cli, posture)?, embedder_factory(), *read_only)?
-                    // ONE handle on this vault, held by `Tenancy` and borrowed
-                    // by both surfaces (ROADMAP O242). Two handles made every
-                    // `/v1` commit look foreign to the `/mcp` label guard, so
-                    // the next search replayed the whole chain.
-                    .with_mcp_vault(vault.clone(), store);
+            let mut tenancy = tenant::Tenancy::new(tenants, embedder_factory(), *read_only)?
+                // ONE handle on this vault, held by `Tenancy` and borrowed
+                // by both surfaces (ROADMAP O242). Two handles made every
+                // `/v1` commit look foreign to the `/mcp` label guard, so
+                // the next search replayed the whole chain.
+                .with_mcp_vault(vault.clone(), store);
             if let Some(reranker) = reranker_factory()? {
                 tenancy = tenancy.with_reranker(reranker);
             }
@@ -3682,6 +3856,7 @@ fn run(cli: Cli) -> Result<()> {
             let mut kg_facts = 0usize;
             let mut kg_entities = 0usize;
             let mut tunnels = 0usize;
+            let mut tunnels_new = 0usize;
             let mut batch: Vec<Drawer> = Vec::new();
             let mut kg_batch: Vec<undercroft_store::TripleExport> = Vec::new();
             let mut entity_batch: Vec<(String, String)> = Vec::new();
@@ -3748,8 +3923,14 @@ fn run(cli: Cli) -> Result<()> {
                 store.kg_import(exp)?;
                 kg_facts += 1;
             }
+            // A tunnel this vault already holds — every one, when a vault's
+            // own export is restored into it — writes nothing and appends no
+            // chain record (ROADMAP O236), so the summary says how many were
+            // new rather than calling every record a creation.
             for (f, t, l) in &tunnel_batch {
-                store.create_tunnel(f, t, l)?;
+                if store.create_tunnel(f, t, l)?.created {
+                    tunnels_new += 1;
+                }
                 tunnels += 1;
             }
             outln!(
@@ -3796,7 +3977,9 @@ fn run(cli: Cli) -> Result<()> {
             if kg_facts + kg_entities + tunnels > 0 {
                 outln!(
                     "knowledge graph: {kg_facts} fact(s) (receipts re-keyed), \
-                     {kg_entities} entit(y/ies), {tunnels} tunnel(s)"
+                     {kg_entities} entit(y/ies), {tunnels} tunnel(s) \
+                     ({tunnels_new} new, {} already present)",
+                    tunnels - tunnels_new
                 );
             }
         }
@@ -4108,8 +4291,17 @@ fn run(cli: Cli) -> Result<()> {
             let mut store = open_store(&cli, vault)?;
             match action {
                 TunnelAction::Create { from, to, label } => {
-                    let id = store.create_tunnel(from, to, label)?;
-                    outln!("Tunnel {id}: {from} <-> {to} ({label})");
+                    // A repeated create writes nothing and appends no chain
+                    // record (ROADMAP O236); the line says which happened.
+                    let out = store.create_tunnel(from, to, label)?;
+                    if out.created {
+                        outln!("Tunnel {}: {from} <-> {to} ({label})", out.id);
+                    } else {
+                        outln!(
+                            "Tunnel {}: {from} <-> {to} ({label}) already exists — nothing was written",
+                            out.id
+                        );
+                    }
                 }
                 TunnelAction::List { wing } => {
                     let tunnels = store.list_tunnels(wing.as_deref())?;
@@ -5139,6 +5331,104 @@ mod tests {
     use std::ffi::OsString;
     use tempfile::TempDir;
 
+    /// **Every secret file in the workspace is written by the one publisher**
+    /// (ROADMAP O321, O210). `write_identity` asked `exists()` — which follows
+    /// a link — then wrote, then narrowed the mode; it now hands the bytes to
+    /// `keys::write_new_identity`, a door onto the key writer's own private
+    /// publisher. Held from the source, across every crate's production code:
+    /// no mode is narrowed after a file exists (`set_permissions`); the
+    /// publisher is private and called only in `keys.rs` (the witness-taking
+    /// key writer's two arms and the identity door), and the identity door
+    /// only from here. Needles split so they do not match themselves; the walk
+    /// is proved to read the tree before any zero is believed.
+    #[test]
+    fn o321_every_secret_file_is_written_by_the_one_publisher() {
+        let body = |src: &str, name: &str| -> String {
+            let at = src
+                .find(&format!("fn {name}("))
+                .unwrap_or_else(|| panic!("premise: fn {name}"));
+            let end = src[at..].find("\n}\n").expect("premise: it closes");
+            src[at..at + end].to_string()
+        };
+        let main = include_str!("main.rs");
+        let identity = body(main, "write_identity");
+        assert!(
+            identity.contains(concat!("keys::write_new_", "identity(")),
+            "{identity}"
+        );
+        for gone in [
+            concat!(".exi", "sts()"),
+            concat!("fs::wri", "te("),
+            concat!("set_permi", "ssions("),
+        ] {
+            assert!(!identity.contains(gone), "write_identity calls {gone}");
+        }
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let (mut files, mut calls, mut chmods) = (0usize, Vec::new(), Vec::new());
+        let mut public_publisher = Vec::new();
+        let mut stack = vec![crates];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let p = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if p.is_dir() {
+                    if name != "target" && !name.starts_with('.') {
+                        stack.push(p);
+                    }
+                    continue;
+                }
+                if p.extension().and_then(|e| e.to_str()) != Some("rs")
+                    || name.ends_with("_tests.rs")
+                    || p.components().any(|c| c.as_os_str() == "tests")
+                {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&p).unwrap();
+                // Production code only: up to a file's unit-test module.
+                let prod = text
+                    .split_once(concat!("#[cfg(test)]\nmod ", "tests"))
+                    .map_or(text.as_str(), |(head, _)| head);
+                files += 1;
+                for needle in [
+                    concat!("publish_new_", "secret("),
+                    concat!("write_new_", "identity("),
+                ] {
+                    let n = prod.matches(needle).count();
+                    if n > 0 {
+                        calls.push((name.clone(), needle, n));
+                    }
+                }
+                if prod.contains(concat!("pub fn publish_new_", "secret")) {
+                    public_publisher.push(name.clone());
+                }
+                if prod.contains(concat!("set_permi", "ssions(")) {
+                    chmods.push(name);
+                }
+            }
+        }
+        // A floor, not a figure: 84 production files when this was written.
+        assert!(files > 60, "premise: the walk read {files} source files");
+        calls.sort();
+        assert_eq!(
+            calls,
+            vec![
+                ("keys.rs".to_string(), concat!("publish_new_", "secret("), 4),
+                ("keys.rs".to_string(), concat!("write_new_", "identity("), 1),
+                ("main.rs".to_string(), concat!("write_new_", "identity("), 1),
+            ],
+            "the publisher: its definition, the key writer's two calls and the identity \
+             door's one; the identity door: its definition and write_identity's call"
+        );
+        assert!(
+            public_publisher.is_empty(),
+            "the publisher is private: {public_publisher:?}"
+        );
+        assert!(
+            chmods.is_empty(),
+            "a mode narrowed after the bytes exist: {chmods:?}"
+        );
+    }
+
     /// **`config check`'s OK-set and the opener's arms cannot disagree**
     /// (ROADMAP O81).
     ///
@@ -5691,5 +5981,187 @@ mod tests {
                 .is_err(),
             "a different port is refused, so the binding is not decoration"
         );
+    }
+
+    /// **Every manager this binary opens derives through the ONE process
+    /// cache, and only three commands keep its key** (ROADMAP O211's source
+    /// gate).
+    ///
+    /// The cost was per OPEN, so the gate is on the opens: in the production
+    /// text of every source file of this binary (`src/`, recursively, each
+    /// file cut at its `mod tests`, `*_tests.rs` skipped), the manager is
+    /// opened in exactly one place — [`manager_in`], through `open_cached` —
+    /// fed the process cache by its two adapters, and never through
+    /// `VaultManager::open`/`open_as`, which derive afresh, nor by deriving a
+    /// master key directly. One cache exists, and exactly three holds keep its
+    /// key: `vault list`, `vault rotate` and `serve-http`'s start — never
+    /// `serve-mcp`, whose one open must leave nothing behind for its whole
+    /// run (the independent review's finding). The control plane opens no
+    /// manager at all: it is a `/v1` client, so its engines are `serve-http`
+    /// processes and derive under this gate.
+    ///
+    /// **Scope, stated**: it matches literal spellings, so an open reached
+    /// through an alias (`use … as`) or a macro is outside it; the binary has
+    /// neither today. Counterfactual: the first build's `open_as` in the
+    /// opener fails the first count, and a hold added to `serve-mcp` fails
+    /// the last.
+    #[test]
+    fn every_manager_open_in_this_binary_derives_through_the_process_cache() {
+        fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    rust_files(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut sources = Vec::new();
+        rust_files(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut sources,
+        );
+        let mut production = String::new();
+        let mut files = 0;
+        for path in &sources {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if name.ends_with("_tests.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(path).unwrap();
+            let cut = text
+                .find(concat!("#[cfg(test)]\nmod ", "tests"))
+                .unwrap_or(text.len());
+            production.push_str(&text[..cut]);
+            files += 1;
+        }
+        assert!(
+            files >= 9,
+            "premise: the binary's sources were read ({files})"
+        );
+        let count = |needle: &str| production.matches(needle).count();
+        assert!(
+            count(concat!("manager_", "in(")) >= 3,
+            "premise: the one opener and its callers are in the text"
+        );
+        assert_eq!(
+            count(concat!("VaultManager::open_", "cached(")),
+            1,
+            "one manager open in the binary"
+        );
+        assert_eq!(
+            count(concat!(
+                "VaultManager::open_cached(dir, passphrase, posture.access(), ",
+                "keys)"
+            )),
+            1,
+            "and it opens through the cache it is handed"
+        );
+        assert_eq!(
+            count(concat!("&KEY_", "CACHE)")),
+            2,
+            "the two adapters hand it the process cache, and nothing else does"
+        );
+        for uncached in [
+            concat!("VaultManager::", "open("),
+            concat!("VaultManager::", "open_as("),
+            concat!("keys::master_", "key("),
+            concat!("master_key_", "cached("),
+        ] {
+            assert_eq!(count(uncached), 0, "{uncached} derives outside the cache");
+        }
+        assert_eq!(
+            count(concat!("KeyCache::", "new()")),
+            1,
+            "one cache per process"
+        );
+        assert_eq!(
+            count(concat!("KEY_CACHE.", "hold()")),
+            3,
+            "vault list, vault rotate and the serve-http start keep the key"
+        );
+        let main = sources
+            .iter()
+            .find(|p| p.file_name().is_some_and(|n| n == "main.rs"))
+            .expect("premise: main.rs");
+        let main = std::fs::read_to_string(main).unwrap();
+        let serve_mcp = main
+            .split_once(concat!("Command::Serve", "Mcp {"))
+            .expect("premise: the serve-mcp arm")
+            .1;
+        let serve_mcp = &serve_mcp[..serve_mcp
+            .find(concat!("Command::Serve", "Http {"))
+            .expect("premise: the arm after it")];
+        assert!(
+            serve_mcp.contains(concat!("open_store_", "as(")),
+            "premise: the arm opens its store"
+        );
+        assert!(
+            !serve_mcp.contains(concat!(".hol", "d()")),
+            "serve-mcp's one open must keep no key for the life of the server"
+        );
+
+        let orch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("undercroft-orchestrator")
+            .join("src");
+        let mut read = 0;
+        for entry in std::fs::read_dir(&orch).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                assert!(
+                    !text.contains("VaultManager") && !text.contains("undercroft_vault"),
+                    "{} opens a manager: the control plane derives no key",
+                    path.display()
+                );
+                read += 1;
+            }
+        }
+        assert!(
+            read >= 3,
+            "premise: the control plane's sources were read ({read})"
+        );
+    }
+
+    /// **A one-open command keeps no key after its open** (the independent
+    /// review of O211's first build): `serve-mcp` opens its store through
+    /// [`open_store_as`], whose body is [`open_store_in`], and the process
+    /// cache then held the master key and a copy of the passphrase for the
+    /// server's whole run. Driven here with a cache of the test's own and a
+    /// stated passphrase — the process cache is shared by every test in this
+    /// binary, so a hold another test takes could keep a key this one is
+    /// asserting gone. That `serve-mcp` takes no hold is the source gate's.
+    #[test]
+    fn a_one_open_command_keeps_no_key_after_its_open() {
+        let home = TempDir::new().unwrap();
+        let keys = undercroft_vault::keys::KeyCache::new();
+        let pw = Some("correct horse");
+        manager_in(home.path(), Posture::ReadWrite, pw, &keys)
+            .unwrap()
+            .create("default", SecurityLevel::Sealed)
+            .unwrap();
+        assert!(!keys.is_holding(), "init's open keeps nothing");
+        let store = open_store_in(home.path(), "default", Posture::ReadWrite, pw, &keys).unwrap();
+        assert!(
+            !keys.is_holding(),
+            "serve-mcp's open keeps nothing while its store serves"
+        );
+        drop(store);
+        assert_eq!(keys.derivations(), 2, "nothing was held, so each derived");
+
+        // `vault list`'s shape: a hold across the opens derives once, and the
+        // key goes when the hold does.
+        {
+            let _held = keys.hold();
+            let lister = manager_in(home.path(), Posture::ReadWrite, pw, &keys).unwrap();
+            for id in lister.list().unwrap() {
+                drop(open_store_in(home.path(), &id, Posture::ReadOnly, pw, &keys).unwrap());
+            }
+            assert!(keys.is_holding());
+        }
+        assert_eq!(keys.derivations(), 3, "one run for the held opens");
+        assert!(!keys.is_holding(), "the hold's end zeroizes the key");
     }
 }

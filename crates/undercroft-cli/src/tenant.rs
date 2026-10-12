@@ -1521,6 +1521,9 @@ impl Tenancy {
         json!({
             "ok": report.ok(),
             "records_checked": report.records_checked,
+            // One string per record: a bare id for a failed HMAC, as before,
+            // and `"<id>: <reason>"` otherwise — since ROADMAP O231, a drawer
+            // whose HMAC verifies over covered meta that does not parse.
             "bad_records": report.bad_records,
             "chain_ok": report.chain_ok,
             // ROADMAP O233: `pending` (the chain has not switched), `intact`,
@@ -2382,6 +2385,14 @@ impl Tenancy {
         if !src.join("vault.json").exists() {
             return Err(RestError::new(404, format!("no backup named {name}")));
         }
+        // ROADMAP O301: what the live vault holds is asked BEFORE this process
+        // lets go of its own handle on it. That handle's close unlinks the
+        // vault's `-wal` by NAME, so a link put over the live `-wal` was removed
+        // by the eviction below and the restore went on over the vault at 200 —
+        // "restore refuses symlinks" was false on `/v1` exactly when this server
+        // held the vault. The store's one refusal, in its words; the door asks
+        // again.
+        undercroft_store::refuse_irregular_live_vault(&self.manager, id).map_err(store_err)?;
         // This process's own cached handle would be the holder the restore's
         // hold refuses, so it goes first — behind `deny_co_resident` above,
         // as every eviction here is. A refused restore costs a reopen.
@@ -2695,8 +2706,9 @@ impl Tenancy {
     /// stands at the store's own choke point: `create_tunnel` validates both
     /// wing names and the label through `validate_name`, refuses the reserved
     /// review wing as either endpoint, runs the tier-1 screen over the label
-    /// via the shared `SCREENED_FIELDS` inventory (O29), appends its own chain
-    /// record and anchors the manifest. Re-implementing any of that here would
+    /// via the shared `SCREENED_FIELDS` inventory (O29), and — when it inserted
+    /// the row (O236) — appends its own chain record and anchors the manifest.
+    /// Re-implementing any of that here would
     /// be the second implementation of one decision this project keeps
     /// removing — the route's job is to parse and to answer.
     fn tunnel_create(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
@@ -2706,10 +2718,22 @@ impl Tenancy {
         let to = body_str(&body, "to")?;
         let label = body_str(&body, "label")?;
         let store = self.store_for(id)?;
-        let tid = store.create_tunnel(&from, &to, &label).map_err(store_err)?;
+        let out = store.create_tunnel(&from, &to, &label).map_err(store_err)?;
+        // `created` is additive (ROADMAP O236): `false` when this vault
+        // already held the tunnel and its row verified, so nothing was written
+        // and no chain record appended; a held row that fails its tag is 409
+        // `integrity` through `store_err`. The status stays the documented 201
+        // either way — any other status for a repeat moves a documented
+        // contract, so it is a 2.0.0 question, ROADMAP O402.
         Ok((
             201,
-            Body::Json(json!({ "id": tid, "from": from, "to": to, "label": label })),
+            Body::Json(json!({
+                "id": out.id,
+                "from": from,
+                "to": to,
+                "label": label,
+                "created": out.created,
+            })),
         ))
     }
 
@@ -3310,8 +3334,13 @@ impl Tenancy {
         for exp in &kg_records {
             store.kg_import(exp).map_err(store_err)?;
         }
+        // A tunnel this vault already holds writes nothing and appends no
+        // chain record (ROADMAP O236); `tunnels_new` says how many did.
+        let mut tunnels_new = 0u64;
         for (f, t, l) in &tunnel_records {
-            store.create_tunnel(f, t, l).map_err(store_err)?;
+            if store.create_tunnel(f, t, l).map_err(store_err)?.created {
+                tunnels_new += 1;
+            }
         }
         // Additive keys: a caller that ignores them sees the response this
         // route always returned.
@@ -3333,7 +3362,13 @@ impl Tenancy {
                 "quarantined": quarantined,
                 "kg_triples": kg_records.len(),
                 "kg_entities": entity_records.len(),
+                // Records processed, as always — the orchestrator's migration
+                // compares this with the export's declared count, so it must
+                // not start counting only rows written.
                 "tunnels": tunnel_records.len(),
+                // Additive (ROADMAP O236): how many of those were new to this
+                // vault. The rest were already held and wrote nothing.
+                "tunnels_new": tunnels_new,
                 "manifest": manifest.map(|m| json!({
                     "vault": m.vault,
                     "created_at": m.created_at,
@@ -5065,6 +5100,71 @@ mod tests {
         );
     }
 
+    /// **ROADMAP O236 on `/v1`: a repeated tunnel create, through either door
+    /// that reaches it, writes nothing and says so.** `POST …/tunnels` answered
+    /// the same body for a tunnel it wrote and one it already held, and both
+    /// appended a chain record; an import restoring a tunnel the vault holds
+    /// did the same and counted it among `tunnels` with nothing to tell them
+    /// apart.
+    #[test]
+    fn o236_a_repeated_tunnel_create_on_v1_writes_nothing_and_says_so() {
+        let mut s = surface(false);
+        let height = |s: &mut Surface| -> u64 {
+            let (code, body) = s.call("GET", "/v1/vaults/acme/stats", None);
+            assert_eq!(code, 200, "{body}");
+            let v: Value = serde_json::from_str(&body).unwrap();
+            v["chain_records"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("no chain_records: {body}"))
+        };
+        let create = r#"{"from":"ops","to":"notes","label":"see also"}"#;
+
+        let before = height(&mut s);
+        let (code, body) = s.call("POST", "/v1/vaults/acme/tunnels", Some(create));
+        assert_eq!(code, 201, "{body}");
+        let first: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(first["created"], json!(true), "premise: {body}");
+        let after_first = height(&mut s);
+        assert_eq!(after_first, before + 1, "premise: a create records itself");
+
+        let (code, body) = s.call("POST", "/v1/vaults/acme/tunnels", Some(create));
+        assert_eq!(code, 201, "the documented status is unchanged: {body}");
+        let again: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(again["id"], first["id"], "the same tunnel: {body}");
+        assert_eq!(
+            again["created"],
+            json!(false),
+            "and the reply says so: {body}"
+        );
+        assert_eq!(
+            height(&mut s),
+            after_first,
+            "a repeated create appended a chain record for a write that never happened"
+        );
+
+        // The import door: one tunnel the vault holds, one it does not.
+        let payload = concat!(
+            r#"{"tunnel":{"from_wing":"ops","to_wing":"notes","label":"see also"}}"#,
+            "\n",
+            r#"{"tunnel":{"from_wing":"ops","to_wing":"archive","label":"older"}}"#,
+            "\n"
+        );
+        let (code, body) = s.call("POST", "/v1/vaults/acme/import", Some(payload));
+        assert_eq!(code, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            v["tunnels"],
+            json!(2),
+            "records processed, as always: {body}"
+        );
+        assert_eq!(v["tunnels_new"], json!(1), "one was new: {body}");
+        assert_eq!(
+            height(&mut s),
+            after_first + 1,
+            "only the new tunnel recorded itself"
+        );
+    }
+
     /// **M2 (round-four #45): one drawer count, and it answers to both
     /// names from one read.**
     ///
@@ -5542,5 +5642,192 @@ mod tests {
         let (code, body) = s.call("POST", "/v1/vaults/acme/import", Some(&records));
         assert_eq!(code, 200, "legacy import is unchanged: {body}");
         assert!(body.contains(r#""manifest":null"#), "{body}");
+    }
+
+    // ---- ROADMAP O273 and O301: links under backups/ and in a live vault ----
+
+    /// **`POST …/backups` beside a `backups/.staging` that is a symbolic link
+    /// refuses through the store's one door** (ROADMAP O273), in the class the
+    /// restore area's identical refusal answers (O268's container: an I/O-class
+    /// 500, a state of the installation to fix, never a verdict about the
+    /// vault), with nothing swept or staged through the link and no archive.
+    /// The link removed, the same route archives.
+    #[cfg(unix)]
+    #[test]
+    fn o273_v1_backup_create_refuses_a_linked_staging() {
+        let mut s = surface(false);
+        let backups = s.dir.path().join(undercroft_vault::BACKUPS_DIR);
+        std::fs::create_dir_all(&backups).unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let shaped = elsewhere.path().join("ab".repeat(16));
+        std::fs::create_dir_all(&shaped).unwrap();
+        std::fs::write(shaped.join("vault.db"), b"shaped like a crashed stage").unwrap();
+        let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        std::fs::File::open(&shaped)
+            .unwrap()
+            .set_modified(two_hours_ago)
+            .unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), backups.join(".staging")).unwrap();
+        let names = |d: &std::path::Path| {
+            let mut v: Vec<String> = std::fs::read_dir(d)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        let (code, body) = s.call("POST", "/v1/vaults/acme/backups", None);
+        assert_eq!(code, 500, "{body}");
+        assert!(
+            body.contains("ROADMAP O273") && body.contains("symbolic link"),
+            "{body}"
+        );
+        assert!(
+            !body.contains("\"class\""),
+            "not a verdict about the vault: {body}"
+        );
+        assert_eq!(
+            names(elsewhere.path()),
+            ["ab".repeat(16)],
+            "nothing swept or staged through the link"
+        );
+        assert_eq!(
+            std::fs::read(shaped.join("vault.db")).unwrap(),
+            b"shaped like a crashed stage"
+        );
+        assert_eq!(names(&backups), [".staging"], "no archive");
+
+        std::fs::remove_file(backups.join(".staging")).unwrap();
+        let (code, body) = s.call("POST", "/v1/vaults/acme/backups", None);
+        assert_eq!(
+            code, 201,
+            "control: the link gone, the backup is taken: {body}"
+        );
+    }
+
+    /// **`POST …/backups/restore` refuses a live vault holding a linked `-wal`
+    /// or a linked staged manifest** (ROADMAP O301, the vault delete's survey on
+    /// O283's ruling): 400 in the store's words naming the entry, the link and
+    /// what it names unchanged. O283's check named three entries, so both were
+    /// renamed aside with the vault and removed as links. The archive is taken
+    /// through a handle of its own, so no request leaves this server holding the
+    /// vault — whose close would remove a `-wal` by its path, the link included.
+    #[cfg(unix)]
+    #[test]
+    fn o301_v1_restore_refuses_a_live_vault_holding_a_link() {
+        let mut s = surface(false);
+        let root = s.dir.path().to_path_buf();
+        let name = {
+            let m = VaultManager::open(&root, None).unwrap();
+            let store = VaultStore::open(m.unlock("acme").unwrap()).unwrap();
+            match store
+                .backup(&root.join(undercroft_vault::BACKUPS_DIR))
+                .unwrap()
+            {
+                undercroft_store::BackupOutcome::Created(r) => r.name,
+                undercroft_store::BackupOutcome::Refused(r) => panic!("premise: {r:?}"),
+            }
+        };
+        let vault = root.join("vaults").join("acme");
+        let elsewhere = TempDir::new().unwrap();
+        let body = format!("{{\"name\":\"{name}\"}}");
+        for entry in ["vault.db-wal", "vault.json.next"] {
+            if let Ok(m) = std::fs::symlink_metadata(vault.join(entry)) {
+                assert!(
+                    m.is_file() && m.len() == 0,
+                    "premise: no {entry} of its own"
+                );
+                std::fs::remove_file(vault.join(entry)).unwrap();
+            }
+            let named = elsewhere.path().join(entry);
+            std::fs::write(&named, format!("what {entry} names")).unwrap();
+            std::os::unix::fs::symlink(&named, vault.join(entry)).unwrap();
+            let (code, answer) = s.call("POST", "/v1/vaults/acme/backups/restore", Some(&body));
+            assert_eq!(code, 400, "{entry}: {answer}");
+            assert!(
+                answer.contains(&format!("{entry} is a symbolic link"))
+                    && answer.contains("ROADMAP O283, O301"),
+                "{entry}: {answer}"
+            );
+            assert!(std::fs::symlink_metadata(vault.join(entry))
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            assert_eq!(
+                std::fs::read(&named).unwrap(),
+                format!("what {entry} names").into_bytes()
+            );
+            std::fs::remove_file(vault.join(entry)).unwrap();
+        }
+        let (code, answer) = s.call("POST", "/v1/vaults/acme/backups/restore", Some(&body));
+        assert_eq!(code, 200, "control: nothing irregular left: {answer}");
+    }
+
+    /// **The route asks what the live vault holds BEFORE it lets go of its own
+    /// handle** (ROADMAP O301). This server has served `acme`, so it holds it,
+    /// and a link is put over that live `-wal`. The route used to evict first:
+    /// the handle's close unlinked `-wal` by NAME — the link — and the restore
+    /// went on over the vault at 200, so "restore refuses symlinks" was false on
+    /// `/v1` for a vault the server held (measured on a real corpus). Now 400,
+    /// the link and what it names kept, the handle not released; with the link
+    /// gone the same restore runs.
+    #[cfg(unix)]
+    #[test]
+    fn o301_v1_restore_surveys_before_it_releases_its_own_handle() {
+        let mut s = surface(false);
+        let root = s.dir.path().to_path_buf();
+        let name = {
+            let m = VaultManager::open(&root, None).unwrap();
+            let store = VaultStore::open(m.unlock("acme").unwrap()).unwrap();
+            match store
+                .backup(&root.join(undercroft_vault::BACKUPS_DIR))
+                .unwrap()
+            {
+                undercroft_store::BackupOutcome::Created(r) => r.name,
+                undercroft_store::BackupOutcome::Refused(r) => panic!("premise: {r:?}"),
+            }
+        };
+        let (code, answer) = s.call("GET", "/v1/vaults/acme/stats", None);
+        assert_eq!(code, 200, "premise: the server opened acme: {answer}");
+        assert!(
+            s.tenancy.stores.contains_key("acme"),
+            "premise: the server holds acme"
+        );
+        let wal = root.join("vaults").join("acme").join("vault.db-wal");
+        assert!(
+            std::fs::symlink_metadata(&wal).is_ok_and(|m| m.is_file()),
+            "premise: the held vault has a live -wal"
+        );
+        let elsewhere = TempDir::new().unwrap();
+        let named = elsewhere.path().join("frames");
+        std::fs::write(&named, b"what the -wal link names").unwrap();
+        std::fs::remove_file(&wal).unwrap();
+        std::os::unix::fs::symlink(&named, &wal).unwrap();
+        let body = format!("{{\"name\":\"{name}\"}}");
+        let (code, answer) = s.call("POST", "/v1/vaults/acme/backups/restore", Some(&body));
+        assert_eq!(code, 400, "{answer}");
+        assert!(
+            answer.contains("vault.db-wal is a symbolic link")
+                && answer.contains("ROADMAP O283, O301"),
+            "{answer}"
+        );
+        assert!(
+            std::fs::symlink_metadata(&wal)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the link is kept: nothing closed the handle beneath it"
+        );
+        assert_eq!(std::fs::read(&named).unwrap(), b"what the -wal link names");
+        assert!(
+            s.tenancy.stores.contains_key("acme"),
+            "a refused restore does not release the server's handle"
+        );
+        std::fs::remove_file(&wal).unwrap();
+        let (code, answer) = s.call("POST", "/v1/vaults/acme/backups/restore", Some(&body));
+        assert_eq!(
+            code, 200,
+            "control: with the link gone the restore runs: {answer}"
+        );
     }
 }

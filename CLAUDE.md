@@ -424,7 +424,23 @@ Consequences that are binding, not advisory:
   present loads, the OTHER file alone is `SourceMismatch`, neither under any
   `vaults/` or `backups/` entry is `MaterialMissing`, both exit 1 as no
   `KeyError` is an integrity verdict — and only then is a key read, derived
-  or written, by one private exclusive writer. With BOTH files present the
+  or written, by one private exclusive writer. **That writer publishes
+  through the private `publish_new_secret` (O210)**, whose only other door,
+  `write_new_identity`, is how the CLI's two keygens write (O321): an
+  existing name refused by `symlink_metadata` before a byte is written, the
+  bytes into a `create_new` temp owner-only from the open, fsync, then a
+  HARD LINK to the name — which fails if it exists, so nothing is replaced
+  and no link followed — and a directory fsync before the temp goes. A crash
+  before the link leaves no key file, so the next start makes a whole one; a
+  short file already there is `CorruptKeyFile` naming it and its length. Only
+  where the link error reads as "unsupported" (measured `EPERM` on vfat,
+  `ENOSYS` on a FUSE exFAT) does it fall back to O204's exclusive in-place
+  create, warning — never to a rename, which replaces; which writer a
+  linkless filesystem should get is open (O412). Every other link
+  error refuses with the temp kept and named, and the fallback removes
+  nothing, because a name it created may already have been loaded (the
+  review of its first build found both). Nothing sweeps a crash's leftover
+  temp, which may be the last copy of a key. With BOTH files present the
   declared one is used and every open warns; the undeclared key is never
   tried, because a file an offline writer can plant proves nothing and the
   trial would steer a passphrase deployment towards it. `VaultManager::open_as`
@@ -432,7 +448,20 @@ Consequences that are binding, not advisory:
   installation, refuses `create`/`delete`/`rotation_candidate`, and unlocks
   read-only whatever it is asked; `create` refuses as `KeyOpensNoVault`
   (exit 2) when the key opens none of the installation's manifests, the door a
-  split installation was minted through;
+  split installation was minted through. **A command derives a passphrase's
+  key ONCE (O211)**: `KeyCache` keeps the Argon2id output against a SHA-256
+  digest of the passphrase and the salt bytes that produced it (both compared
+  in constant time over fixed lengths) — and only while a `KeyHold` is alive,
+  so an open with no hold keeps nothing. The CLI holds one in a `static` that
+  every manager open — its one door, `manager_in`, through `open_cached` —
+  derives through, and exactly three holds span the opens of `vault list`,
+  `vault rotate` and a `serve-http` start, which run Argon2id once rather than
+  once per open; a one-open command (`serve-mcp`, `mine`) keeps the key only
+  as long as its manager, as before. The survey, `plan` and the read of
+  `kdf.salt` still run on every open, because only the DERIVATION may be
+  cached, never the decision about which key file applies. `open_as` keeps
+  deriving per call for library callers; a CLI source gate counts the
+  binary's one open and its three holds;
   seal.rs: AEAD + HMAC; lib.rs: VaultManager/Vault + manifest-as-rollback-
   anchor + pure chain arithmetic + key rotation primitives
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
@@ -486,6 +515,9 @@ Consequences that are binding, not advisory:
   `test-fixture` feature carries the fault seam, since a nonce name cannot
   be targeted from outside; backups.rs: the archive side of `backup
   create` (ROADMAP O256, O265) — a stage under `backups/.staging/<nonce>`
+  (`.staging` judged by `symlink_metadata` first and refused if it is a link
+  or not a directory, before the sweep reads it or a stage is made in it —
+  O273: the stage and the sweep followed a planted link wherever it pointed)
   published by one rename only when it holds exactly `vault.db` and
   `vault.json`, a stage older than an hour swept, and a vault's archives
   found by their OWN manifest and exact name shape, never a prefix (backing
@@ -514,7 +546,9 @@ Consequences that are binding, not advisory:
   never `aside-`, beside which `create` refuses and tells the operator to
   put the vault back, and never a nonce, which no retry could find — and
   ONE removal judged by what is left, never by `remove_dir_all`'s result.
-  It observes and refuses nothing; the store's door classifies. `DbLayout::of`
+  It observes and refuses nothing; the store's door classifies. Its survey is
+  also the restore's (O301, `restores::irregular_target`): ONE rule for what
+  a vault directory may hold when something replaces or removes it. `DbLayout::of`
   is the ONE layout rule, `Vault::db_layout` and O69's hold both asking it;
   bundle.rs:
   recipient-encrypted export bundles — **the vault-sized paths take the
@@ -869,6 +903,17 @@ Consequences that are binding, not advisory:
   HMACs, the chain replay, the label commitment (O233), drawer supersession
   receipts, **KG fact receipts**, orphan graph labels, mirror drift,
   **declared-policy drift**, **version replay (O234)**.
+  **The first leg is `bad_records`, a `Vec<BadRecord>` since O231**: a record
+  id and a `BadReason` — a failed HMAC, or a drawer whose HMAC VERIFIES over
+  covered meta that does not parse, which `verify` counted and reported in no
+  leg, answering OK over a drawer every read refuses. Each serializes as one
+  string (a bare id for a failed HMAC, `"<id>: <reason>"` otherwise), the CLI
+  prints them as `hmac failures:` and `unreadable:`, and
+  `rotation_blockers()` matches every reason with no `_` and blocks on a
+  failed HMAC alone (O232's ruling: "never on … an O231 row"). Such a row needs
+  no key: the drawer canonical joins id, meta and content with a 0x1f and no
+  lengths, so the meta/content boundary moves with the tag intact
+  (O406).
   The rule that keeps growing
   it: *a keyed claim living in columns no drawer HMAC and no chain step
   covers must have a leg, or nothing sees it.* **The NINTH is that rule
@@ -1104,9 +1149,17 @@ Consequences that are binding, not advisory:
   appeared at an absent target was renamed aside unheld and removed) **and
   never a symbolic link** (O283, the maintainer's ruling: a linked
   `vaults/<id>`, database or manifest was renamed aside as the LINK, orphaning
-  what it named — `restores::linked_target`, asked by the door before anything
-  is staged and by the swap), and `key_generation_differs` is read under the
-  hold. **`DELETE /v1/vaults/{id}`, one door (delete.rs, `delete_vault`,
+  what it named) **nor a directory holding any entry that is not a regular
+  file** (O301: O283's check named three entries, so a linked
+  `vault.json.next` was removed as a link with what it named left behind, and
+  a linked `-wal` met SQLite's own `O_NOFOLLOW` only at the hold, as a raw
+  "unable to open database file" after the archive was staged and verified)
+  — `restores::irregular_target`, the vault DELETE's survey, asked by the door
+  before anything is staged (`refuse_irregular_live_vault`, which `/v1`'s
+  route also asks BEFORE it releases its own handle, whose close unlinks a
+  `-wal` link by name) and by the swap under the hold, and
+  `key_generation_differs` is read under the hold.
+  **`DELETE /v1/vaults/{id}`, one door (delete.rs, `delete_vault`,
   ROADMAP O291)** — it removed the vault directory with nothing held:
   beside an idle writable handle in another process the delete answered
   `Ok` and so did that handle's next write, committed into the unlinked
@@ -1343,7 +1396,8 @@ Consequences that are binding, not advisory:
   arguments name the reserved wing or an `*id` resident in it, so the
   agent whose write was diverted can neither read the evidence back nor
   delete it; allow/deny chain-audited
-  with the verdict inside the ruling tag; operator surfaces only, never
+  with the verdict inside the ruling tag, each ruling ONE write lock with
+  its effect (deny since O255, allow since O260); operator surfaces only, never
   MCP; default off = byte-identical write contract; **a pending row's text
   changes only by a ruling (O220)** — the queue id is a function of the
   filing, so a second flagged text for one filing (an edited re-mine, two
@@ -1419,7 +1473,22 @@ Consequences that are binding, not advisory:
   `is_autocommit()` before each write, because a statement that fails can
   make SQLite roll the whole transaction back and the next one would then
   commit on its own (measured). The label guard stays OUTSIDE the lock,
-  where a miss replays in a read snapshot),
+  where a miss replays in a read snapshot. **The two unattested
+  destructions take the same lock since O259/O260**: `delete_by_source`
+  refuses review evidence at a door in front of its lock (a failing fence
+  query refuses — it read as "not pending"; a refusal takes no lock and
+  drops no cache), then reads the members again and destroys them in one
+  lock (`delete_source_in`), and `admission allow` re-files, rules and
+  removes the queue row in one lock (`allow_in`) through `write_drawer_in`,
+  which takes only the operator's ruling and never screens, after
+  re-reading the row and requiring it to be byte for byte the row its door
+  judged — so a deny of the same row either wins whole or is refused, and
+  the trail holds one verdict. **And the pending-evidence fence is a
+  WITNESS, not a call-site check**: `destroy_in` takes the `Fenced` value
+  `fence` mints inside the lock (refusing a pending drawer under `Protect`)
+  and no id, nothing else constructs one, and `Ruled` is stated by the two
+  rulings alone — the first build of O259/O260 had made it a call-site
+  check again, and one swallowed `?` destroyed a pending member),
   retention policies (retention.rs — C3.2 phase 2: per wing/room on the
   wing-trust pattern, operator-only + HMAC-tagged + audited, flip fails
   list AND sweep; enforcement is an **explicit sweep** through
@@ -1781,7 +1850,19 @@ Consequences that are binding, not advisory:
 - `crates/undercroft-config` — the declaration resolvers the engine and the
   control plane SHARE (`resolve_orch_key`, `resolve_admin_token`,
   `resolve_rate_limit`, `resolve_orch_addr`, `resolve_metrics_addr`,
-  `resolve_metrics_token`, and the `addr_is_loopback` predicate). Its own
+  `resolve_metrics_token`, and the listen-host loopback predicate
+  `host_is_loopback`, which `addr_is_loopback` and the engine's
+  refuse-to-bind rule both ask — ROADMAP O177: they were two copies of the
+  literals, recorded as byte-identical, and an address predicate handed a
+  bare `::1` reads host `":"`, so the drop-in would have refused
+  `serve-http --host ::1`. A source gate here, `loopback_tests.rs`, refuses
+  any of the three literals as a string token in non-test code outside that
+  one function. It allows `"localhost"` once in each of the two OUTBOUND
+  predicates, `undercroft-net`'s `is_loopback` and `undercroft-index`'s
+  `dsn_is_loopback`, which compare it against a parser's typed host and
+  cannot share a listen-host predicate (the O90/O92 rule). It also allows
+  `serve-http`'s `127.0.0.1` default `--host`, a value bound rather than a
+  decision. Test code is read from the module tree, not from file names). Its own
   crate on `undercroft-net`'s precedent: a
   policy several crates need has one implementation, and when the crates that
   need it cannot link each other it gets a home neither owns. Six surfaces
@@ -2144,6 +2225,13 @@ Consequences that are binding, not advisory:
   i18n.rs: result-string localization for nine languages
   (`UNDERCROFT_LANG` → `LANG`, primary subtag; errors, help and
   machine-oriented output stay English);
+  receipt.rs: the ONE place `forget`, `admission deny` and `retention sweep`
+  deliver a destruction's receipt (ROADMAP O262) — `--sign` read and parsed
+  before the vault is opened, and once the drawers are gone the receipt's
+  delivery is attempted before anything else is written: `--out` first and
+  durably, stdout through the door's flushed write (O287) as its fallback, and
+  a delivery that fails says where the receipt went or that it is lost, because
+  its fingerprints are stored nowhere and it can never be minted again;
   refine.rs: the ONE LLM-distillation implementation both `undercroft refine`
   and `POST /v1/…/refine` drive — same `UNDERCROFT_LLM_*` config used to
   build two different vaults, the CLI's facts carrying no date resolved from
@@ -2360,7 +2448,19 @@ Consequences that are binding, not advisory:
   `${…:-}` would pass an empty payload and refuse to start. The recipe had not
   named it at all, so a declared passphrase was dropped. MCP and `/v1` recall
   never consult the mirror, which
-  `parity::no_served_surface_searches_through_a_remote_mirror` holds
+  `parity::no_served_surface_searches_through_a_remote_mirror` holds.
+  **Every shipped `serve-http` recipe runs `init` first since O199/O200**:
+  the observability engine had `init 2>/dev/null || true; exec …`, which hid
+  a failed init behind serve-http's `vault "default" not found`, and
+  `deploy/undercroft-server.service` had no `init` at all, so a fresh install
+  restarted forever. The compose files use `init && exec`, the unit an
+  unprefixed `ExecStartPre=` on the same executable plus
+  `RequiresMountsFor=` on its `UNDERCROFT_HOME` — without it, an init that
+  ran before the data directory's mount minted a second installation beneath
+  the mount point and the server served it (the review of O200's first
+  build, reproduced under systemd 252) — and the
+  `every shipped serve-http recipe runs init first` preflight holds all three,
+  reading a unit as systemd reads it, with a probe of the shipped broken lines
 - `architecture/DIAGRAM_LESSONS.md` — **read it before changing any diagram, in
   any of the three sets**: which file is each set's source, the standards a change
   keeps (text fit included, O188), how width is estimated and measured, the fix
@@ -2754,8 +2854,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1308 run,
-                                      # 17 #[ignore]d = 1325 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1380 run,
+                                      # 17 #[ignore]d = 1397 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2901,13 +3001,13 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (767 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (833 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (189 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (62 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
-bash tests/tls-pins.sh                # CA pins readable + both stacks start (31 checks).
+bash tests/tls-pins.sh                # CA pins readable + both stacks start (32 checks).
                                       # Every shipped pin, read as the ENGINE's uid.
                                       # Host-side
                                       # because it DRIVES docker: it brings the real
@@ -2953,7 +3053,11 @@ bash tests/tls-pins.sh                # CA pins readable + both stacks start (31
                                       # measured by counterfactual. The whole suite
                                       # measured 104 s locally with both engine images
                                       # already built; a cold CI run pays two builds,
-                                      # measured 12 min 2 s against 5 min 15 s with one
+                                      # measured 12 min 2 s against 5 min 15 s with one.
+                                      # **Since ROADMAP O199** it also replaces the
+                                      # observability engine over a volume whose
+                                      # `vaults/default` is a regular file, and requires
+                                      # init's own error in the log, not serve-http's
 docker compose run --rm arch-check    # TWO verifications, one service: the
                                       # architecture reference is what
                                       # diagrams/ and its own headings derive
@@ -3123,7 +3227,7 @@ own teardown was the place it had not been applied. Gated by the
 `destructive compose scope` preflight, which requires every compose teardown
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the twenty-two host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the twenty-three host-side preflights
 and no suite**, which is what CI invokes. They read the release tags since
 O309: a `--depth 1` clone fetches them first, as CI's `preflight` job does. **A count the battery cannot trust is never compared to a published figure, and there are TWO ways to earn that (O97/O103): the suite EXITED NON-ZERO — `cargo test` aborts at the first failing target, so a numeric, replay-free count arrives over a fraction of them — or the reader disowned it with a `PREMISE FAILURE` marker. `count_untrustworthy` is the one place that question is answered, because it used to be answered twice and differently: the cargo arm guarded on the marker, the shell arm stripped it with a trailing `.*`, and neither looked at the exit code. It fails either way — a gate that cannot measure must not report clean — and the verdict names WHICH cause, because the message was written for a replay and told the reader to re-run a failure that was deterministic. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
@@ -3170,7 +3274,7 @@ code — including the post-run comparison of each suite's MEASURED check count
 against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
 and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
 request and a leg dropping from 370 checks to 3 was green. The flag skips the
-twenty-two preflights because the dedicated `preflight` job already runs them
+twenty-three preflights because the dedicated `preflight` job already runs them
 (twice since O314, the second time under Debian 12's mawk). **The shared readers — `test_summary`, `suite_summary`,
 `declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
 skipped block**, and that is not tidiness: with them inside, `--no-preflight`
@@ -3362,8 +3466,14 @@ oldest lesson, and the reason the check exists at all is that the same figure
 sat stale for eleven days with nothing able to notice. Consequence, stated
 rather than discovered: it can go red on a pull request that touched nothing,
 because the house page is state this repo does not own. That is the signal,
-not a defect in the gate.
-This sentence said "one job each" while also saying the matrix is one job,
+not a defect in the gate. **One cause WAS a defect in the gate (ROADMAP
+O331)**: its release read was an unauthenticated call from a hosted runner's
+shared IP, and three of the job's eight red runs to 2026-10-07 were that read
+alone, its cause thrown away — most likely the 60-an-hour limit, which nothing
+logged could prove. It reads with the job's own `GH_TOKEN` now, sent only
+under `https://api.github.com/`, fails inside Actions without one, and a
+failed read names its HTTP status, the API's message and curl's exit code.
+The matrix sentence above said "one job each" while also saying the matrix is one job,
 which cannot both be true: a matrix expands to one check RUN per leg under a
 single job id, which is why adding a leg does not move `verdict`'s `needs:`
 and adding a job does. Corrected 2026-08-20; the count was stale too. Two
@@ -3558,7 +3668,8 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   wrote, so anything reporting the chain still reads `chain_meta`.
 - Durability is pinned, not assumed: SQLite runs WAL + `synchronous=FULL`
   on both binaries, the manifest anchor is fsynced through an atomic
-  rename (+ dir sync), and key material is fsynced at creation. The
+  rename (+ dir sync), and key material is fsynced at creation, under a
+  temp name that a hard link publishes only once whole (O210). The
   anchor must never run **ahead** of the database — that combination is
   what makes a power loss reconcile as a crash instead of a tamper alarm.
   **And ONE door writes it (ROADMAP O254)**: `VaultStore::anchor()`, the only

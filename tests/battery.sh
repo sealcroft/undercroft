@@ -1243,6 +1243,7 @@ UNVERSIONED_CLOSED=(
   "O241|closed by RULING: a manifest census cannot authenticate a point question over an unbounded key space"
   "O244|closed by RULING: audit compaction refused; the replacement gate was met by O250 and the witness it was sequenced behind built by O245"
   "O313|two GitHub settings — up-to-date branches on main and a v* tag ruleset with no bypass — applied and observed to block"
+  "O340|closed by RULING, the maintainer's: O234's read budget is a per-unit landing gate, the cumulative figure reported beside it"
 )
 ROADMAP_DRIFT=$(roadmap_scan ROADMAP.md)
 # The premise BEFORE the roster (ROADMAP O162). It used to run after it, so a
@@ -2551,6 +2552,277 @@ if [ "$CA_FAIL" -ne 0 ]; then
 fi
 echo "ok    $CA_SEEN declared CA pin(s) on engine services, none inside a"
 echo "      root-only PKI tree, across:$CA_FILES"
+
+# ── preflight: every shipped serve-http recipe runs init first ─────────────
+# ROADMAP O199 and O200, the class O172 closed for one recipe. `serve-http`
+# does not create the vault it serves, so on a fresh data directory a recipe
+# that starts it alone exits `vault "default" not found`, and its restart
+# policy repeats that forever: the team-server recipe until O172, the systemd
+# unit until O200. A recipe that runs init and DISCARDS its failure is the
+# same defect once removed: the observability stack ran
+# `undercroft init 2>/dev/null || true; exec …` until O199, so a failed init
+# said nothing and the log named serve-http's symptom instead of the cause.
+#
+# What running init first means, by kind:
+#   compose  the line that runs `serve-http` runs `undercroft init`, then
+#            `undercroft serve-http` behind `&&` (an `exec` between them is
+#            fine), with no `;`, `|`, `&` or `>` before the `&&` — so a failed
+#            init stops the command and its error reaches the log. A command
+#            written as a YAML list (`- serve-http`, the pre-O172 recipe) has
+#            no init on its line and fails. `--data-dir` on the line fails:
+#            the data directory is the service's UNDERCROFT_HOME, and a flag
+#            on one of the two commands points them at different ones.
+#   systemd  the unit is read as systemd reads it: `[Section]` headers, blanks
+#            around `=`, indentation, `\` continuations, `#`/`;` comments, and
+#            an empty `ExecStartPre=` resetting the list before it. Every
+#            active line that names `serve-http` must be an `ExecStart=` in
+#            `[Service]` with no `--data-dir`, and `[Service]` must keep an
+#            `ExecStartPre=` that runs `init` through the SAME executable,
+#            with no prefix: `-` ignores init's failure (systemd's spelling of
+#            `|| true`), and `+` or `!` would run it with privileges the
+#            server does not have, writing a key file the unit's user might
+#            not read. `--level <word>` is allowed after `init`, nothing else.
+#            And the data directory must be declared in `[Service]`
+#            (`Environment=UNDERCROFT_HOME=<dir>`) and its mount required in
+#            `[Unit]` (`RequiresMountsFor=<dir>`): an init that starts before
+#            the data directory's mount finds it empty and mints a second
+#            installation beneath the mount point, which the server then
+#            serves (the independent review of O200's first build).
+#
+# SCOPE, stated rather than implied: tracked `.yml`, `.yaml` and `.service`
+# files under `deploy/` whose active lines (comments aside) run `serve-http`,
+# which are the recipes this repo ships. Not a snippet in the docs
+# (`docs/remote-server.md`'s orchestrated example carries the same command by
+# hand), and not `serve-mcp`, which only the root `docker-compose.yml` test
+# harness runs. A compose command split across a block scalar's lines is
+# refused rather than read: a false refusal by design, never a false pass.
+# What the systemd half cannot see: an UNDERCROFT_HOME the unit's environment
+# FILE sets (it overrides `Environment=`, and the file is the host's, not the
+# repo's), and a mount made outside systemd, which RequiresMountsFor= does not
+# know of. Host-side beside the CA-pin preflight, because it asks `git grep`.
+echo "═══ preflight: every shipped serve-http recipe runs init first ═══"
+# init_first_findings <file> — one line per command in <file> that starts
+# `serve-http`: `ok|<line>` or `bad|<line>|<why>`. Prints nothing for a file
+# that runs no `serve-http`, which is how the selector below tells a recipe.
+init_first_findings() {
+  case "$1" in
+    *.service) unit_init_findings "$1" ;;
+    *) compose_init_findings "$1" ;;
+  esac
+}
+compose_init_findings() {
+  local f="$1" n=0 line
+  while IFS= read -r line; do
+    n=$((n + 1))
+    line="${line%$'\r'}"
+    case "${line#"${line%%[![:space:]]*}"}" in "#"*) continue ;; esac
+    case "$line" in *serve-http*) ;; *) continue ;; esac
+    case "$line" in
+      *--data-dir*)
+        echo "bad|$n|names --data-dir, so init and serve-http may open different data directories"
+        continue ;;
+    esac
+    if printf '%s\n' "$line" |
+         grep -qE 'undercroft[[:space:]]+init[^;|&>]*&&[[:space:]]*(exec[[:space:]]+)?undercroft[[:space:]]+serve-http'; then
+      echo "ok|$n"
+    else
+      echo "bad|$n|serve-http does not run behind 'undercroft init &&' on this line"
+    fi
+  done < "$f"
+}
+# unit_init_findings <unit file>: one verdict per active line naming
+# `serve-http`, the unit read as systemd reads it (see the comment above).
+unit_init_findings() {
+  local f="$1" n=0 start=0 raw buf="" line key val sec="" tok home="" reqs=""
+  local -a pres=() toks=() s_n=() s_sec=() s_key=() s_val=()
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    n=$((n + 1))
+    raw="${raw%$'\r'}"
+    [ -z "$buf" ] && start=$n
+    case "$raw" in *\\) buf="$buf${raw%\\} "; continue ;; esac
+    line="$buf$raw"; buf=""
+    line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
+    case "$line" in ""|"#"*|";"*) continue ;; "["*"]") sec="$line"; continue ;; esac
+    key=""; val="$line"
+    case "$line" in
+      *=*)
+        key="${line%%=*}"; key="${key%"${key##*[![:space:]]}"}"
+        val="${line#*=}"; val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}" ;;
+    esac
+    case "$line" in
+      *serve-http*) s_n+=("$start"); s_sec+=("$sec"); s_key+=("$key"); s_val+=("$val") ;;
+    esac
+    case "$sec|$key" in
+      "[Service]|ExecStartPre") if [ -z "$val" ]; then pres=(); else pres+=("$val"); fi ;;
+      "[Service]|Environment")
+        read -ra toks <<< "$val"
+        for tok in "${toks[@]}"; do
+          tok="${tok#\"}"; tok="${tok%\"}"
+          case "$tok" in UNDERCROFT_HOME=*) home="${tok#UNDERCROFT_HOME=}" ;; esac
+        done ;;
+      "[Unit]|RequiresMountsFor") if [ -z "$val" ]; then reqs=""; else reqs="$reqs $val"; fi ;;
+    esac
+  done < "$f"
+  local i exe found why p lvl
+  for i in "${!s_n[@]}"; do
+    why=""
+    if [ "${s_sec[i]}" != "[Service]" ] || [ "${s_key[i]}" != ExecStart ]; then
+      why="serve-http outside an ExecStart= in [Service]"
+    else
+      exe="${s_val[i]}"
+      while :; do case "$exe" in [-+!@:]*) exe="${exe#?}" ;; *) break ;; esac; done
+      exe="${exe%%[[:space:]]*}"
+      case "${s_val[i]}" in
+        *--data-dir*) why="names --data-dir, so init and serve-http may open different data directories" ;;
+      esac
+      found=""
+      for p in "${pres[@]}"; do
+        if [ "$p" = "$exe init" ]; then found=1; fi
+        case "$p" in
+          "$exe init --level "?*)
+            lvl="${p#"$exe init --level "}"
+            case "$lvl" in *[!a-z-]*) ;; *) found=1 ;; esac ;;
+        esac
+      done
+      [ -n "$found" ] || why="${why:+$why; }no unprefixed 'ExecStartPre=$exe init' in [Service] (an empty ExecStartPre= resets the list)"
+      if [ -z "$home" ]; then
+        why="${why:+$why; }no Environment=UNDERCROFT_HOME=<dir> in [Service], so the directory init writes is undeclared"
+      else
+        case " $reqs " in
+          *" $home "*) ;;
+          *) why="${why:+$why; }no RequiresMountsFor=$home in [Unit], so an init before that mount mints a second installation beneath it" ;;
+        esac
+      fi
+    fi
+    if [ -n "$why" ]; then echo "bad|${s_n[i]}|$why"; else echo "ok|${s_n[i]}"; fi
+  done
+}
+# PREMISE PROBE, both directions, before any file is believed: the judge must
+# refuse the shapes that shipped broken and accept the shapes that fixed them.
+# A judge that refuses everything and one that accepts everything are both
+# caught here, and the fixtures are the shipped lines verbatim — the pre-O172
+# compose command, O199's command, and O200's unit without its init.
+#
+# Each broken unit fixture is a correct unit with ONE defect, and the probe
+# requires the refusal to name that defect: a fixture refused for some other
+# reason (it lacked a section, say) would otherwise pass while proving nothing
+# about the shape it exists for. The spellings are the independent review's
+# (2026-10-08): blanks around `=`, indentation and a `\` continuation were not
+# selected at all, and `--data-dir`, an emptied `ExecStartPre=` and an init in
+# `[Install]` were accepted.
+IF_TMP="$(mktemp -d 2>/dev/null || { mkdir -p "${TMPDIR:-/tmp}/initfirst.$$" && echo "${TMPDIR:-/tmp}/initfirst.$$"; })"
+declare -A IF_WANT_WHY=()
+if_fx() { # if_fx <file name> <what the refusal must name, or "" to accept> <content, %b escapes>
+  printf '%b' "$3" > "$IF_TMP/$1"; IF_WANT_WHY[$1]="$2"
+}
+IF_U='[Unit]\nRequiresMountsFor=/var/lib/uc\n[Service]\nEnvironment=UNDERCROFT_HOME=/var/lib/uc\n'
+IF_PRE='ExecStartPre=/usr/local/bin/undercroft init\n'
+IF_RUN='ExecStart=/usr/local/bin/undercroft serve-http --port 8765\n'
+IF_NOPRE="no unprefixed 'ExecStartPre="
+if_fx bad-pre-o172.yml "does not run behind" \
+  'services:\n  undercroft:\n    command:\n      - serve-http\n      - --host\n      - "0.0.0.0"\n'
+if_fx bad-o199.yml "does not run behind" \
+  '    command: ["undercroft init 2>/dev/null || true; exec undercroft serve-http --host 0.0.0.0 --port 8765"]\n'
+if_fx bad-datadir.yml "--data-dir" \
+  '    command: ["undercroft init --data-dir /x && exec undercroft serve-http"]\n'
+if_fx bad-pre-o200.service "$IF_NOPRE" "$IF_U$IF_RUN"
+if_fx bad-ignored-init.service "$IF_NOPRE" "${IF_U}ExecStartPre=-/usr/local/bin/undercroft init\n$IF_RUN"
+if_fx bad-other-binary.service "$IF_NOPRE" "${IF_U}ExecStartPre=/opt/other/undercroft init\n$IF_RUN"
+if_fx bad-spaced.service "$IF_NOPRE" "${IF_U}ExecStart = /usr/local/bin/undercroft serve-http --port 8765\n"
+if_fx bad-indented.service "$IF_NOPRE" "${IF_U}  ExecStart=/usr/local/bin/undercroft serve-http --port 8765\n"
+if_fx bad-continued.service "$IF_NOPRE" "${IF_U}ExecStart=/usr/local/bin/undercroft \\\\\n  serve-http --port 8765\n"
+if_fx bad-reset.service "$IF_NOPRE" "$IF_U${IF_PRE}ExecStartPre=\n$IF_RUN"
+if_fx bad-install.service "$IF_NOPRE" "$IF_U$IF_RUN[Install]\n$IF_PRE"
+if_fx bad-datadir.service "--data-dir" "$IF_U${IF_PRE}ExecStart=/usr/local/bin/undercroft --data-dir /srv/x serve-http\n"
+if_fx bad-no-home.service "no Environment=UNDERCROFT_HOME" "[Unit]\nRequiresMountsFor=/var/lib/uc\n[Service]\n$IF_PRE$IF_RUN"
+if_fx bad-no-mount.service "no RequiresMountsFor=" "[Unit]\n[Service]\nEnvironment=UNDERCROFT_HOME=/var/lib/uc\n$IF_PRE$IF_RUN"
+if_fx bad-parent-mount.service "no RequiresMountsFor=" \
+  "[Unit]\nRequiresMountsFor=/var/lib\n[Service]\nEnvironment=UNDERCROFT_HOME=/var/lib/uc\n$IF_PRE$IF_RUN"
+if_fx bad-mount-reset.service "no RequiresMountsFor=" \
+  "[Unit]\nRequiresMountsFor=/var/lib/uc\nRequiresMountsFor=\n[Service]\nEnvironment=UNDERCROFT_HOME=/var/lib/uc\n$IF_PRE$IF_RUN"
+if_fx bad-outside.service "outside an ExecStart=" \
+  "$IF_U$IF_PRE${IF_RUN}ExecStartPost=/usr/local/bin/undercroft serve-http --port 1\n"
+if_fx good.yml "" '    command: ["undercroft init && exec undercroft serve-http --host 0.0.0.0 --port 8765"]\n'
+if_fx good.service "" "$IF_U$IF_PRE$IF_RUN"
+if_fx good-spelled.service "" \
+  "; a comment\n[Unit]\nRequiresMountsFor = /srv /var/lib/uc\n\n[Service]\n  Environment=\"A=b\" \"UNDERCROFT_HOME=/var/lib/uc\"\n  ExecStart = /usr/local/bin/undercroft serve-http --port 8765\n  ExecStartPre = /usr/local/bin/undercroft init --level hmac-only\n"
+IF_PROBE=""
+for f in $(printf '%s\n' "${!IF_WANT_WHY[@]}" | sort); do
+  r="$(init_first_findings "$IF_TMP/$f")"
+  want="${IF_WANT_WHY[$f]}"
+  if [ -n "$want" ]; then
+    case "$r" in
+      *"bad|"*"$want"*) ;;
+      *) IF_PROBE="$IF_PROBE\n        $f was not refused for '$want' (got: ${r:-nothing})" ;;
+    esac
+  else
+    case "$r" in
+      *"bad|"*|"") IF_PROBE="$IF_PROBE\n        $f was not accepted (got: ${r:-nothing})" ;;
+    esac
+  fi
+done
+rm -rf "$IF_TMP"
+unset -f if_fx
+if [ -n "$IF_PROBE" ]; then
+  echo "FAIL  premise: the init-first judge does not tell the shipped broken shapes"
+  echo "      from the fixed ones, so a clean scan below would mean nothing:"
+  # `%b`, never the text as the format: an executable path may carry `%`
+  # (systemd's `%h`), which a format string would read as a conversion.
+  printf '%b\n' "${IF_PROBE#\\n}"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+IF_FILES=""
+IF_SEEN=0
+IF_BAD=""
+# `git grep -l` names the tracked candidates in one process, and the judge
+# reads those alone rather than forking once per file under `deploy/`, which
+# is the expensive operation on Git Bash. A file that mentions `serve-http`
+# only in a comment is read and prints nothing, so it is not selected.
+for f in $(git grep -l -F -e serve-http -- 'deploy/*.yml' 'deploy/*.yaml' 'deploy/*.service' 2>/dev/null); do
+  [ -f "$f" ] || continue
+  r="$(init_first_findings "$f")"
+  [ -n "$r" ] || continue
+  IF_FILES="$IF_FILES $f"
+  while IFS='|' read -r verdict ln why; do
+    [ -n "$verdict" ] || continue
+    IF_SEEN=$((IF_SEEN + 1))
+    [ "$verdict" = ok ] || IF_BAD="$IF_BAD\n        $f:$ln — $why"
+  done <<< "$r"
+done
+# PREMISE, on the FILE SET: every recipe this repo ships that serves must be
+# among those judged, so a selector that loses one fails here instead of
+# reporting clean over the rest — the CA-pin preflight's lesson (O172).
+for IF_WANT in deploy/docker-compose.server.yml \
+               deploy/observability/docker-compose.observability.yml \
+               deploy/undercroft-server.service; do
+  case " $IF_FILES " in
+    *" $IF_WANT "*) ;;
+    *)
+      echo "FAIL  the serve-http recipe selector did not select $IF_WANT, which"
+      echo "      runs serve-http, so this scan did not judge it."
+      echo "      Selected:${IF_FILES:- nothing}"
+      echo ""
+      echo "BATTERY FAILED — preflight"
+      exit 1 ;;
+  esac
+done
+if [ -n "$IF_BAD" ]; then
+  echo "FAIL  a shipped recipe starts serve-http without running init first, runs"
+  echo "      init in a way that hides its failure, or lets init run before its data"
+  echo "      directory is mounted (ROADMAP O199, O200):"
+  printf '%b\n' "${IF_BAD#\\n}"
+  echo "      Compose: 'undercroft init && exec undercroft serve-http …'."
+  echo "      systemd: 'ExecStartPre=<the ExecStart executable> init', unprefixed, in"
+  echo "      [Service] with Environment=UNDERCROFT_HOME=<dir>, and RequiresMountsFor=<dir>"
+  echo "      in [Unit]."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    $IF_SEEN serve-http command(s) run init first, its failure stopping"
+echo "      the start, across:$IF_FILES"
 
 # ── preflight: a destructive compose teardown names the project it destroys ─
 # ROADMAP M12. A compose teardown carrying the volumes flag removes every
@@ -4227,7 +4499,6 @@ HIER_ALLOW=(
   "Plugs into the ${HIER_W}::the engine as a whole"
   ">P${HIER_W#p}<::the console tab label, in its own markup"
   "Initialize the ${HIER_W}::init creates the installation: master key + a default vault"
-  "like the ${HIER_W}::wrapped: \"...permissions (like the ... master key)\""
   "different ${HIER_W} per::the installation follows the home directory"
   "existing ${HIER_W}::moving HOME would move the installation"
   "creates a ${HIER_W} on local disk::bootstrapping the installation is not a remote act"
@@ -4274,7 +4545,6 @@ HIER_ALLOW=(
   "P${HIER_W#p} already initialized::the init message, localized in nine languages"
   "${HIER_W} tab::the console tab that hosts the monitor"
   "drawer wing room mnemonic memory ${HIER_W}::the trace verifier CLEAN control string"
-  "Create the ${HIER_W}::compose: bootstrap the installation on first run"
   "P${HIER_W#p} lives on::compose: the installation lives on a named volume"
   "2014 P${HIER_W#p}::the Grafana dashboard title, JSON-escaped em dash"
   "— P${HIER_W#p}::the same title with a literal em dash, in the console"

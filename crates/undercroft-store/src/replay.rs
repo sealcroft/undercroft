@@ -81,7 +81,10 @@ struct Tagged {
     destruction_infix: Option<&'static str>,
     /// Whether a row of this table is ever rewritten in place. A tunnel is
     /// not — `create_tunnel` inserts or does nothing — so arms 1 and 2 have
-    /// nothing to compare there and only arm 3 applies.
+    /// nothing to compare there and only arm 3 applies. That stays true after
+    /// ROADMAP O236 stopped a no-op create appending: a vault a 1.6.x binary
+    /// wrote still holds the surplus records it appended, and the trail is
+    /// append-only.
     versioned: bool,
 }
 
@@ -160,7 +163,9 @@ pub(crate) enum ReplayVerdict {
 ///
 /// `versioned` is the table's, not the row's: where a row is never rewritten
 /// in place, arms 1 and 2 have no newer version to find and asking them would
-/// turn `create_tunnel`'s no-op append (ROADMAP O236) into an alarm.
+/// turn `create_tunnel`'s no-op appends into an alarm. A no-op create appends
+/// nothing since ROADMAP O236, but the records 1.6.x binaries appended for one
+/// are still in every vault they wrote, each carrying a tag no row holds.
 pub(crate) fn replay_finding(row: &RowEvidence<'_>, versioned: bool) -> Option<ReplayVerdict> {
     // Arm 3 first, and it is the stronger claim: the chain says this row was
     // destroyed and it is here. A destruction below the newest write is
@@ -851,16 +856,46 @@ mod tests {
     }
 
     /// **A tunnel is never rewritten in place**, so arms 1 and 2 have nothing
-    /// to compare there and only arm 3 applies. `create_tunnel` appends a
-    /// record for a create that wrote nothing (ROADMAP O236), which arms 1
-    /// and 2 would read as a version that never landed — this pins that they
-    /// do not run, and that a deleted tunnel written back is still found.
+    /// to compare there and only arm 3 applies. A 1.6.x `create_tunnel`
+    /// appended a record for a create that wrote nothing, which arms 1 and 2
+    /// would read as a version that never landed; since ROADMAP O236 a no-op
+    /// create appends nothing, but those records stay in the vaults they were
+    /// written to. This pins that arms 1 and 2 do not run — over such a
+    /// record, planted as 1.6.x wrote it — and that a deleted tunnel written
+    /// back is still found.
     #[test]
     fn a_repeated_tunnel_create_is_clean_and_a_restored_one_is_not() {
         let (_d, mut s) = fresh(SecurityLevel::Sealed);
-        let id = s.create_tunnel("wing", "other", "see also").unwrap();
+        let id = s.create_tunnel("wing", "other", "see also").unwrap().id;
         let again = s.create_tunnel("wing", "other", "see also").unwrap();
-        assert_eq!(id, again, "premise: the same tunnel, appended twice");
+        assert_eq!(
+            (again.id.as_str(), again.created),
+            (id.as_str(), false),
+            "premise: the same tunnel, and the second create wrote nothing"
+        );
+        // The surplus record a 1.6.x binary appended for that second create:
+        // a fresh `created_at`, so a tag no row holds, above the switch.
+        {
+            let at = "2099-01-01T00:00:00Z";
+            let surplus = s.vault.tag(&crate::manage::tunnel_canonical(
+                &id, "wing", "other", "see also", at,
+            ));
+            let tx = s.conn.transaction().unwrap();
+            crate::chain_append(&tx, &s.vault, Namespace::Tunnel, &id, &surplus, at).unwrap();
+            tx.commit().unwrap();
+            s.anchor().unwrap();
+        }
+        assert_eq!(
+            s.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM audit WHERE record_id = ?1",
+                    params![format!("tunnel/{id}")],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap(),
+            2,
+            "premise: the surplus record is there, newest, carrying no row's tag"
+        );
         let r = s.verify().unwrap();
         assert!(
             r.version_replay.is_empty() && r.ok(),
@@ -930,8 +965,16 @@ mod tests {
                 .unwrap();
             s.kg_set_authority(&held, "canonical", "approved", Some("acme-ceo"))
                 .unwrap();
-            s.create_tunnel("wing", "other", "see also").unwrap();
-            s.create_tunnel("wing", "other", "see also").unwrap();
+            assert!(
+                s.create_tunnel("wing", "other", "see also")
+                    .unwrap()
+                    .created
+            );
+            assert!(
+                !s.create_tunnel("wing", "other", "see also")
+                    .unwrap()
+                    .created
+            );
 
             let before = s.verify().unwrap();
             assert!(

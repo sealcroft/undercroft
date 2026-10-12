@@ -1006,6 +1006,57 @@ pub mod fixture {
         /// A vault delete's removal of the vault it set aside fails, leaving
         /// the aside whole: the vault is out of service and not yet erased.
         DeleteRemove,
+        /// A secret file's hard link fails as on a filesystem without hard
+        /// links (ROADMAP O210), so the publish takes its in-place fallback.
+        SecretLink,
+        /// A secret file's hard link fails with an ordinary I/O error, which
+        /// the publish refuses, keeping its temp (ROADMAP O210).
+        SecretLinkIo,
+        /// The in-place fallback's fsync fails after its bytes were written
+        /// (ROADMAP O210): the name it created is kept, and so is the temp.
+        SecretInPlaceSync,
+    }
+
+    /// Where a secret-file write stops as a process killed at that point
+    /// would (ROADMAP O210): the writer returns at once and runs nothing
+    /// after the step, its own cleanup included — what an injected I/O error
+    /// cannot show, since an error path removes its temp file.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SecretCrash {
+        /// The temp file exists, owner-only, and holds no byte.
+        Created,
+        /// Half the bytes are in the temp file.
+        Torn,
+        /// The whole temp file is fsynced and has no final name yet.
+        Synced,
+        /// The final name is linked and the temp name not yet removed.
+        Published,
+        /// The in-place fallback created the final name and wrote half the
+        /// bytes — the residual that fallback keeps.
+        InPlaceTorn,
+    }
+
+    thread_local! {
+        static SECRET_CRASH: Cell<Option<SecretCrash>> = const { Cell::new(None) };
+    }
+
+    /// Stop this thread's next secret-file write at `step`. Consumed when it
+    /// fires; thread-local, like every fault here.
+    pub fn crash_secret_write_at(step: SecretCrash) {
+        SECRET_CRASH.with(|armed| armed.set(Some(step)));
+    }
+
+    /// The crash armed for `step`, consumed — `None` when another step, or
+    /// none, is armed.
+    pub(crate) fn secret_crash(step: SecretCrash) -> Option<std::io::Error> {
+        SECRET_CRASH.with(|armed| {
+            (armed.get() == Some(step)).then(|| {
+                armed.set(None);
+                std::io::Error::other(format!(
+                    "injected crash at {step:?} (the ROADMAP O210 test fixture)"
+                ))
+            })
+        })
     }
 
     thread_local! {
@@ -2555,13 +2606,35 @@ impl VaultManager {
     /// `rotation_candidate`, and unlocks read-only whatever a caller asks:
     /// a posture decided one call later was already too late for a key file
     /// and a staging manifest (O175's ruling, applied to the manager).
+    ///
+    /// A passphrase is derived afresh on every call. A process that opens the
+    /// manager more than once holds a [`keys::KeyCache`] and calls
+    /// [`open_cached`](Self::open_cached) (ROADMAP O211).
     pub fn open_as(
         root: &Path,
         passphrase: Option<&str>,
         access: Access,
     ) -> Result<Self, VaultError> {
+        Self::open_cached(root, passphrase, access, &keys::KeyCache::new())
+    }
+
+    /// [`open_as`](Self::open_as), deriving a passphrase's key through a cache
+    /// its process holds (ROADMAP O211). The cache keeps the key only while a
+    /// [`keys::KeyHold`] on it is alive, so a caller that opens once keeps
+    /// nothing beyond this manager's own copy.
+    ///
+    /// Every call still surveys and classifies the installation and reads the
+    /// declared source's file, so a key source the installation contradicts is
+    /// refused on the open that meets it, cached or not; only Argon2id is
+    /// skipped, and only for the passphrase and salt the held key came from.
+    pub fn open_cached(
+        root: &Path,
+        passphrase: Option<&str>,
+        access: Access,
+        cache: &keys::KeyCache,
+    ) -> Result<Self, VaultError> {
         let declared = keys::KeySource::declared(passphrase);
-        let resolved = keys::master_key(root, passphrase, access)?;
+        let resolved = keys::master_key_cached(root, passphrase, access, cache)?;
         if resolved.both_present {
             undercroft_obs::diag_warn!("{}", keys::both_present_warning(declared));
         }
@@ -4818,6 +4891,67 @@ mod tests {
             .unwrap()
             .unlock("default")
             .is_ok());
+    }
+
+    /// ROADMAP O211's gate, at the manager: the opens `vault list` makes over
+    /// three vaults (one for the list, one per vault) and the two a
+    /// `serve-http` start makes, through one cache, run Argon2id ONCE, and
+    /// every vault still unlocks — on both postures, the manager's posture
+    /// untouched by the shared key. Before O211 each of those opens derived.
+    #[test]
+    fn one_cache_serves_every_manager_open_a_command_makes() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let cache = keys::KeyCache::new();
+        let held = cache.hold();
+        let pw = Some("correct horse");
+        let mgr = VaultManager::open_cached(root, pw, Access::ReadWrite, &cache).unwrap();
+        for id in ["default", "b", "c"] {
+            mgr.create(id, SecurityLevel::Sealed).unwrap();
+        }
+        drop(mgr);
+        assert_eq!(cache.derivations(), 1, "premise: init derived once");
+
+        // `vault list`: the list's own open, then one per vault.
+        let lister = VaultManager::open_cached(root, pw, Access::ReadWrite, &cache).unwrap();
+        let ids = lister.list().unwrap();
+        assert_eq!(ids, ["b", "c", "default"]);
+        for id in &ids {
+            for access in [Access::ReadWrite, Access::ReadOnly] {
+                let m = VaultManager::open_cached(root, pw, access, &cache).unwrap();
+                assert_eq!(m.access(), access);
+                m.unlock_as(id, access).unwrap();
+            }
+        }
+        // `serve-http`: the `/mcp` store's open and `Tenancy`'s manager.
+        for _ in 0..2 {
+            VaultManager::open_cached(root, pw, Access::ReadOnly, &cache)
+                .unwrap()
+                .unlock_as("default", Access::ReadOnly)
+                .unwrap();
+        }
+        assert_eq!(cache.derivations(), 1, "nine opens, one Argon2id run");
+
+        // A wrong passphrase never meets the held key: it derives its own,
+        // and the manifest MAC refuses it, as it always did.
+        let wrong =
+            VaultManager::open_cached(root, Some("wrong staple"), Access::ReadWrite, &cache)
+                .unwrap();
+        assert!(matches!(
+            wrong.unlock("default"),
+            Err(VaultError::ManifestTampered)
+        ));
+        assert_eq!(cache.derivations(), 2);
+
+        // The command's hold ends: the cache keeps nothing, and the managers
+        // still alive hold their own copies, as they always did.
+        drop(held);
+        assert!(!cache.is_holding());
+        wrong.unlock("default").unwrap_err();
+        let one_open = VaultManager::open_cached(root, pw, Access::ReadOnly, &cache).unwrap();
+        one_open.unlock_as("b", Access::ReadOnly).unwrap();
+        assert!(!cache.is_holding(), "an open with no hold keeps nothing");
+        assert_eq!(cache.derivations(), 3);
     }
 
     /// **ROADMAP O266's source gate: one manifest rule, four readers, and

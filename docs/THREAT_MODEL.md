@@ -537,11 +537,11 @@ enclave execution) compose with undercroft but are not provided by it.
 | Layer (shipped) | Mechanism | Defeats |
 |---|---|---|
 | Sealing | XChaCha20-Poly1305, AAD = vault id + record/artifact id; zstd-then-encrypt | A1 read, A3 cross-vault replay |
-| Key hierarchy | master key (file 0600 or Argon2id) → HKDF-SHA256 per-vault enc/mac/manifest; zeroize-on-drop; key material created only where nothing refers to a key, never under read-only, and a declaration the key files contradict refused before derivation (O204) | A1, A2, A3; limits blast radius of any single-vault compromise, and an offline writer planting or deleting a key file gets a refusal, not a new key |
+| Key hierarchy | master key (file 0600 or Argon2id) → HKDF-SHA256 per-vault enc/mac/manifest; zeroize-on-drop; key material created only where nothing refers to a key, never under read-only, and a declaration the key files contradict refused before derivation (O204); a passphrase's key derived once per command and held in memory only across that command's opens, against a passphrase digest and the salt it came from, the key files classified on every open all the same (O211) | A1, A2, A3; limits blast radius of any single-vault compromise, and an offline writer planting or deleting a key file gets a refusal, not a new key |
 | Derived-artifact sealing | embeddings, PQ rows/pages, codebooks, token matrices, FDE, KG under distinct AAD domains; no FTS for sealed vaults | A1 (no plaintext-derived leak path) |
 | Record integrity | HMAC-SHA256 per record, verified before every return | A2 forgery, A5 result forgery |
 | Audit chain | hash chain advanced in the data transaction; MAC'd manifest anchor; open-time reconciliation (crash ≠ rollback) | A2 rollback/truncation, A7 forensics |
-| Durability pinning | WAL + `synchronous=FULL`; fsync'd atomic manifest rename; fsync'd key files | keeps A2 detection sound under power loss |
+| Durability pinning | WAL + `synchronous=FULL`; fsync'd atomic manifest rename; key files fsync'd under a temp name and published by a hard link that never replaces one (in place, with a warning, where a filesystem has no hard links — O210) | keeps A2 detection sound under power loss, and a crash inside a key write never leaves a short key under its name |
 | Key rotation | one-transaction byte-exact reseal of every artifact + re-tag of every HMAC'd table + chain re-key; two-phase manifest swap, crash-safe; the rotation appends its own chain record, and refuses a vault whose tags, chain, receipts or policy rows `verify` fails, rather than re-key tampering into authentic data (O232). **It holds the vault alone (ROADMAP O257)**: an exclusive lock on the rotating store's own connection, from before its checks until its new manifest is written, refuses the rotation — changing nothing — while any other connection has the vault open, in another process or this one; every audited write checks inside its own transaction that the database's key-generation marker is still the handle's, so a handle whose keys are not the vault's commits nothing; an open that meets another generation's marker refuses as a race (reopen) or an integrity verdict, or re-seeds it only when the audit chain replays under its keys; no unlock deletes a staged manifest. **Residual**: the fence is only as good as the filesystem's locks — on NFS, SMB, or a Windows host and a Docker Desktop container sharing a bind mount it can grant beside a live process, where the write door is the backstop; an `immutable=1` reader holds no lock and is invisible to it; a rotation by an older build is not fenced | key-compromise recovery; A1 going forward |
 | Export bundles | hybrid X25519 + ML-KEM-768 ephemeral-static → HKDF → XChaCha20-Poly1305; header + KEM ct as AAD (v2; legacy X25519 v1 still opens) | A1 for backups in transit/at rest, incl. harvest-now-decrypt-later |
 | Server auth | bearer + per-vault HMAC assertion (vault id in the MAC, constant-time, bare 401s); `--read-only` decided once in front of dispatch, failing closed | A4 |
@@ -939,8 +939,14 @@ write path at all.
   each chain-logged with the verdict inside the ruling tag's canonical;
   a human allows (the accountable override) or denies — and a deny
   destroys through C3.2's attested forgetting, handing back the
-  receipt. Crash-safe by the same reconciliation the rotation path
-  proves.
+  receipt. Each ruling is ONE write lock — a deny's ruling and
+  destruction (ROADMAP O255), an allow's re-filed write, ruling and
+  removal of the queue row (O260) — so a crash leaves none of a ruling,
+  and an allow and a deny racing on one row leave exactly one verdict:
+  the one that loses is refused with nothing written or destroyed. (An
+  allow was three transactions; a deny landing between them left both
+  verdicts in the trail and the denied text live at its destination.)
+  Crash-safe by the same reconciliation the rotation path proves.
 - **The operator/agent boundary is counted, not remembered** (BUILT) —
   the operator-only capabilities are recorded in the surface-parity
   inventory, `OPERATOR_ONLY` in `crates/undercroft-cli/src/parity.rs`,
@@ -1111,8 +1117,12 @@ straight, each carrying what it actually is.
   the label guard and the lock is not seen by that destruction (the guard
   stays outside, where it replays in a read snapshot); a crash after the
   COMMIT and before the receipt reaches its caller loses the receipt (its
-  fingerprints are persisted nowhere, by design), and the CLI can still lose
-  it to a bad `--sign` or `--out` (O262); `forget --backend` deletes from
+  fingerprints are persisted nowhere, by design) — the CLI no longer loses
+  it to a bad `--sign` or `--out` (O262, 1.7.0: the identity is checked
+  before anything is opened or destroyed, `--out` is written and synced
+  before anything is printed, and an `--out` that cannot be written puts the
+  receipt on stdout before the command fails — or says it is lost, when
+  stdout cannot take it either); `forget --backend` deletes from
   the mirror before the lock (O175's order); a sweep's membership is as of
   its walk; the lock is held for the whole destruction — 2.5 s at 40,000
   drawers with the retrieval tiers built — so other writers wait, and past

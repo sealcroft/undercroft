@@ -40,7 +40,9 @@
 # and since ROADMAP O172 it does the same for the team-server recipe — see the
 # last two sections, which carry the cost (two engine builds, one with
 # telemetry and one with the default features the recipe ships) and the
-# reason the cheap half was never sufficient on its own.
+# reason the cheap half was never sufficient on its own. Since ROADMAP O199 it
+# also makes the observability engine's `init` fail, and requires init's own
+# error in the engine's log rather than serve-http's.
 #
 # ─ a counterfactual hook, and why it can never read as a pass ──────────────
 #
@@ -365,7 +367,7 @@ $(dc_boot logs --tail 10 undercroft 2>&1 | tail -10)"
 
 OVERRIDES="$(mktemp -d 2>/dev/null || { mkdir -p "${TMPDIR:-/tmp}/tlspins.$$" && echo "${TMPDIR:-/tmp}/tlspins.$$"; })"
 
-# ─ the observability deployment (ROADMAP O63) ──────────────────────────────
+# ─ the observability deployment (ROADMAP O63, O199) ────────────────────────
 cat > "$OVERRIDES/obs-ports.yml" <<'YAML'
 services:
   undercroft:
@@ -410,6 +412,55 @@ if [ -n "$BOOT_UP" ]; then
       fail "observability: prometheus reports a healthy scrape target" \
            "$(curl -s "http://127.0.0.1:$pport/api/v1/targets?state=active" 2>&1 | head -c 400)"
     fi
+  fi
+
+  # A failed init stops the engine with INIT'S OWN error (ROADMAP O199). The
+  # command was `undercroft init 2>/dev/null || true; exec undercroft
+  # serve-http …`, so an init that failed printed nothing and the engine
+  # stopped on serve-http's symptom, `vault "default" not found`. It is
+  # `init && exec …` now, the team-server recipe's O172 shape.
+  #
+  # Telling the two apart needs an init that fails for a reason only init
+  # meets: `vaults/default` replaced by a regular file, so the vault's
+  # directory cannot be made. The master key the boot wrote stays, because
+  # without it both commands refuse first with the same missing-key message
+  # (O204) and the arm could not see the difference. Measured with the release
+  # binary over a data directory prepared this way: `init` exits 1 with
+  # `File exists (os error 17)`, and `serve-http` alone exits 1 with
+  # `vault "default" not found`.
+  #
+  # The engine is replaced rather than restarted so its log holds only the
+  # runs over the planted file, and `--no-deps` leaves the rest of the stack
+  # alone. PREMISE: the boot must have created the vault this replaces.
+  O199_VOL="${BOOT_PROJ}_undercroft-data"
+  O199_LOG=""
+  if dc_boot rm -sf undercroft >/dev/null 2>&1 &&
+     docker run --rm -v "$O199_VOL":/data alpine:3.20 sh -c \
+       "test -s /data/vaults/default/vault.json && rm -rf /data/vaults/default &&
+        printf 'not a vault\n' > /data/vaults/default &&
+        chown $ENGINE_UID:$ENGINE_UID /data/vaults/default" >/dev/null 2>&1 &&
+     dc_boot up -d --no-deps undercroft >/dev/null 2>&1; then
+    # BOUNDED: the engine exits within a second; `restart:` repeats it. The
+    # negative half matches `not found` alone, never the quoted message, so a
+    # log line that escapes the quotes cannot slip past it.
+    i=0
+    until printf '%s\n' "$O199_LOG" | grep -qE 'File exists|not found'; do
+      i=$((i + 1))
+      if [ "$i" -gt 60 ]; then break; fi
+      sleep 1
+      O199_LOG="$(dc_boot logs --no-color undercroft 2>&1)"
+    done
+    if printf '%s\n' "$O199_LOG" | grep -q 'File exists' &&
+       ! printf '%s\n' "$O199_LOG" | grep -q 'not found'; then
+      pass "observability: a failed init stops the engine with init's own error"
+    else
+      fail "observability: a failed init stops the engine with init's own error" \
+           "wanted init's 'File exists' and not serve-http's 'vault \"default\" not found'; the engine's log:
+$(printf '%s\n' "$O199_LOG" | tail -8)"
+    fi
+  else
+    fail "observability: a failed init stops the engine with init's own error" \
+         "premise — the engine was not restarted over a volume whose vaults/default is a regular file"
   fi
 fi
 # The stack is torn down now rather than at exit, so the team-server boot

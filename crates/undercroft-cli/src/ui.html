@@ -1188,6 +1188,9 @@ async function runVerify() {
     // destruction. A leg this console does not render is a leg the operator
     // reading this page cannot see (ROADMAP M5).
     const replay = r.version_replay || [];
+    // `bad_records` lines name their own reason (ROADMAP O231): a bare id is
+    // a failed HMAC, and "<id>: …" a drawer whose HMAC verifies over covered
+    // meta that does not parse. Rendered through `textContent`, never markup.
     $("verifyReport").textContent =
       "records checked: " + r.records_checked +
       "\nchain ok:        " + r.chain_ok +
