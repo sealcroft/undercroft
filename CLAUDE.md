@@ -486,6 +486,9 @@ Consequences that are binding, not advisory:
   `test-fixture` feature carries the fault seam, since a nonce name cannot
   be targeted from outside; backups.rs: the archive side of `backup
   create` (ROADMAP O256, O265) — a stage under `backups/.staging/<nonce>`
+  (`.staging` judged by `symlink_metadata` first and refused if it is a link
+  or not a directory, before the sweep reads it or a stage is made in it —
+  O273: the stage and the sweep followed a planted link wherever it pointed)
   published by one rename only when it holds exactly `vault.db` and
   `vault.json`, a stage older than an hour swept, and a vault's archives
   found by their OWN manifest and exact name shape, never a prefix (backing
@@ -514,7 +517,9 @@ Consequences that are binding, not advisory:
   never `aside-`, beside which `create` refuses and tells the operator to
   put the vault back, and never a nonce, which no retry could find — and
   ONE removal judged by what is left, never by `remove_dir_all`'s result.
-  It observes and refuses nothing; the store's door classifies. `DbLayout::of`
+  It observes and refuses nothing; the store's door classifies. Its survey is
+  also the restore's (O301, `restores::irregular_target`): ONE rule for what
+  a vault directory may hold when something replaces or removes it. `DbLayout::of`
   is the ONE layout rule, `Vault::db_layout` and O69's hold both asking it;
   bundle.rs:
   recipient-encrypted export bundles — **the vault-sized paths take the
@@ -1115,9 +1120,17 @@ Consequences that are binding, not advisory:
   appeared at an absent target was renamed aside unheld and removed) **and
   never a symbolic link** (O283, the maintainer's ruling: a linked
   `vaults/<id>`, database or manifest was renamed aside as the LINK, orphaning
-  what it named — `restores::linked_target`, asked by the door before anything
-  is staged and by the swap), and `key_generation_differs` is read under the
-  hold. **`DELETE /v1/vaults/{id}`, one door (delete.rs, `delete_vault`,
+  what it named) **nor a directory holding any entry that is not a regular
+  file** (O301: O283's check named three entries, so a linked
+  `vault.json.next` was removed as a link with what it named left behind, and
+  a linked `-wal` met SQLite's own `O_NOFOLLOW` only at the hold, as a raw
+  "unable to open database file" after the archive was staged and verified)
+  — `restores::irregular_target`, the vault DELETE's survey, asked by the door
+  before anything is staged (`refuse_irregular_live_vault`, which `/v1`'s
+  route also asks BEFORE it releases its own handle, whose close unlinks a
+  `-wal` link by name) and by the swap under the hold, and
+  `key_generation_differs` is read under the hold.
+  **`DELETE /v1/vaults/{id}`, one door (delete.rs, `delete_vault`,
   ROADMAP O291)** — it removed the vault directory with nothing held:
   beside an idle writable handle in another process the delete answered
   `Ok` and so did that handle's next write, committed into the unlinked

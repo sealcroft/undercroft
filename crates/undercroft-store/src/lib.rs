@@ -94,7 +94,9 @@ pub use manage::{
 };
 pub use pqidx::WING_PQ_MIN_DEFAULT;
 pub use remote::PlaintextPush;
-pub use restore::{restore_archive, EmbedderFor, RestoreOutcome, RestoreReport};
+pub use restore::{
+    refuse_irregular_live_vault, restore_archive, EmbedderFor, RestoreOutcome, RestoreReport,
+};
 pub use rotate::RotationReport;
 pub use witness::{ChainWitness, WitnessVerdict, WITNESS_VERSION};
 

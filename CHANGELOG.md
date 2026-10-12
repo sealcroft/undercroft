@@ -2107,6 +2107,51 @@ PATCH inside the unreleased 1.7.0: the defect was the silence. `UPGRADING.md` ca
 a backup or a restore can now refuse a vault the previous binary accepted; `config check` cannot see
 it, and `verify --read-only` is the pre-flight.
 
+### `backup create` refuses a linked `.staging`, and a restore refuses a live vault holding any entry that is not a regular file (O273, O301)
+
+**O273.** `backups/.staging` is where every archive is built before one rename publishes it, and
+where the sweep removes a crashed backup's stage once it is an hour old. `Stage::begin` made it with
+`create_dir_all`, which follows a symbolic link planted at that name: the stage — the copied
+database — was built and published from wherever the link pointed, and the sweep removed every
+32-hex directory older than an hour there. `.staging` is now judged by `symlink_metadata` first, as
+O268's restore area is, and a link or anything but a directory refuses the backup before the sweep
+reads it or a stage is made in it — exit 1, and on `/v1` the 500 the restore area's identical
+refusal answers (an I/O-class state of the installation, never a verdict about the vault), naming
+the entry.
+
+**O301.** O283's link check named three entries — the vault directory, its database and its
+manifest. A restore now asks the vault delete's own survey (O291) — one rule for what a vault
+directory may hold when something replaces or removes it — at the door, before anything is staged,
+and again in the swap under the hold: any entry that is not a regular file refuses as O283's link
+does, exit 1 / `/v1` 400, naming it. Measured on the unfixed tree over the LoCoMo feed mined into
+sixteen wings (1,360 drawers), the filing was half right: a linked `vault.json.next` or `-shm` was
+renamed aside with the vault and removed as a link, what it named left behind, and a subdirectory
+was removed with the aside, its file included — each at exit 0 — but a linked `-wal` never
+reached the swap: SQLite opens every file it names with `O_NOFOLLOW` (`sqlite3.c` 3.46.0, line
+44737), so the restore's hold failed with a raw "unable to open database file" (`/v1` 500) only
+after the archive had been copied, opened and verified, 85–99 ms in; refused at the door now,
+in 7–24 ms. The O273 half on the same corpus: the unfixed backup through a linked `.staging`
+published its archive from the directory the link named and swept the stage-shaped directory
+there (exit 0, 93–143 ms); now it refuses in 16–28 ms with that directory unchanged.
+
+**And `/v1` asks before it lets go of its own handle.** The restore route released the server's
+cached handle on the vault first, and that handle's close unlinks `-wal` by NAME: a link put over
+the live `-wal` of a vault the server held was removed by the close and the restore answered 200
+(measured on the same corpus). The route now asks the door's refusal first —
+`refuse_irregular_live_vault`, one store function — and answers 400 with the link kept and the
+handle not released. The delete route has the same order by O291's ruling and is filed for one.
+
+Gates: a unit test in the vault crate and store tests for each, asserting the steps REACHED (a
+backup refused at the stage fires its manifest-read pause point and never `Pinned`; a restore
+refused at the door fires none, one refused by the swap fires `Held`) — because a refusal after
+staging leaves the same end state as one before it, which is exactly how the unfixed `-wal` case
+looked; `tests/cli.rs` and in-process `/v1` arms through both surfaces; source arms holding the
+order in `Stage::begin` and the ONE survey (`irregular_target` calls `deletes::survey`, the swap
+asks it, `linked_target` is gone); and seventeen e2e checks. PATCH inside the unreleased 1.7.0:
+each change removes a defect and moves no documented contract — O283's refusal names more of what
+it always meant. `UPGRADING.md` widens O283's note and adds one for a hand-made `.staging` link;
+`config check` sees neither, both being states of the data directory.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

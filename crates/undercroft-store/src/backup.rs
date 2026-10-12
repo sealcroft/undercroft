@@ -105,7 +105,10 @@ impl VaultStore {
     /// write transaction. A failed verify archives nothing and answers
     /// [`BackupOutcome::Refused`]. Any failure after the verify passed — the
     /// copy, its sync, the post-condition, the publish — is an I/O-class
-    /// error, never an integrity verdict: the live vault verified.
+    /// error, never an integrity verdict: the live vault verified. So is a
+    /// `backups/.staging` that is a symbolic link or not a directory, refused
+    /// by `Stage::begin` before the snapshot is pinned and before anything is
+    /// swept or staged through it (ROADMAP O273).
     ///
     /// **Refused on a read-only handle before any effect** (ROADMAP O212), in
     /// restore's class, [`undercroft_vault::VaultError::ReadOnly`]: the page

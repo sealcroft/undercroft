@@ -273,7 +273,11 @@ restore**, not a repair-in-place of forged bytes:
    that rotation answered a compromise). Emit a new external witness afterwards;
    an older one reads the restored vault as rolled back, which it is. If the live
    vault's directory holds a manifest and **no database**, restore refuses (O270):
-   stop every process, move that directory aside, then restore. If a restore is
+   stop every process, move that directory aside, then restore. If it holds a
+   symbolic link or anything but regular files — a link planted at its `-wal` or
+   `vault.json.next` included — or is a link itself, restore refuses and names the
+   entry (O283, O301): move the entry out, keeping it with your evidence, then
+   restore. If a restore is
    interrupted between its two renames, `vault create`, `init` and another
    restore refuse and print the `mv` that puts the replaced vault back.
 2. **If a single *mined* record was hit and you have the source document**,

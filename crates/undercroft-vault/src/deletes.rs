@@ -16,6 +16,12 @@
 //! [`finish_leftover`]). It decides no class and refuses nothing on its own:
 //! it observes, and the door classifies.
 //!
+//! **The survey is the restore's too** (ROADMAP O301): what a vault directory
+//! may hold when something replaces or removes it — regular files, nothing
+//! else — is ONE rule, asked by the delete's door and, through
+//! [`restores::irregular_target`](crate::restores::irregular_target), by the
+//! restore's door and its swap.
+//!
 //! **Where**: a vault is set aside into the restore area (`restores.rs`'s
 //! container, whose name no vault id can equal and which nothing lists) under
 //! `deleting-<sha256 of the id>`. Not `aside-`: `create` refuses beside that
@@ -51,7 +57,8 @@ pub enum Target {
     Directory,
 }
 
-/// What a delete found, observed only (ROADMAP O291). Every stat that fails
+/// What a delete — or a restore (ROADMAP O301) — found, observed only
+/// (ROADMAP O291). Every stat that fails
 /// other than "not found" is an error, never read as absence: `Path::exists`
 /// follows links and answers `false` on ANY error, which is how a vault with an
 /// unreadable manifest read as no vault at all.
@@ -122,7 +129,9 @@ fn present(path: &Path) -> Result<bool, VaultError> {
     }
 }
 
-fn kind(meta: &fs::Metadata) -> &'static str {
+/// What a stat found, in words, for a refusal that names it — the survey's,
+/// and `backup create`'s for its `.staging` (ROADMAP O273).
+pub(crate) fn kind(meta: &fs::Metadata) -> &'static str {
     let t = meta.file_type();
     if t.is_symlink() {
         return "a symbolic link";

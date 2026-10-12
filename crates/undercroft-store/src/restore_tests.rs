@@ -981,6 +981,181 @@ fn o268_cost_of_a_restore_at_scale() {
     );
 }
 
+#[cfg(unix)]
+fn is_link(p: &Path) -> bool {
+    std::fs::symlink_metadata(p)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+/// A restore of `arch` over the live vault, required to be refused at the
+/// DOOR (ROADMAP O301): `Invalid` naming `needle`, NO pause point reached —
+/// nothing staged; a stage's `Drop` would hide one made and removed again, and
+/// a refusal after staging leaves the same tree as one before it — the live
+/// vault byte-identical and no restore area left.
+#[cfg(unix)]
+fn o301_refused_at_the_door(root: &Path, arch: &Path, needle: &str, label: &str) {
+    let reached: Arc<std::sync::Mutex<Vec<Phase>>> = Arc::default();
+    let seen = reached.clone();
+    pause::set(root, Arc::new(move |p| seen.lock().unwrap().push(p)));
+    let live = tree(&vdir(root));
+    let outcome = restore_archive(&mgr(root), arch, None, true, &hash);
+    pause::set(root, Arc::new(|_| {}));
+    match outcome {
+        Err(StoreError::Invalid(m)) => assert!(
+            m.contains("ROADMAP O283, O301") && m.contains(needle),
+            "{label}: {m}"
+        ),
+        Err(e) => panic!("{label}: the wrong refusal: {e}"),
+        Ok(_) => panic!("{label}: restored over it"),
+    }
+    assert_eq!(
+        *reached.lock().unwrap(),
+        Vec::<Phase>::new(),
+        "{label}: refused before anything was staged"
+    );
+    assert_eq!(
+        tree(&vdir(root)),
+        live,
+        "{label}: the live vault is byte-identical"
+    );
+    assert_no_stage(root, label);
+}
+
+/// **ROADMAP O301, the filing's case: a linked `vault.db-wal` holding a dead
+/// writer's committed frames is refused at the door**, the link and the frames
+/// it names untouched. Measured on the unfixed tree, it was never renamed aside
+/// as filed: SQLite opens every file it names with `O_NOFOLLOW`, so the hold
+/// failed with a raw "unable to open database file" only AFTER the archive was
+/// staged and verified — an end state this test's tree comparison alone would
+/// have passed, which is why it asserts that no pause point was reached.
+#[cfg(unix)]
+#[test]
+fn o301_a_linked_wal_in_the_live_vault_is_refused_at_the_door() {
+    let elsewhere = TempDir::new().unwrap();
+    let dir = corpus(40);
+    let root = dir.path();
+    let (arch, _) = archive(root);
+    heat(root);
+    let frames = elsewhere.path().join("frames.wal");
+    std::fs::rename(vdir(root).join("vault.db-wal"), &frames).unwrap();
+    std::os::unix::fs::symlink(&frames, vdir(root).join("vault.db-wal")).unwrap();
+    let frames_before = std::fs::read(&frames).unwrap();
+    assert!(!frames_before.is_empty(), "premise: committed frames");
+    o301_refused_at_the_door(
+        root,
+        &arch,
+        "vault.db-wal is a symbolic link",
+        "a linked -wal",
+    );
+    assert!(is_link(&vdir(root).join("vault.db-wal")), "the link stays");
+    assert_eq!(
+        std::fs::read(&frames).unwrap(),
+        frames_before,
+        "the frames it names are untouched"
+    );
+}
+
+/// **ROADMAP O301: a linked `vault.json.next`, and a subdirectory — not a link,
+/// and still not a regular file (O291's rule) — are refused at the door**, with
+/// nothing staged. On the unfixed tree both were renamed aside with the vault
+/// and removed with it: the link alone, what it named left behind. The control
+/// is the fix's own behaviour: with the entry moved out, the same archive
+/// restores.
+#[cfg(unix)]
+#[test]
+fn o301_a_linked_next_or_a_directory_in_the_live_vault_is_refused_at_the_door() {
+    let elsewhere = TempDir::new().unwrap();
+    let dir = corpus(40);
+    let root = dir.path();
+    let (arch, _) = archive(root);
+    let named = elsewhere.path().join("next.json");
+    std::fs::write(&named, b"{\"a staged manifest\":true}").unwrap();
+    std::os::unix::fs::symlink(&named, vdir(root).join("vault.json.next")).unwrap();
+    o301_refused_at_the_door(
+        root,
+        &arch,
+        "vault.json.next is a symbolic link",
+        "a linked .next",
+    );
+    assert!(is_link(&vdir(root).join("vault.json.next")));
+    assert_eq!(
+        std::fs::read(&named).unwrap(),
+        b"{\"a staged manifest\":true}"
+    );
+    std::fs::remove_file(vdir(root).join("vault.json.next")).unwrap();
+    std::fs::create_dir(vdir(root).join("notes")).unwrap();
+    std::fs::write(vdir(root).join("notes").join("a.txt"), b"kept").unwrap();
+    o301_refused_at_the_door(root, &arch, "notes is a directory", "a subdirectory");
+
+    // The control: the entry moved out, the same archive restores.
+    std::fs::remove_dir_all(vdir(root).join("notes")).unwrap();
+    let report = restored(restore_archive(&mgr(root), &arch, None, true, &hash));
+    assert_is_the_reported_state(root, &report, "control");
+    assert_no_stage(root, "control");
+}
+
+/// **ROADMAP O301: the swap asks the survey again, under the hold.** A linked
+/// `.next` that appears after the door looked — planted at `Held` — is refused
+/// by the swap with the vault left where it stands, its database and manifest
+/// unchanged, the link and what it names kept, and no stage or aside left.
+#[cfg(unix)]
+#[test]
+fn o301_a_link_planted_under_the_hold_is_refused_by_the_swap() {
+    let elsewhere = TempDir::new().unwrap();
+    let dir = corpus(40);
+    let root = dir.path();
+    let (arch, _) = archive(root);
+    let late = elsewhere.path().join("late-next.json");
+    std::fs::write(&late, b"planted under the hold").unwrap();
+    let files = |root: &Path| {
+        (
+            std::fs::read(vdir(root).join("vault.db")).unwrap(),
+            std::fs::read(vdir(root).join("vault.json")).unwrap(),
+        )
+    };
+    let live = files(root);
+    let reached: Arc<std::sync::Mutex<Vec<Phase>>> = Arc::default();
+    {
+        let (seen, r, late) = (reached.clone(), root.to_path_buf(), late.clone());
+        pause::set(
+            root,
+            Arc::new(move |p| {
+                seen.lock().unwrap().push(p);
+                if p == Phase::Held {
+                    std::os::unix::fs::symlink(&late, vdir(&r).join("vault.json.next")).unwrap();
+                }
+            }),
+        );
+    }
+    let outcome = restore_archive(&mgr(root), &arch, None, true, &hash);
+    pause::set(root, Arc::new(|_| {}));
+    match outcome {
+        Err(StoreError::Vault(VaultError::Io(e))) => assert!(
+            e.to_string().contains("ROADMAP O283, O301")
+                && e.to_string().contains("vault.json.next is a symbolic link"),
+            "{e}"
+        ),
+        other => panic!("a link at the swap must be refused: {:?}", other.err()),
+    }
+    assert_eq!(
+        reached.lock().unwrap().last(),
+        Some(&Phase::Held),
+        "premise: the swap was reached, under the hold"
+    );
+    assert!(
+        std::fs::symlink_metadata(vdir(root)).unwrap().is_dir(),
+        "the vault was not moved aside"
+    );
+    assert_eq!(files(root), live, "its database and manifest are unchanged");
+    assert!(
+        is_link(&vdir(root).join("vault.json.next")),
+        "the link stays"
+    );
+    assert_eq!(std::fs::read(&late).unwrap(), b"planted under the hold");
+    assert_no_stage(root, "swap");
+}
+
 fn walk_size(dir: &Path) -> u64 {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return 0;

@@ -2464,6 +2464,165 @@ fn o212_read_only_backup_create_changes_nothing() {
     assert!(stage.exists());
 }
 
+/// **`backup create` refuses a `backups/.staging` that is a symbolic link,
+/// writing and removing nothing through it** (ROADMAP O273). The stage followed
+/// the link — the copied database was built and published from wherever it
+/// pointed — and the sweep removed every 32-hex directory older than an hour
+/// in it. Exit 1 naming the entry; the directory the link names is
+/// byte-identical, a stale stage-shaped directory in it included; no archive.
+/// The control: the link removed, the same command archives.
+#[cfg(unix)]
+#[test]
+fn o273_backup_create_refuses_a_linked_staging_and_changes_nothing_through_it() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["remember", "the harbour ledger names the cargo"])
+        .assert()
+        .success();
+    let backups = home.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+    let elsewhere = TempDir::new().unwrap();
+    let victim = elsewhere.path().join("victim");
+    let shaped = victim.join("ef".repeat(16));
+    std::fs::create_dir_all(&shaped).unwrap();
+    std::fs::write(
+        shaped.join("vault.db"),
+        b"not a backup's, but shaped like one",
+    )
+    .unwrap();
+    let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+    std::fs::File::open(&shaped)
+        .unwrap()
+        .set_modified(two_hours_ago)
+        .unwrap();
+    std::os::unix::fs::symlink(&victim, backups.join(".staging")).unwrap();
+    let before = tree_with_bytes(&victim);
+
+    cmd(&home)
+        .args(["backup", "create"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("ROADMAP O273"))
+        .stderr(predicate::str::contains("symbolic link"))
+        .stdout(predicate::str::contains("Backup created").not());
+    assert!(
+        tree_with_bytes(&victim) == before,
+        "nothing swept, staged or copied through the link"
+    );
+    assert!(shaped.join("vault.db").exists());
+    let names: Vec<String> = std::fs::read_dir(&backups)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, [".staging"], "no archive was published");
+    assert!(std::fs::symlink_metadata(backups.join(".staging"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+
+    // The control: the link removed, the backup is taken.
+    std::fs::remove_file(backups.join(".staging")).unwrap();
+    cmd(&home)
+        .args(["backup", "create"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Backup created"));
+}
+
+/// **`backup restore` refuses a live vault holding an entry that is not a
+/// regular file** — a linked `vault.db-wal`, a linked `vault.json.next`, a
+/// subdirectory — with the vault, the link and what it names unchanged
+/// (ROADMAP O301, the vault delete's survey on O283's ruling). O283's check
+/// named three entries, so the first two were renamed aside with the vault and
+/// removed as links, leaving what they named behind. Exit 1, the entry named.
+/// The control: the entry moved out, the same archive restores.
+#[cfg(unix)]
+#[test]
+fn o301_backup_restore_refuses_a_live_vault_holding_a_link_or_a_directory() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["remember", "the harbour ledger names the cargo"])
+        .assert()
+        .success();
+    let out = cmd(&home).args(["backup", "create"]).assert().success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let name = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("Backup created: "))
+        .and_then(|p| std::path::Path::new(p).file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .expect("premise: the archive's name");
+    let vault = home.path().join("vaults").join("default");
+    let elsewhere = TempDir::new().unwrap();
+    for (entry, label) in [
+        ("vault.db-wal", "a linked -wal"),
+        ("vault.json.next", "a linked staged manifest"),
+        ("notes", "a subdirectory"),
+    ] {
+        let named = elsewhere.path().join(format!("{entry}.named"));
+        if entry == "notes" {
+            std::fs::create_dir(vault.join(entry)).unwrap();
+            std::fs::write(vault.join(entry).join("a.txt"), b"kept").unwrap();
+        } else {
+            // A closed vault may keep an EMPTY `-wal`; nothing of its own is
+            // lost by replacing that with the link.
+            if let Ok(m) = std::fs::symlink_metadata(vault.join(entry)) {
+                assert!(
+                    m.is_file() && m.len() == 0,
+                    "{label}: premise: the vault holds no {entry} of its own"
+                );
+                std::fs::remove_file(vault.join(entry)).unwrap();
+            }
+            std::fs::write(&named, format!("what {entry} names")).unwrap();
+            std::os::unix::fs::symlink(&named, vault.join(entry)).unwrap();
+        }
+        let before = tree_with_bytes(&vault);
+        cmd(&home)
+            .args(["backup", "restore", &name, "--force"])
+            .assert()
+            .failure()
+            .code(1)
+            .stderr(predicate::str::contains(format!("{entry} is a")))
+            .stderr(predicate::str::contains("ROADMAP O283, O301"))
+            .stdout(predicate::str::contains("Restored").not());
+        assert!(
+            tree_with_bytes(&vault) == before,
+            "{label}: the live vault is unchanged"
+        );
+        if entry == "notes" {
+            std::fs::remove_dir_all(vault.join(entry)).unwrap();
+        } else {
+            assert!(
+                std::fs::symlink_metadata(vault.join(entry))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                "{label}: the link stays"
+            );
+            assert_eq!(
+                std::fs::read(&named).unwrap(),
+                format!("what {entry} names").into_bytes(),
+                "{label}: what it names is untouched"
+            );
+            std::fs::remove_file(vault.join(entry)).unwrap();
+        }
+    }
+    // The control: nothing irregular left, the same archive restores.
+    cmd(&home)
+        .args(["backup", "restore", &name, "--force"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Restored"));
+    cmd(&home)
+        .args(["verify"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("VERIFY OK"));
+}
+
 /// `config check` sees the O204 refusals before a restart does, on a
 /// DECLARED data directory, and only there.
 #[test]

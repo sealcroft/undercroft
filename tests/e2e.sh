@@ -1296,6 +1296,51 @@ check "and the link and the directory it names are untouched" 0 "same" -- sh -c 
 rm "$UNDERCROFT_HOME/vaults/o283"; mv "$O283_REAL" "$UNDERCROFT_HOME/vaults/o283"
 check "a real directory restores"                     0 "Restored" -- \
   "$BIN" backup restore "$O283_BK" --force
+# ROADMAP O301, the vault delete's survey on O283's ruling. O283 named three
+# entries, so a linked staged manifest or a subdirectory in the live vault was
+# renamed aside with it and removed — a link alone, what it named left where it
+# was — and a linked `-wal` met SQLite's own O_NOFOLLOW at the hold, a raw
+# "unable to open database file" after the archive was staged and verified. Any
+# entry that is not a regular file now refuses, before anything is staged, with
+# the vault, the link and what it names as they were. (`o268_hash` hashes
+# regular files, so the link is checked by name.)
+O301_NAMED="$(mktemp -d)"
+for O301_E in vault.db-wal vault.json.next; do
+  O301_F="$UNDERCROFT_HOME/vaults/o283/$O301_E"
+  [ -s "$O301_F" ] || rm -f "$O301_F"
+  printf 'what %s names' "$O301_E" >"$O301_NAMED/$O301_E"
+  ln -s "$O301_NAMED/$O301_E" "$O301_F"
+  O301_BEFORE="$(o268_hash "$UNDERCROFT_HOME/vaults/o283")"
+  check "restore refuses a live vault holding a linked $O301_E (O301)" 1 \
+    "$O301_E is a symbolic link" -- "$BIN" backup restore "$O283_BK" --force
+  O301_AFTER="$(o268_hash "$UNDERCROFT_HOME/vaults/o283")"
+  check "and the vault, the link and what it names are as they were ($O301_E)" 0 "same" -- sh -c \
+    "[ -L '$O301_F' ] && [ \"\$(cat '$O301_NAMED/$O301_E')\" = 'what $O301_E names' ] && [ '$O301_BEFORE' = '$O301_AFTER' ] && echo same || echo differs"
+  rm "$O301_F"
+done
+mkdir "$UNDERCROFT_HOME/vaults/o283/notes"
+check "restore refuses a live vault holding a directory (O301)" 1 "notes is a directory" -- \
+  "$BIN" backup restore "$O283_BK" --force
+rmdir "$UNDERCROFT_HOME/vaults/o283/notes"
+check "with nothing irregular left, the same archive restores (O301)" 0 "Restored" -- \
+  "$BIN" backup restore "$O283_BK" --force
+# ROADMAP O273: a `backups/.staging` that is a symbolic link refuses `backup
+# create` before anything is swept or staged through it. The stage followed
+# the link — the copied database was built and published from wherever it
+# pointed — and the sweep removed every 32-hex directory over an hour old there.
+O273_VICTIM="$(mktemp -d)"
+O273_SHAPED="$O273_VICTIM/0123456789abcdef0123456789abcdef"
+mkdir -p "$O273_SHAPED" && printf 'not a backup' >"$O273_SHAPED/vault.db"
+touch -d '2 hours ago' "$O273_SHAPED"
+O273_BEFORE="$(o268_hash "$O273_VICTIM")"
+ln -s "$O273_VICTIM" "$UNDERCROFT_HOME/backups/.staging"
+O273_N="$(ls -A "$UNDERCROFT_HOME/backups" | wc -l)"
+check "backup create refuses a linked .staging (O273)" 1 "ROADMAP O273" -- "$BIN" backup create
+O273_AFTER="$(o268_hash "$O273_VICTIM")"
+check "and nothing was swept, staged or archived through it (O273)" 0 "same" -- sh -c \
+  "[ -L '$UNDERCROFT_HOME/backups/.staging' ] && [ -d '$O273_SHAPED' ] && [ '$O273_BEFORE' = '$O273_AFTER' ] && [ \"\$(ls -A '$UNDERCROFT_HOME/backups' | wc -l)\" = '$O273_N' ] && echo same || echo differs"
+rm "$UNDERCROFT_HOME/backups/.staging"
+check "with the link removed, the backup is taken (O273)" 0 "Backup created" -- "$BIN" backup create
 check "repair passes"             0 "integrity: ok"                  -- "$BIN" repair
 check "hooks prints settings"     0 "PreCompact"                     -- "$BIN" hooks claude-code
 
@@ -3341,6 +3386,45 @@ rest_body "/v1 and says why, in the store's words (O283)" 'symbolic link' -- -X 
   -d "{\"name\":\"$O283V_BK\"}"
 check "/v1 left the link in place (O283)" 0 "link" -- sh -c \
   "[ -L \"$REST_HOME/vaults/o283v\" ] && echo link || echo gone"
+# ROADMAP O301 on /v1: the vault put back as a real directory, a linked -wal
+# inside it — the filing's case — is the same 400 in the store's words, the
+# link and what it names untouched; with it gone the archive restores.
+rm "$REST_HOME/vaults/o283v"; mv "$O283V_REAL" "$REST_HOME/vaults/o283v"
+O301V_WAL="$REST_HOME/vaults/o283v/vault.db-wal"
+O301V_NAMED="$(mktemp -d)/frames"
+printf 'what the -wal names' >"$O301V_NAMED"
+[ -s "$O301V_WAL" ] || rm -f "$O301V_WAL"
+ln -s "$O301V_NAMED" "$O301V_WAL"
+rest_code "/v1 restore refuses a live vault holding a linked -wal (O301)" 400 -- -X POST \
+  "$API/vaults/o283v/backups/restore" -H "X-Vault-Assertion: $(sign o283v)" \
+  -d "{\"name\":\"$O283V_BK\"}"
+rest_body "/v1 and names it, in the store's words (O301)" 'vault.db-wal is a symbolic link' -- \
+  -X POST "$API/vaults/o283v/backups/restore" -H "X-Vault-Assertion: $(sign o283v)" \
+  -d "{\"name\":\"$O283V_BK\"}"
+check "/v1 left the link and what it names in place (O301)" 0 "same" -- sh -c \
+  "[ -L '$O301V_WAL' ] && [ \"\$(cat '$O301V_NAMED')\" = 'what the -wal names' ] && echo same || echo differs"
+rm "$O301V_WAL"
+rest_body "/v1 with nothing irregular left, the archive restores (O301)" '"restored":"o283v"' -- \
+  -X POST "$API/vaults/o283v/backups/restore" -H "X-Vault-Assertion: $(sign o283v)" \
+  -d "{\"name\":\"$O283V_BK\"}"
+# ROADMAP O273 on /v1: `POST …/backups` beside a linked `.staging` refuses in
+# the class the restore area's identical refusal answers (an I/O-class 500, no
+# integrity class), with nothing swept, staged or archived through the link.
+O273V_VICTIM="$(mktemp -d)"
+O273V_SHAPED="$O273V_VICTIM/0123456789abcdef0123456789abcdef"
+mkdir -p "$O273V_SHAPED" && printf 'not a backup' >"$O273V_SHAPED/vault.db"
+touch -d '2 hours ago' "$O273V_SHAPED"
+ln -s "$O273V_VICTIM" "$REST_HOME/backups/.staging"
+O273V_N="$(ls -A "$REST_HOME/backups" | wc -l)"
+rest_code "/v1 backup create refuses a linked .staging (O273)" 500 -- -X POST \
+  "$API/vaults/acme/backups" -H "X-Vault-Assertion: $(sign acme)"
+rest_body "/v1 and says why (O273)" 'ROADMAP O273' -- -X POST \
+  "$API/vaults/acme/backups" -H "X-Vault-Assertion: $(sign acme)"
+check "/v1 swept, staged and archived nothing through it (O273)" 0 "same" -- sh -c \
+  "[ -L '$REST_HOME/backups/.staging' ] && [ \"\$(cat '$O273V_SHAPED/vault.db')\" = 'not a backup' ] && [ \"\$(ls -A '$O273V_VICTIM')\" = '0123456789abcdef0123456789abcdef' ] && [ \"\$(ls -A '$REST_HOME/backups' | wc -l)\" = '$O273V_N' ] && echo same || echo differs"
+rm "$REST_HOME/backups/.staging"
+rest_code "/v1 with the link removed, the backup is taken (O273)" 201 -- -X POST \
+  "$API/vaults/acme/backups" -H "X-Vault-Assertion: $(sign acme)"
 # ROADMAP O242: the vault this process ALSO serves over /mcp is refused, and
 # the refusal is EXPLICIT rather than accidental. `backup_restore` drops this
 # process's cached handle and then takes an exclusive lock — which used to

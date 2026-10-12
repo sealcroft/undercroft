@@ -186,31 +186,31 @@ pub(crate) fn per_id(vaults: &Path, prefix: &str, id: &str) -> PathBuf {
     ))
 }
 
-/// Why a restore must not replace the vault directory `target`, when it is a
-/// symbolic link or holds one where its database or manifest belongs — `None`
-/// when it is neither (ROADMAP O283, ruled by the maintainer 2026-09-27:
-/// "restore refuses symlinks").
+/// Why a restore must not replace `vaults/<id>` under the palace at `root` —
+/// `None` when it may: the path is a symbolic link or not a directory, or the
+/// directory holds an entry that is not a regular file (ROADMAP O283, ruled by
+/// the maintainer 2026-09-27: "restore refuses symlinks"; O301).
 ///
 /// The swap renames the PATH aside and removes the aside afterwards. For a link
 /// that is the link alone: the directory it names was left orphaned where it
 /// was, and the restored vault silently moved onto the palace's own filesystem
-/// (measured). A linked database or manifest inside a real directory is left
-/// behind the same way. Nothing is followed; ordinary opens keep working
-/// through a link.
-pub fn linked_target(target: &Path) -> Option<String> {
-    let linked = |p: &Path| {
-        fs::symlink_metadata(p)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false)
-    };
-    if linked(target) {
-        return Some(format!("{} is a symbolic link", target.display()));
-    }
-    [DB_FILE, LEGACY_DB_FILE, MANIFEST_FILE]
-        .into_iter()
-        .map(|name| target.join(name))
-        .find(|p| linked(p))
-        .map(|p| format!("{} is a symbolic link", p.display()))
+/// (measured). An entry inside a real directory fares the same way: a linked
+/// `vault.json.next` was removed as a link with what it named left behind, and
+/// a linked `-wal` — SQLite opens every file it names with `O_NOFOLLOW` — made
+/// the hold fail with a raw "unable to open database file" after the archive
+/// had been staged and verified (both measured, O301). O283's check named
+/// three entries, so the answer is now the vault delete's own survey
+/// ([`deletes::survey`](crate::deletes::survey), ROADMAP O291): ONE rule for
+/// what a vault directory may hold when something replaces or removes it,
+/// asked by the store's door before anything is staged and by [`Stage::swap`]
+/// under the hold. Nothing is followed; ordinary opens keep working through a
+/// linked directory. A stat that fails is returned, never read as "no link".
+pub fn irregular_target(root: &Path, id: &str) -> Result<Option<String>, VaultError> {
+    let found = crate::deletes::survey(root, id)?;
+    Ok(match found.target {
+        crate::deletes::Target::NotADirectory(what) => Some(what),
+        crate::deletes::Target::Absent | crate::deletes::Target::Directory => found.irregular,
+    })
 }
 
 /// Refuse as [`VaultError::RestoreInterrupted`] when a restore of `id` left the
@@ -398,9 +398,11 @@ impl Stage {
     /// exclusive hold on the live vault, `None` when there is no live vault —
     /// across both renames, then removing the vault it replaced.
     ///
-    /// In order: refuse if an aside for the id exists; rename the live vault
-    /// aside; refuse if `vaults/<id>` is present again (`rename(2)` replaces
-    /// an EMPTY directory silently); rename the stage in; sync `vaults/` and the
+    /// In order: refuse if an aside for the id exists, or if `vaults/<id>` is a
+    /// link or holds an entry that is not a regular file ([`irregular_target`],
+    /// ROADMAP O301); rename the live vault aside; refuse if `vaults/<id>` is
+    /// present again (`rename(2)` replaces an EMPTY directory silently); rename
+    /// the stage in; sync `vaults/` and the
     /// restore area; drop the hold; require the manifest now at `vaults/<id>`
     /// to be byte-for-byte the stage's; remove the aside. A failed rename-in
     /// puts the live vault back; if that fails too, both paths are named and
@@ -408,13 +410,16 @@ impl Stage {
     pub fn swap<H>(mut self, hold: Option<H>) -> Result<Swapped, VaultError> {
         let target = self.vaults.join(&self.id);
         let aside = aside_path(&self.vaults, &self.id);
-        refuse_if_interrupted(self.vaults.parent().unwrap_or(&self.vaults), &self.id)?;
+        let root = self.vaults.parent().unwrap_or(&self.vaults).to_path_buf();
+        refuse_if_interrupted(&root, &self.id)?;
         let expected = fs::read(self.dir.join(MANIFEST_FILE))?;
-        // A link that appeared after the door looked (ROADMAP O283).
-        if let Some(why) = linked_target(&target) {
+        // A link, or any entry that is not a regular file, that appeared after
+        // the door looked — asked again here, under the hold (ROADMAP O283,
+        // O301).
+        if let Some(why) = irregular_target(&root, &self.id)? {
             return Err(VaultError::Io(io::Error::other(format!(
                 "{why}, so the restored vault was not put there; nothing was restored and the \
-                 live vault was not changed (ROADMAP O283)"
+                 live vault was not changed (ROADMAP O283, O301)"
             ))));
         }
         let replaced = fs::symlink_metadata(&target).is_ok();
