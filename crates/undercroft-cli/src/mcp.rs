@@ -1428,7 +1428,7 @@ mod tests {
         assert!(!err && text.contains("quarantined"), "premise: {text}");
         let (err, text) = update(&mut h, &mut store, "the heron moved to the upper pool");
         assert!(!err && text.contains("updated"), "premise: {text}");
-        let pending = store.admission_pending().unwrap();
+        let pending = store.admission_pending().unwrap().pending;
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].destination_id, id);
         assert_eq!(
@@ -1466,7 +1466,7 @@ mod tests {
             json!({ "content": poison, "wing": "notes", "room": "r" }),
         );
         assert!(!err && text.contains("quarantined"), "premise: {text}");
-        let queued = store.admission_pending().unwrap().len();
+        let queued = store.admission_pending().unwrap().pending.len();
         for content in [poison, "the standup moved to nine"] {
             let idx = store.next_append_index().unwrap() as u32;
             let own = undercroft_core::ids::drawer_id("notes", "r", "(direct)", idx);
@@ -1484,7 +1484,7 @@ mod tests {
             assert!(!text.contains("quarantined"), "{content:?}: {text}");
         }
         assert_eq!(
-            store.admission_pending().unwrap().len(),
+            store.admission_pending().unwrap().pending.len(),
             queued,
             "a refused declaration must not reach the review queue"
         );
@@ -1516,7 +1516,7 @@ mod tests {
         store
             .upsert(&Drawer::new("notes", "r", poison.into(), None, 1, "test"))
             .unwrap();
-        let qid = store.admission_pending().unwrap()[0].id.clone();
+        let qid = store.admission_pending().unwrap().pending[0].id.clone();
 
         // Premise: these tools work on an ordinary drawer in an ordinary
         // wing, so the refusals below are about quarantine.
@@ -1619,7 +1619,7 @@ mod tests {
         assert!(!err, "an ordinary fact still writes: {text}");
 
         // Nothing above disturbed the queue.
-        assert_eq!(store.admission_pending().unwrap().len(), 1);
+        assert_eq!(store.admission_pending().unwrap().pending.len(), 1);
     }
 
     fn plain_store() -> (TempDir, VaultStore) {
@@ -1928,5 +1928,75 @@ mod tests {
             floored.contains("1 wing(s) below the trust floor were not considered"),
             "a floored search must state what it excluded:\n{floored}"
         );
+    }
+
+    /// **ROADMAP O315 on the agent surface.** A receipt carrying a field this
+    /// build does not know — a newer build's, signed — is an error saying it
+    /// was NOT checked, never the attestation (tamper) verdict and never a
+    /// claim about who minted it; the genuine receipt still verifies
+    /// and a forged one is still that verdict, so the refusal is the fence
+    /// and nothing else. The agent surface carries the store's error as text,
+    /// so the words ARE the class here.
+    ///
+    /// COUNTERFACTUAL, run against `5108dfa`: the signed-field arm answered
+    /// "attestation failed: signature: …" and the unsigned-key arm verified.
+    #[test]
+    fn a_receipt_a_newer_build_minted_is_refused_as_age_over_mcp() {
+        let (_d, mut store) = plain_store();
+        let gone = Drawer::new(
+            "notes",
+            "r",
+            "a note the subject asked us to erase".into(),
+            None,
+            0,
+            "test",
+        );
+        store.upsert(&gone).unwrap();
+        let mut att = store
+            .forget_with_proof(std::slice::from_ref(&gone.id))
+            .unwrap();
+        let (secret, _) = undercroft_vault::bundle::sign_keygen();
+        att.sign(&secret).unwrap();
+        let check = |store: &mut VaultStore, doc: &Value| {
+            call_tool(
+                store,
+                "undercroft_check_erasure_receipt",
+                &json!({ "attestation": doc.to_string() }),
+            )
+        };
+
+        // Premise: the genuine receipt verifies through the tool.
+        let genuine = serde_json::to_value(&att).unwrap();
+        let out = check(&mut store, &genuine).expect("premise: the genuine receipt verifies");
+        assert!(out.contains("\"verified\""), "{out}");
+
+        // A newer build's receipt: one more field, inside its signature.
+        let mut newer = genuine.clone();
+        newer["archive"] = json!("1 archive(s)");
+        let mut bytes = att.canonical();
+        bytes.extend_from_slice("\u{1f}archive\u{1e}1 archive(s)".as_bytes());
+        newer["sig"] = json!(undercroft_vault::bundle::sign_detached(&secret, &bytes).unwrap());
+        let err = check(&mut store, &newer)
+            .expect_err("a newer build's receipt is refused")
+            .to_string();
+        assert!(
+            err.contains("was NOT checked") && !err.contains("attestation failed"),
+            "not checked, never the tamper verdict: {err}"
+        );
+        // The same key added outside the signature: it verified before.
+        let mut annotated = genuine.clone();
+        annotated["ticket"] = json!("JIRA-1");
+        let err = check(&mut store, &annotated)
+            .expect_err("an unknown key is refused")
+            .to_string();
+        assert!(err.contains("\"ticket\""), "{err}");
+
+        // And a forged receipt is still the tamper verdict.
+        let mut forged = genuine.clone();
+        forged["head_after"] = json!("00".repeat(32));
+        let err = check(&mut store, &forged)
+            .expect_err("a forged receipt is refused")
+            .to_string();
+        assert!(err.contains("attestation failed"), "{err}");
     }
 }

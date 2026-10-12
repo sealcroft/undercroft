@@ -273,7 +273,7 @@ fn sync_dir(_dir: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use undercroft_store::forget::ForgottenDrawer;
+    use undercroft_store::forget::{ForgottenDrawer, UnknownFields};
 
     fn minted() -> ForgetAttestation {
         ForgetAttestation {
@@ -283,6 +283,7 @@ mod tests {
             drawers: vec![ForgottenDrawer {
                 id: "d1".into(),
                 content_fp: "f1".into(),
+                unknown: UnknownFields::new(),
             }],
             head_before: "aa".into(),
             head_after: "bb".into(),
@@ -290,6 +291,7 @@ mod tests {
             mirror: None,
             sender: None,
             sig: None,
+            unknown: UnknownFields::new(),
         }
     }
 

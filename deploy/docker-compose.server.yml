@@ -135,8 +135,8 @@ services:
     # To expose recall without write access, change the command above to end
     # in `serve-http --host 0.0.0.0 --port 8765 --read-only`. Start it
     # writable once first: `init` writes only the vault's manifest, the first
-    # writable open creates its database, and a read-only server refuses a
-    # vault whose database does not exist yet.
+    # writable open creates its database, and a read-only server refuses (exit
+    # 1, a posture refusal) a vault whose manifest records no anchored write.
     environment:
       UNDERCROFT_MCP_HTTP_TOKEN: ${UNDERCROFT_MCP_HTTP_TOKEN:?set UNDERCROFT_MCP_HTTP_TOKEN in deploy/.env}
       # No value on purpose. Compose passes UNDERCROFT_PASSPHRASE from

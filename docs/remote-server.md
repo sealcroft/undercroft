@@ -51,8 +51,10 @@ claude mcp add --transport http undercroft http://HOST:8765/mcp \
   whitespace are fine; they are presentable.
 - `--read-only` exposes recall without write access (see the compose file).
   Start the server writable once first: `init` writes only the vault's
-  manifest, and a read-only server refuses a vault whose database the first
-  writable open has not created yet.
+  manifest, and a read-only server refuses a vault whose manifest records no
+  anchored write — exit 1, or a 409 with no `class` for a vault `/v1` opens —
+  because a read-only open neither creates, seeds nor migrates a database
+  (since 1.7.0; it was the integrity verdict, exit 2, ROADMAP O213).
 - `/healthz` is unauthenticated for probes.
 - Plain HTTP: terminate TLS in a reverse proxy for anything beyond a
   trusted network.
@@ -297,7 +299,11 @@ POST   /v1/vaults/{id}/verify-forgetting  check an attestation this vault
                                         issued: Verified, or Recorded when a
                                         key rotation has destroyed the replay
                                         key (exit 0 either way); 409 if the
-                                        document does not describe this vault
+                                        document does not describe this vault;
+                                        400, NOT checked, if it carries a
+                                        field or version this build does not
+                                        know (a newer build's, or altered) —
+                                        refused before its signature
 
 ── maintenance / portability ────────────────────────────────────────────
 POST   /v1/vaults/{id}/refine           LLM distillation → KG

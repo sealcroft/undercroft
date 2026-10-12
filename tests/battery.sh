@@ -760,6 +760,587 @@ else
   echo "      a replayed tail or a doubled log is named, not absorbed"
 fi
 
+# ── preflight: the supply chain is pinned (ROADMAP O294, O326, O327) ────────
+# Three filings, one class: code this tree runs, or that builds what it ships,
+# named by something that can move under it.
+#
+#   O294  `release.yml` built the ten shipped binaries with whatever stable
+#         each runner image carried — Rust 1.98.1 for every one of v1.6.1's,
+#         read from the runner images their own jobs logged — while every
+#         suite, the lint and the Linux images ran 1.90.0, and `windows-check`
+#         took `dtolnay/rust-toolchain@stable`. A claim about the compiler the
+#         battery tests was not a claim about what shipped, and the two std
+#         libraries carried different Unicode tables, which the hash identity's tokens
+#         read (O421): the pin is 1.98.1 by O294's ruling of 2026-10-12, and
+#         undercroft-core asserts its Unicode version at compile time.
+#   O326  every third-party action was named by a tag its owner can move, and
+#         `release.yml` granted `contents: write` and `packages: write` to
+#         every job at the workflow level, with the token in a job-level
+#         `env:` and persisted by the checkout — so every crate's build script
+#         ran beside a token that could replace the release's assets with no
+#         tag moving.
+#   O327  the former-name scan below ran `python:3-slim`, unpinned, with the
+#         checkout — `.git/hooks` included — mounted read-write.
+#
+# It runs BEFORE the former-name trace, the first preflight to launch a
+# container, so a launch this refuses never happens.
+#
+# Four arms, each a function the probes below drive on synthetic input BOTH
+# ways before the real files are believed — a scanner that examined nothing
+# reports exactly what a clean tree reports:
+#   actions      every `uses:` names a local path, a GitHub-owned `actions/*`
+#                action by version tag or SHA, a `docker://` image by digest,
+#                or a third-party action by its full 40-hex commit SHA with the
+#                version it was resolved from in a `# v…` comment;
+#   permissions  every workflow states `permissions:` at the top, nothing above
+#                read; a write is granted per job; a job holding one checks out
+#                with `persist-credentials: false`; and no workflow-level or
+#                job-level `env:` carries the token;
+#   toolchain    `rust-toolchain.toml` is the pin, read through
+#                `.github/scripts/pinned-toolchain.sh --channel` (its one
+#                reader, the one CI installs with); every Rust image a
+#                Dockerfile, a compose file or a workflow names is tagged with
+#                exactly that version on the runtime stage's distribution; no
+#                workflow names a toolchain any other way; and every
+#                job that runs cargo outside a container calls that script
+#                before its first cargo line;
+#   containers   every container this script launches names its image through
+#                a `*_IMG` variable assigned once, by digest, mounts the tree
+#                read-only and gets no network (a preflight is offline, O65).
+#
+# GitHub-owned `actions/*` are exempt from the SHA rule, as O326 filed it:
+# GitHub runs the runner and mints the token such an action could steal, so a
+# moved `actions/` tag is a compromise of the party every job already trusts in
+# full; a branch there is still refused. What a pin cannot see, stated: a
+# pinned action can still FETCH at run time (trivy's database, cargo-audit's
+# advisory database, the mdBook release tarball), so the pin fixes the code,
+# not what that code downloads; and this reads the definitions, so whether a
+# runner really ran the pinned compiler is the script's own check, in the run.
+echo "═══ preflight: the supply chain is pinned ═══"
+SC_FAIL=0
+SC_TMP="$(mktemp -d)"
+SC_HEX40="0123456789abcdef0123456789abcdef01234567"
+SC_HEX64="${SC_HEX40}0123456789abcdef01234567"
+# The launch word, assembled so the containers arm reads this preflight's own
+# source clean rather than being excluded by path (the no-trace precedent).
+SC_DR="dock""er run"
+# And the heredoc operator, for the same reason: written literally in a probe
+# line it would open a heredoc the containers arm skips to its end.
+SC_HD="<""<"
+
+# ── arm 1: actions (O326) ──
+SC_USES_RE='^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]+"?([^"[:space:]]+)"?[[:space:]]*(#[[:space:]]*(.*))?$'
+SC_SHA_RE='^[0-9a-f]{40}$'
+SC_TAG_RE='^v[0-9]+(\.[0-9]+)*$'
+SC_NOTE_RE='^v[0-9]+(\.[0-9]+)*([[:space:]].*)?$'
+SC_DIGEST_RE='@sha256:[0-9a-f]{64}$'
+sc_actions() {
+  local f ln n val ref owner note seen=0 third=0
+  for f in "$@"; do
+    n=0
+    while IFS= read -r ln || [ -n "$ln" ]; do
+      n=$((n + 1))
+      case "$ln" in *uses:*) ;; *) continue ;; esac
+      case "${ln#"${ln%%[![:space:]]*}"}" in "#"*) continue ;; esac
+      seen=$((seen + 1))
+      if ! [[ $ln =~ $SC_USES_RE ]]; then
+        echo "  $f:$n: a uses: line this reader cannot parse, refused rather than read past"
+        continue
+      fi
+      val=${BASH_REMATCH[2]-}; note=${BASH_REMATCH[4]-}
+      case "$val" in
+        ./*) continue ;;
+        docker://*)
+          [[ $val =~ $SC_DIGEST_RE ]] \
+            || echo "  $f:$n: $val is an image by tag; name it by digest (@sha256:...)"
+          continue ;;
+        *@*) ;;
+        *) echo "  $f:$n: $val names no ref at all"; continue ;;
+      esac
+      ref=${val##*@}; owner=${val%%/*}
+      if [ "$owner" = actions ]; then
+        [[ $ref =~ $SC_TAG_RE || $ref =~ $SC_SHA_RE ]] \
+          || echo "  $f:$n: $val is a GitHub-owned action by a branch; name a version tag or a SHA"
+        continue
+      fi
+      third=$((third + 1))
+      if ! [[ $ref =~ $SC_SHA_RE ]]; then
+        echo "  $f:$n: $val is a third-party action by a ref its owner can move; pin its full 40-hex commit SHA"
+      elif ! [[ $note =~ $SC_NOTE_RE ]]; then
+        echo "  $f:$n: $val is pinned with no '# v...' comment naming the version it was resolved from"
+      fi
+    done < "$f"
+  done
+  echo "examined=$seen third=$third"
+}
+
+# ── arm 2: permissions and the token (O326) ──
+# Indentation is the structure: two spaces per level, as every workflow here
+# is written — a job id at 2, its keys at 4, a step's dash at 6, the step's
+# keys at 8. A file written another way reads as having no jobs, which the
+# job-count premise below refuses.
+#
+# The token is matched in every spelling an expression accepts — the property
+# and index forms, in any case (`github.token`, `github['token']`,
+# `secrets.GITHUB_TOKEN`, `secrets["github_token"]`), which the review of the
+# first build found the reader blind to — and a STEP that runs cargo may not
+# hold it either: every crate's build script runs there, which is the exposure
+# this arm exists for, one level down from the job's `env:`.
+sc_permissions() {
+  awk -v sq="'" '
+    BEGIN {
+      q = "[\"" sq "]"
+      tokre = "github[.]token|github[[]" q "token" q "[]]|secrets[.]github_token|secrets[[]" q "github_token" q "[]]"
+    }
+    function ind(s) { return match(s, /[^ ]/) ? RSTART - 1 : -1 }
+    function tok(s) { return (tolower(s) ~ tokre) }
+    function runs_cargo(s,   t) { t = " " s " "; return (t ~ /[^A-Za-z0-9_-]cargo[^A-Za-z0-9_-]/) }
+    function flush_step() {
+      if (st_co && !st_persist) co_bad = co_bad st_line
+      if (st_tok && st_cargo)
+        printf "  %s:%d: a step of job %s runs cargo while it holds the token; every build script reads its environment\n", fname, st_first, job
+      st_co = 0; st_persist = 0; st_line = ""; st_tok = 0; st_cargo = 0; st_first = 0
+    }
+    function flush_job() {
+      flush_step()
+      if (job != "" && job_write && co_bad != "")
+        printf "  %s: job %s holds a write permission and checks out without persist-credentials: false (line%s); the token stays in .git/config for every later step\n", fname, job, co_bad
+      job = ""; job_write = 0; co_bad = ""; in_jp = 0; in_je = 0
+    }
+    function flush_file() {
+      flush_job()
+      if (fname != "" && !tp)
+        printf "  %s: no workflow-level permissions:, so every job gets the repository default\n", fname
+    }
+    FNR == 1 { flush_file(); fname = FILENAME; files++; tp = 0; sect = ""; inj = 0 }
+    /^[ ]*#/ || /^[ ]*$/ { next }
+    {
+      i = ind($0)
+      if (i == 0) {
+        flush_job()
+        sect = $0; sub(/:.*/, "", sect)
+        inj = (sect == "jobs")
+        if (sect == "permissions") {
+          tp = 1; v = $0; sub(/^permissions:[ ]*/, "", v)
+          if (v ~ /write/)
+            printf "  %s:%d: workflow-level permissions: %s; grant a write per job instead\n", fname, FNR, v
+        }
+        next
+      }
+      if (sect == "permissions") {
+        if ($0 ~ /:[ ]*write/)
+          printf "  %s:%d: a workflow-level write (%s); grant it to the job that needs it\n", fname, FNR, substr($0, i + 1)
+        next
+      }
+      if (sect == "env") {
+        if (tok($0)) printf "  %s:%d: the token in the workflow-level env:, which every step of every job can read\n", fname, FNR
+        next
+      }
+      if (!inj) next
+      if (i == 2) { flush_job(); job = $1; sub(/:$/, "", job); jobs++; next }
+      if (i == 4) {
+        flush_step()
+        in_jp = ($0 ~ /^    permissions:/); in_je = ($0 ~ /^    env:/)
+        if (in_jp && $0 ~ /write/) job_write = 1
+        if (in_je && tok($0))
+          printf "  %s:%d: the token in the env: of job %s, which every step of the job can read; give it to the step that needs it\n", fname, FNR, job
+        next
+      }
+      if (in_jp) { if ($0 ~ /:[ ]*write/) job_write = 1; next }
+      if (in_je) {
+        if (tok($0))
+          printf "  %s:%d: the token in the env: of job %s, which every step of the job can read; give it to the step that needs it\n", fname, FNR, job
+        next
+      }
+      if (i == 6 && $0 ~ /^      - /) {
+        flush_step(); st_line = " " FNR; st_first = FNR
+        if ($0 ~ /uses:[ ]*actions\/checkout@/) st_co = 1
+      } else if ($0 ~ /^        uses:[ ]*actions\/checkout@/) {
+        st_co = 1
+      }
+      if ($0 ~ /persist-credentials:[ ]*"?false"?[ ]*$/) st_persist = 1
+      if (st_first) { if (tok($0)) st_tok = 1; if (runs_cargo($0)) st_cargo = 1 }
+    }
+    END { flush_file(); printf "examined=%d jobs=%d\n", files, jobs }
+  ' "$@"
+}
+
+# ── arm 3: the toolchain (O294) ──
+# An image is read where an image is NAMED — a Dockerfile's `FROM` (its flags
+# skipped) and an `image:` or `container:` key — and is a Rust image when the
+# last component of its repository is `rust`, whatever registry is in front of
+# it: the first build matched `rust:` after a space and so read past `FROM rust`
+# (no tag at all), `ghcr.io/rust-lang/rust:nightly` and any other registry's
+# copy (the review's plants). Such an image must be Docker Hub's official one,
+# tagged with the pinned version in full. A reference built from a variable is
+# not judged; none exists in the tree, and the residual is stated.
+#
+# The second review's plants widened it again: an image is also NAMED by a
+# flow mapping (`container: {image: "rust:…"}`, which the key reader took as
+# the word `{image:`), by `COPY --from=` and by a `RUN --mount=…,from=`; and a
+# Rust image must carry the runtime stage's distribution in its tag
+# (`<pin>-slim-<dist>` or `<pin>-<dist>`), because a builder on a newer
+# distribution than the runtime stage links a glibc the runtime does not have —
+# which fails at start, not at build (O294's ruling, its decision rule). A
+# `--from=` that names a stage is a word whose last component is not `rust`,
+# and is passed over like any other image.
+SC_FROM_RE='^[[:space:]]*[Ff][Rr][Oo][Mm][[:space:]]+((--[^[:space:]]+[[:space:]]+)*)([^[:space:]]+)'
+SC_IMGKEY_RE='^[[:space:]]*(-[[:space:]]+)?(image|container):[[:space:]]*"?([^"{[:space:]#][^"[:space:]#]*)'
+SC_FLOWIMG_RE='[{,][[:space:]]*image:[[:space:]]*"?([^",}[:space:]#]+)'
+SC_FROMFLAG_RE='(--from=|,from=)"?([^",[:space:]]+)'
+SC_RUNTIME_RE='^[Ff][Rr][Oo][Mm][[:space:]]+debian:([a-z]+)-slim([[:space:]]|$)'
+SC_MECH_RE='uses:[[:space:]]*"?[^"[:space:]]*(rust-toolchain|setup-rust|actions-rs)|^[[:space:]]*toolchain:|rustup[[:space:]]+(default|override|toolchain|install|update|target|set|run)([[:space:]]|$)|RUSTUP_TOOLCHAIN|(cargo|rustc)[[:space:]]+\+'
+sc_image_refs() {  # <line> — every image reference the line names, one per line
+  local ln=$1 rest
+  if [[ $ln =~ $SC_FROM_RE ]]; then printf '%s\n' "${BASH_REMATCH[3]}"
+  elif [[ $ln =~ $SC_IMGKEY_RE ]]; then printf '%s\n' "${BASH_REMATCH[3]}"
+  fi
+  if [[ $ln =~ $SC_FLOWIMG_RE ]]; then printf '%s\n' "${BASH_REMATCH[1]}"; fi
+  rest=$ln
+  while [[ $rest =~ $SC_FROMFLAG_RE ]]; do
+    printf '%s\n' "${BASH_REMATCH[2]}"
+    rest=${rest#*"${BASH_REMATCH[0]}"}
+  done
+}
+sc_images() {  # <pinned version> <runtime distribution> <file>...
+  local want=$1 dist=$2 f ln n ref base last name tag prefix v seen=0
+  shift 2
+  for f in "$@"; do
+    n=0
+    while IFS= read -r ln || [ -n "$ln" ]; do
+      n=$((n + 1))
+      case "${ln#"${ln%%[![:space:]]*}"}" in "#"*) continue ;; esac
+      while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
+        base=${ref%%@*}
+        case "$base" in *'$'*) continue ;; esac
+        last=${base##*/}; name=${last%%:*}
+        [ "$name" = rust ] || continue
+        seen=$((seen + 1))
+        case "$last" in *:*) tag=${last#*:} ;; *) tag="" ;; esac
+        case "$base" in */*) prefix=${base%/*} ;; *) prefix="" ;; esac
+        case "$prefix" in
+          ""|library|docker.io/library) ;;
+          *) echo "  $f:$n: $ref is a Rust image from $prefix, not Docker Hub's official image"; continue ;;
+        esac
+        if [ -z "$tag" ]; then
+          echo "  $f:$n: $ref names no version at all; name rust:$want-slim-$dist in full"; continue
+        fi
+        v=${tag%%-*}
+        if [ "$v" != "$want" ]; then
+          echo "  $f:$n: $ref names $v, where rust-toolchain.toml pins $want; name the pinned version in full"
+        elif [ "$tag" != "$want-slim-$dist" ] && [ "$tag" != "$want-$dist" ]; then
+          echo "  $f:$n: $ref is not built on $dist, the runtime stage's distribution; name rust:$want-slim-$dist"
+        fi
+      done < <(sc_image_refs "$ln")
+    done < "$f"
+  done
+  echo "examined=$seen"
+}
+# `RUSTUP_TOOLCHAIN` is matched in any case as well: Windows reads environment
+# names case-insensitively, so `rustup_toolchain:` in a Windows job's `env:` IS
+# the variable (the second review's plant).
+sc_mechanisms() {
+  local f ln n seen=0
+  for f in "$@"; do
+    n=0
+    while IFS= read -r ln || [ -n "$ln" ]; do
+      n=$((n + 1)); seen=$((seen + 1))
+      case "${ln#"${ln%%[![:space:]]*}"}" in "#"*) continue ;; esac
+      if [[ $ln =~ $SC_MECH_RE ]] || [[ ${ln^^} == *RUSTUP_TOOLCHAIN* ]]; then
+        echo "  $f:$n: a toolchain named outside rust-toolchain.toml: ${ln#"${ln%%[![:space:]]*}"}"
+      fi
+    done < "$f"
+  done
+  echo "examined=$seen"
+}
+sc_native_cargo() {
+  awk '
+    function flush() {
+      if (job != "") {
+        jobs++
+        if (!cont && first_cargo) {
+          native++
+          if (!first_pin || first_pin > first_cargo)
+            printf "  %s: job %s runs cargo (line %d) outside a container without .github/scripts/pinned-toolchain.sh before it\n", fname, job, first_cargo
+        }
+      }
+      job = ""; cont = 0; first_cargo = 0; first_pin = 0
+    }
+    FNR == 1 { flush(); fname = FILENAME; inj = 0 }
+    /^[ ]*#/ { next }
+    /^[a-z]/ { flush(); inj = ($0 ~ /^jobs:/); next }
+    !inj { next }
+    /^  [a-z0-9_-]+:[ ]*$/ { flush(); job = $1; sub(/:$/, "", job); next }
+    /^    container:/ { cont = 1 }
+    /pinned-toolchain\.sh/ { if (!first_pin) first_pin = FNR }
+    { t = " " $0 " "; if (!first_cargo && t ~ /[^A-Za-z0-9_-]cargo[^A-Za-z0-9_-]/) first_cargo = FNR }
+    END { flush(); printf "examined=%d native=%d\n", jobs, native }
+  ' "$@"
+}
+
+# ── arm 4: the containers this script launches (O327) ──
+# One line per launch: the command with its continuation lines joined,
+# comments and heredoc bodies skipped (a heredoc holds data — the O314 step's
+# copy among it — and is never run here).
+sc_launches() {
+  awk -v sq="'" '
+    hd != "" { t = $0; sub(/^[\t]+/, "", t); if (t == hd) hd = ""; next }
+    {
+      line = $0
+      if (cur == "") { s = line; sub(/^[ \t]+/, "", s); if (substr(s, 1, 1) == "#") next }
+      i = index(line, "<<")
+      if (i > 0 && substr(line, i + 2, 1) != "<" && (i == 1 || substr(line, i - 1, 1) != "<")) {
+        d = substr(line, i + 2); sub(/^-/, "", d); sub(/^[ \t]+/, "", d)
+        gsub(sq, "", d); gsub(/"/, "", d)
+        if (match(d, /^[A-Za-z_][A-Za-z0-9_]*/)) nexthd = substr(d, RSTART, RLENGTH)
+      }
+      if (line ~ /\\$/) { sub(/\\$/, "", line); cur = cur line " " }
+      else {
+        cur = cur line; t = cur " "
+        if (t ~ /docker[ \t]+(container[ \t]+)?run[ \t]/) print FNR ": " cur
+        cur = ""
+      }
+      if (nexthd != "") { hd = nexthd; nexthd = "" }
+    }
+  ' "$1"
+}
+SC_IMGVAR_RE='"\$([A-Z][A-Z0-9_]*_IMG)"'
+SC_VOL_RE='(^|[[:space:]])(-v|--volume)[[:space:]=]+("[^"]*"|[^[:space:]]+)(.*)$'
+sc_containers() {  # <file>
+  local f=$1 launches line at var assign re rest spec seen=0
+  launches=$(sc_launches "$f")
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    seen=$((seen + 1)); at=${line%%:*}
+    if [[ $line =~ $SC_IMGVAR_RE ]]; then
+      var=${BASH_REMATCH[1]-}
+      assign=$(grep -E "^[[:space:]]*${var}=" "$f" || true)
+      re='^[[:space:]]*'"$var"'="[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}"$'
+      if [ "$(printf '%s\n' "$assign" | grep -c .)" != 1 ]; then
+        echo "  $f:$at: \$$var is assigned $(printf '%s\n' "$assign" | grep -c .) times; assign it once, by digest"
+      elif ! [[ $assign =~ $re ]]; then
+        echo "  $f:$at: \$$var is $(printf '%s' "${assign#*=}"), an image by tag; pin it by digest"
+      fi
+    else
+      echo "  $f:$at: a container launched with no *_IMG variable naming its image"
+    fi
+    rest=$line
+    while [[ $rest =~ $SC_VOL_RE ]]; do
+      spec=${BASH_REMATCH[3]-}; rest=${BASH_REMATCH[4]-}
+      spec=${spec#\"}; spec=${spec%\"}
+      case "$spec" in
+        *:ro|*:ro,*|*,ro) ;;
+        *) echo "  $f:$at: the mount $spec is writable; end it :ro" ;;
+      esac
+    done
+    case "$line" in
+      *--mount*) echo "  $f:$at: a --mount this reader does not judge; use -v with :ro" ;;
+    esac
+    case "$line" in
+      *"--network none"*|*"--network=none"*) ;;
+      *) echo "  $f:$at: a container with network; a preflight is offline (ROADMAP O65), so pass --network none" ;;
+    esac
+  done <<< "$launches"
+  echo "examined=$seen"
+}
+
+# sc_tally <label> <output> <want refusals> <min examined>
+# A probe's verdict: the refusals it printed must number exactly <want>, and
+# the reader must have examined at least <min>.
+sc_tally() {
+  local got ex
+  got=$(printf '%s\n' "$2" | grep -c '^  ' || true)
+  ex=$(printf '%s\n' "$2" | sed -n 's/^examined=\([0-9]*\).*/\1/p' | tail -1)
+  if [ "$got" != "$3" ] || [ "${ex:-0}" -lt "$4" ]; then
+    echo "FAIL  premise: $1 printed $got refusal(s) over ${ex:-no} examined, where it must print $3 over at least $4."
+    echo "      A reader that misses a planted defect, or refuses a clean sample, cannot be believed"
+    echo "      about the real files:"
+    printf '%s\n' "$2" | sed 's/^/        /'
+    SC_FAIL=1
+  fi
+}
+
+# ── the probes, both ways, on synthetic input ──
+mkdir -p "$SC_TMP/wf"
+printf '%s\n' 'jobs:' '  j:' '    steps:' \
+  '      - uses: owner/act@v1' \
+  "      - uses: owner/act@$SC_HEX40" \
+  '      - uses: actions/checkout@main' \
+  '      - uses: docker://alpine:3.20' \
+  '      - uses: owner/act' > "$SC_TMP/wf/actions-bad.yml"
+printf '%s\n' 'jobs:' '  j:' '    steps:' \
+  '      - uses: actions/checkout@v5' \
+  "      - uses: owner/act@$SC_HEX40 # v1.2.3" \
+  '      - name: local' '        uses: ./.github/actions/local' \
+  "      - uses: docker://alpine@sha256:$SC_HEX64" > "$SC_TMP/wf/actions-good.yml"
+sc_tally "the actions arm on five planted refs" "$(sc_actions "$SC_TMP/wf/actions-bad.yml")" 5 5
+sc_tally "the actions arm on a clean sample" "$(sc_actions "$SC_TMP/wf/actions-good.yml")" 0 4
+
+# The token spelled every way an expression accepts it: the property form, the
+# index form in either quote and any case — and once in the env of a step that
+# runs cargo, the review's plant, which the first build passed.
+printf '%s\n' 'name: x' 'permissions:' '  contents: write' 'env:' '  T: ${{ github.token }}' \
+  'jobs:' '  a:' '    permissions:' '      packages: write' '    env:' \
+  "      GH_TOKEN: \${{ SECRETS['GITHUB_TOKEN'] }}" '    steps:' '      - uses: actions/checkout@v5' \
+  '      - run: echo' '      - name: build' '        run: cargo build' '        env:' \
+  "          GH_TOKEN: \${{ github['token'] }}" > "$SC_TMP/wf/perm-bad.yml"
+printf '%s\n' 'name: y' 'jobs:' '  a:' '    steps:' '      - run: echo' > "$SC_TMP/wf/perm-none.yml"
+printf '%s\n' 'name: z' 'permissions:' '  contents: read' 'jobs:' '  a:' '    permissions:' \
+  '      contents: write' '    steps:' '      - uses: actions/checkout@v5' '        with:' \
+  '          persist-credentials: false' '      - run: cargo build' '      - run: gh release upload x' '        env:' \
+  '          GH_TOKEN: ${{ github.token }}' '  b:' '    steps:' \
+  '      - uses: actions/checkout@v5' > "$SC_TMP/wf/perm-good.yml"
+sc_tally "the permissions arm on six planted grants" \
+  "$(sc_permissions "$SC_TMP/wf/perm-bad.yml" "$SC_TMP/wf/perm-none.yml")" 6 2
+sc_tally "the permissions arm on a clean sample" "$(sc_permissions "$SC_TMP/wf/perm-good.yml")" 0 1
+
+# The pin's one reader, on copies of itself in throwaway trees: three files it
+# must refuse, one it must read.
+sc_pin_tree() {  # <dir> <toolchain file body, or empty for no file>
+  mkdir -p "$1/.github/scripts"
+  cp .github/scripts/pinned-toolchain.sh "$1/.github/scripts/"
+  if [ -n "$2" ]; then printf '%s\n' "$2" > "$1/rust-toolchain.toml"; fi
+}
+sc_pin_tree "$SC_TMP/pin-stable" $'[toolchain]\nchannel = "stable"\nprofile = "minimal"'
+sc_pin_tree "$SC_TMP/pin-extra" $'# a comment\n[toolchain]\nchannel = "1.2.3"\nprofile = "minimal"\ncomponents = ["clippy"]'
+sc_pin_tree "$SC_TMP/pin-absent" ""
+sc_pin_tree "$SC_TMP/pin-good" $'# a comment\n[toolchain]\nchannel = "1.2.3"\n\nprofile = "minimal"'
+for sc_t in pin-stable pin-extra pin-absent; do
+  if bash "$SC_TMP/$sc_t/.github/scripts/pinned-toolchain.sh" --channel >/dev/null 2>&1; then
+    echo "FAIL  premise: the pin's reader accepted $sc_t, a toolchain file that pins nothing exact"
+    SC_FAIL=1
+  fi
+done
+if [ "$(bash "$SC_TMP/pin-good/.github/scripts/pinned-toolchain.sh" --channel 2>&1)" != "1.2.3" ]; then
+  echo "FAIL  premise: the pin's reader did not read 1.2.3 from a well-formed toolchain file"
+  SC_FAIL=1
+fi
+# The two reviews' plants among them: an untagged `FROM rust`, another
+# registry's Rust image, a `latest` behind a `--platform` flag, an image named
+# by `COPY --from=` and by `RUN --mount=…,from=`, a builder on another
+# distribution than the runtime stage, one naming none, and a flow mapping.
+printf '%s\n' 'FROM rust:1.2-slim-bookworm AS b' 'FROM rust AS c' \
+  'FROM ghcr.io/rust-lang/rust:1.2.3 AS d' 'FROM --platform=linux/amd64 rust:latest AS e' \
+  'COPY --from=rust:1.2-slim-bookworm /usr/local/cargo /usr/local/cargo' \
+  'RUN --mount=type=bind,from=rust:1.2.4-slim-bookworm,target=/x true' \
+  'FROM rust:1.2.3-slim-trixie AS t' 'FROM rust:1.2.3 AS u' 'COPY --from=b /x /y' \
+  'FROM debian:bookworm-slim' > "$SC_TMP/Dockerfile.bad"
+printf '%s\n' 'services:' '  s:' '    image: "rust:1.2.4"' > "$SC_TMP/compose-bad.yml"
+printf '%s\n' 'jobs:' '  a:' '    container: {image: "rust:1.2-slim-bookworm"}' > "$SC_TMP/wf/img-bad.yml"
+printf '%s\n' '# FROM rust:9.9.9' 'FROM rust:1.2.3-slim-bookworm AS b' \
+  'FROM docker.io/library/rust:1.2.3-slim-bookworm AS c' \
+  'from --platform=linux/arm64 library/rust:1.2.3-bookworm AS d' 'COPY --from=b /x /y' \
+  'COPY --from=rust:1.2.3-slim-bookworm /usr/local/cargo /c' \
+  'FROM my/rusty:0.1 AS e' 'FROM debian:bookworm-slim' > "$SC_TMP/Dockerfile.good"
+printf '%s\n' 'jobs:' '  a:' '    container: {image: "rust:1.2.3-slim-bookworm", options: --cpus 1}' \
+  > "$SC_TMP/wf/img-good.yml"
+sc_tally "the image arm on ten planted images" \
+  "$(sc_images 1.2.3 bookworm "$SC_TMP/Dockerfile.bad" "$SC_TMP/compose-bad.yml" "$SC_TMP/wf/img-bad.yml")" 10 10
+sc_tally "the image arm on a clean sample" \
+  "$(sc_images 1.2.3 bookworm "$SC_TMP/Dockerfile.good" "$SC_TMP/wf/img-good.yml")" 0 5
+# And the review's toolchain plants: `rustup run`, another setup action, a
+# `toolchain:` input.
+printf '%s\n' '      - uses: dtolnay/rust-toolchain@stable' '        run: rustup default stable' \
+  '        run: cargo +nightly build' '        env:' '          RUSTUP_TOOLCHAIN: stable' \
+  '        run: rustup run nightly cargo build' \
+  "      - uses: actions-rust-lang/setup-rust-toolchain@$SC_HEX40 # v1" '        with:' \
+  '          toolchain: stable' '    env:' '      rustup_toolchain: 1.2.3' > "$SC_TMP/wf/mech-bad.yml"
+printf '%s\n' '      - run: rustup component add rustfmt clippy' '      # rustup default stable' \
+  '      - run: cargo build --release' '        with:' '          tool: cargo-audit' > "$SC_TMP/wf/mech-good.yml"
+sc_tally "the mechanism arm on eight planted toolchains" "$(sc_mechanisms "$SC_TMP/wf/mech-bad.yml")" 8 11
+sc_tally "the mechanism arm on a clean sample" "$(sc_mechanisms "$SC_TMP/wf/mech-good.yml")" 0 5
+printf '%s\n' 'jobs:' '  a:' '    steps:' '      - run: cargo build' '  b:' '    steps:' \
+  '      - run: cargo build' '      - run: bash .github/scripts/pinned-toolchain.sh' > "$SC_TMP/wf/cargo-bad.yml"
+printf '%s\n' 'jobs:' '  a:' '    steps:' '      - run: bash .github/scripts/pinned-toolchain.sh' \
+  '      - run: cargo build' '  c:' '    container: rust:1.2.3' '    steps:' '      - run: cargo build' \
+  '  d:' '    steps:' '      - with:' '          tool: cargo-audit' > "$SC_TMP/wf/cargo-good.yml"
+sc_tally "the native-cargo arm on two planted jobs" "$(sc_native_cargo "$SC_TMP/wf/cargo-bad.yml")" 2 2
+sc_tally "the native-cargo arm on a clean sample" "$(sc_native_cargo "$SC_TMP/wf/cargo-good.yml")" 0 3
+
+printf '%s\n' 'X_IMG="python:3-slim"' \
+  "git ls-files | $SC_DR --rm -i -v \"\$(pwd):/r\" -w /r \"\$X_IMG\" python t.py" \
+  "$SC_DR --rm alpine true" > "$SC_TMP/launch-bad.sh"
+printf '%s\n' "X_IMG=\"python:3.14-slim@sha256:$SC_HEX64\"" \
+  "git ls-files | $SC_DR --rm -i --network none \\" \
+  "  -v \"\$(pwd):/r:ro\" -w /r \"\$X_IMG\" python t.py" \
+  "# $SC_DR --rm unpinned:latest" \
+  "cat ${SC_HD}'EOF'" "$SC_DR --rm -v /:/host unpinned:latest" 'EOF' > "$SC_TMP/launch-good.sh"
+sc_tally "the containers arm on five planted defects" "$(sc_containers "$SC_TMP/launch-bad.sh")" 5 2
+sc_tally "the containers arm on a clean sample" "$(sc_containers "$SC_TMP/launch-good.sh")" 0 1
+rm -rf "$SC_TMP"
+
+if [ "$SC_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+# ── the real files ──
+SC_WFS=$(git ls-files '.github/workflows/*.yml' '.github/workflows/*.yaml')
+SC_IMGFILES=$(git ls-files | grep -E '(^|/)Dockerfile[^/]*$|(^|/)[^/]*compose[^/]*\.ya?ml$|^\.github/workflows/' || true)
+SC_PIN=$(bash .github/scripts/pinned-toolchain.sh --channel 2>&1)
+SC_PIN_RC=$?
+SC_PIN_MSG=$SC_PIN
+[ "$SC_PIN_RC" -eq 0 ] || SC_PIN="(no pin)"
+# The runtime stage's distribution, which every Rust image's tag must name: the
+# Dockerfile's one `FROM debian:<dist>-slim`. None, or two, is a premise
+# failure — the distribution check would otherwise compare against nothing.
+SC_DIST=""; SC_DIST_N=0
+while IFS= read -r sc_ln || [ -n "$sc_ln" ]; do
+  if [[ $sc_ln =~ $SC_RUNTIME_RE ]]; then SC_DIST=${BASH_REMATCH[1]}; SC_DIST_N=$((SC_DIST_N + 1)); fi
+done < Dockerfile
+if [ "$SC_DIST_N" -ne 1 ]; then
+  echo "FAIL  premise: the Dockerfile names $SC_DIST_N runtime base(s) of the form debian:<dist>-slim, where"
+  echo "      the toolchain arm needs exactly one to read the distribution every Rust image must match."
+  SC_FAIL=1; SC_DIST="(none)"
+fi
+# The file lists are tracked paths, newline-separated and free of spaces, so
+# they are word-split on purpose.
+SC_A=$(sc_actions $SC_WFS)
+SC_P=$(sc_permissions $SC_WFS)
+SC_I=$(sc_images "$SC_PIN" "$SC_DIST" $SC_IMGFILES)
+SC_M=$(sc_mechanisms $SC_IMGFILES)
+SC_N=$(sc_native_cargo $SC_WFS)
+SC_C=$(sc_containers tests/battery.sh)
+SC_BAD=$(printf '%s\n' "$SC_A" "$SC_P" "$SC_I" "$SC_M" "$SC_N" "$SC_C" | grep '^  ' || true)
+sc_num() { printf '%s\n' "$1" | sed -n "s/.*$2=\([0-9]*\).*/\1/p" | tail -1; }
+SC_A_N=$(sc_num "$SC_A" examined); SC_A_T=$(sc_num "$SC_A" third)
+SC_P_N=$(sc_num "$SC_P" examined); SC_P_J=$(sc_num "$SC_P" jobs)
+SC_I_N=$(sc_num "$SC_I" examined)
+SC_N_N=$(sc_num "$SC_N" native)
+SC_C_N=$(sc_num "$SC_C" examined)
+if [ "$SC_PIN_RC" -ne 0 ]; then
+  echo "FAIL  rust-toolchain.toml does not pin the toolchain (ROADMAP O294):"
+  printf '%s\n' "$SC_PIN_MSG" | sed 's/^/      /'
+  SC_FAIL=1
+fi
+# PREMISE: each reader examined what the tree really holds — measured
+# 2026-10-08 as four workflows of 21 jobs, 36 uses: of which 17 third-party, two
+# rust images, four jobs that run cargo outside a container and two launches.
+# The floors sit well below that.
+if [ "${SC_P_N:-0}" -lt 3 ] || [ "${SC_P_J:-0}" -lt 10 ] || [ "${SC_A_N:-0}" -lt 15 ] \
+   || [ "${SC_A_T:-0}" -lt 5 ] || [ "${SC_I_N:-0}" -lt 2 ] || [ "${SC_N_N:-0}" -lt 2 ] \
+   || [ "${SC_C_N:-0}" -lt 2 ]; then
+  echo "FAIL  premise: the readers examined ${SC_P_N:-0} workflow(s) of ${SC_P_J:-0} job(s), ${SC_A_N:-0} uses:"
+  echo "      (${SC_A_T:-0} third-party), ${SC_I_N:-0} rust image(s), ${SC_N_N:-0} native cargo job(s) and"
+  echo "      ${SC_C_N:-0} container launch(es) — the tree holds more than that, so a reader saw nothing."
+  SC_FAIL=1
+fi
+if [ -n "$SC_BAD" ]; then
+  echo "FAIL  the supply chain is not pinned (ROADMAP O294, O326, O327):"
+  printf '%s\n' "$SC_BAD"
+  SC_FAIL=1
+fi
+if [ "$SC_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    rust $SC_PIN on $SC_DIST everywhere ($SC_I_N image(s), $SC_N_N native cargo job(s) through the script);"
+echo "      $SC_A_T third-party action(s) by SHA in $SC_A_N uses: across $SC_P_N workflow(s) of $SC_P_J job(s),"
+echo "      no workflow-level write; $SC_C_N container launch(es) by digest, read-only and offline"
+
 # ---------------------------------------------------------------------------
 # The former-name trace check, INVOKED (ROADMAP O10).
 #
@@ -778,6 +1359,15 @@ fi
 # not run on the next machine. The tracked list is piped in so the image needs
 # no `git` and no `apt-get`.
 #
+# **The image is pinned by digest, and the checkout is mounted read-only with
+# no network (ROADMAP O327).** It was `python:3-slim`, a tag that moves
+# upstream routinely, with the working tree — `.git/hooks` included — mounted
+# read-write, while the scan only reads. The digest is the multi-arch index
+# `python:3-slim` resolved to on 2026-10-08 (Python 3.14.8), so the scan runs
+# the Python it ran the day before; a newer one is an edit here. The
+# `supply chain is pinned` preflight above holds all three for every
+# container this script launches, before this one runs.
+#
 # **Docker absent is a FAILURE, not a skip** — a preflight that skips reports
 # exactly what a clean tree reports, which is the whole defect class this file
 # exists to close.
@@ -788,7 +1378,7 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "      clean tree reports"
   exit 1
 fi
-NOTRACE_IMG="python:3-slim"
+NOTRACE_IMG="python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2"
 # The self-test first, on synthetic input: a known-positive file must be
 # CAUGHT. Its content is assembled here from fragments for the same reason the
 # scanner's needles are — this script is scanned too.
@@ -805,8 +1395,8 @@ printf 'a clean line\nthe %s%s%s name\n' "mne" "mos" "yne" > "$NOTRACE_PROBE"
 # first version of this line had the `!` and reported a working scanner as
 # broken — an inverted gate, which is the one kind that fails loudly rather
 # than silently, and the only reason it was cheap.
-if git ls-files | MSYS_NO_PATHCONV=1 docker run --rm -i \
-     -v "$(pwd):/r" -w /r "$NOTRACE_IMG" \
+if git ls-files | MSYS_NO_PATHCONV=1 docker run --rm -i --network none \
+     -v "$(pwd):/r:ro" -w /r "$NOTRACE_IMG" \
      python tests/no-trace/verify.py --stdin "$NOTRACE_PROBE" >/dev/null 2>&1; then
   echo "FAIL  the scanner did not catch a planted known-positive — it cannot be believed"
   rm -f "$NOTRACE_PROBE"
@@ -814,8 +1404,8 @@ if git ls-files | MSYS_NO_PATHCONV=1 docker run --rm -i \
 fi
 rm -f "$NOTRACE_PROBE"
 # …then the tree itself.
-NOTRACE_OUT=$(git ls-files | MSYS_NO_PATHCONV=1 docker run --rm -i \
-  -v "$(pwd):/r" -w /r "$NOTRACE_IMG" python tests/no-trace/verify.py --stdin 2>&1)
+NOTRACE_OUT=$(git ls-files | MSYS_NO_PATHCONV=1 docker run --rm -i --network none \
+  -v "$(pwd):/r:ro" -w /r "$NOTRACE_IMG" python tests/no-trace/verify.py --stdin 2>&1)
 if [ $? -ne 0 ]; then
   # Two different failures share this exit code, and saying the wrong one is
   # its own defect: a disarmed scanner is not a dirty tree.

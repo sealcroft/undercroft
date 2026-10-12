@@ -482,7 +482,8 @@ Consequences that are binding, not advisory:
   rule for which manifest a handle's rows answer to (O266)**:
   `manifest_in_force`, read by `anchored_head`, `anchored_writes`,
   `verified_manifest` and, since O288, the read-only open's
-  `deferral_in_force` alone. Ordinarily `vault.json`; on a handle whose
+  `deferral_in_force` alone, and since O213 `manifest_history_in_force`, which
+  the read-only open's arms ask before the database. Ordinarily `vault.json`; on a handle whose
   keys came from `vault.json.next` (a read-only open that adopted a
   committed rotation, or the rotating handle after a deferred promote),
   the STAGED manifest — `.next` read first, then `vault.json`, and only
@@ -509,7 +510,7 @@ Consequences that are binding, not advisory:
   early return there turned a directory planted at `.next` into `VERIFY OK`
   beside a forged manifest. The strict readers — `manifest_on_disk_is_mine`,
   the anchor's own read, `promote` — never take it, and a source gate
-  counts the four readers, the guarded read's callers, and the three bare
+  counts the five readers, the guarded read's callers, and the three bare
   manifest reads left in `lib.rs` (O293 files them, and the ones in
   `restores.rs` and `backups.rs`); a
   `test-fixture` feature carries the fault seam, since a nonce name cannot
@@ -1427,7 +1428,19 @@ Consequences that are binding, not advisory:
   distinct text now takes its own slot, `ids::quarantine_version_id` keyed
   with the STORED `kg_secret` (never a vault key, never unkeyed), chosen at
   the door with a batch-local map and backstopped inside the write
-  transaction, and equal text converges; **an allow never replaces or
+  transaction, and equal text converges — **carrying the pending row's
+  whole covered declaration (O226)**, its signals the one field that grows
+  (`admission::converged_meta`, at the door, in the batch's taken map, and
+  checked by the backstop's `carries`), so a converger cannot back-date
+  `filed_at` or attach a `kind` or `supersedes` the reviewer never saw;
+  **"pending" is the HMAC-covered wing (O221)** — ONE predicate,
+  `queue_standing`, reads the covered wing where the row verifies and the
+  clear column only where it does not, for every destruction and write
+  fence (both dedup doors included), the read fences refuse on EITHER
+  copy over their own probe, and `admission list` walks the vault by the
+  same rule and reports a row it cannot verify beside the rest (`ok`
+  false, by `seq`, a malformed id only by its length) instead of failing
+  on it; **an allow never replaces or
   re-creates what the screen never saw (O224)** — it re-filed over whatever
   the destination held, so a flagged update an agent parked over MCP before
   a clean one reverted the drawer when allowed, and a drawer forgotten in
@@ -1458,7 +1471,19 @@ Consequences that are binding, not advisory:
   provable forgetting (forget.rs — C3.2 phase 1: `forget`/
   `verify-forgetting`, chain-attested destruction with heads + tombstone
   interval + unkeyed content fps; vault-verifiable by keyed replay, third
-  parties verify the operator's Ed25519 signature. **The keyed replay has a
+  parties verify the operator's Ed25519 signature. **A document carrying
+  what this build does not know is NOT CHECKED, never forged and never
+  verified (O315)**: the three types, and the witness, capture every key
+  they do not declare instead of dropping it, and `age_fence` — the
+  verifier's first statement, ahead of the vault, the signature and every
+  tag — refuses an unknown `version` or key unread (`Invalid`: exit 1,
+  `/v1` 400 with no class), saying a newer build may have minted it OR it
+  was altered, never which. Signature-first over a canonical recomputed
+  without the key is how 1.1.0's `mirror` reads as forged to every older
+  build. The cost, stated: a forgery that adds a key no build declares is
+  exit 1 from every build, present and future, where without it it is
+  exit 2 — whether "not checked" needs its own exit class is filed for the
+  maintainer (O429). **The keyed replay has a
   SHORTER LIFETIME than the document it checks, and pretending otherwise was
   a CRITICAL** (O13): rotation destroys the mac key that made the tombstones,
   so every genuine receipt reported `ATTESTATION FAILED` at exit 2 — the
@@ -1828,13 +1853,33 @@ Consequences that are binding, not advisory:
   reads the height, a head without one `Inconsistent`. Only `Empty` is
   adopted, in `adopt_empty_chain`, under the write lock, judged again there,
   with `chain::seed_empty`, which takes no value at all; the read-only open
-  answers it `ReadOnlyUnmigrated`. Seeding the REPLAYED head (the filing's
+  answers it O213's posture refusal, `ReadOnlyNoAnchoredWrite` (it was
+  `ReadOnlyUnmigrated`). Seeding the REPLAYED head (the filing's
   shape) was measured worse: the store computed the keyed head over a row a
   writer without the key appended, and the switch bound its label. A
   database a source build older than 0.19.0 wrote — this repository's
   history was rewritten at the rename and derives the same keys — is refused
-  with them (a `vault.db` deleted outright is still created by the
-  writable connect before the refusal, O308). Test pause points live in
+  with them. **And no open creates a database beside a manifest that
+  records history (O308)**: one door, `absent.rs`, asked in
+  `recorded_embedder`, at the head of both opens and on `connect_writable`'s
+  one layout read — the crate's only `SQLITE_OPEN_CREATE` grant — surveys the
+  directory by a stat that follows a link (no main file, or one of length 0,
+  is no content), binds the unlock's values to `vault.json`'s bytes (a vault
+  deleted and created again beneath the open is the reopen class, never a
+  tamper page), names and keeps a non-empty `-wal`, and asks ONE predicate,
+  `undercroft_vault::ManifestHistory` over the MAC-covered head and height:
+  *History* is `DatabaseMissing` on both postures with nothing created, *Mixed*
+  `ManifestTampered`, *Fresh* starts writable and is the read-only posture
+  refusal (O213) — for an empty chain too, with or without its table. A
+  read-only arm that reads the database's emptiness as an erased trail reads
+  the manifest FIRST (O253's order) and never raises the integrity class on a
+  BLIND handle, `immutable=1` beside a non-empty `-wal` it cannot read — the
+  unit's first build did, measured by its review. Every open-path refusal after O7's rename or the schema
+  batch says what it leaves as found (`CHAIN_AS_FOUND`, O322), never "nothing
+  was written", and a source gate classifies every such literal. A dangling
+  link at `vault.db` beside a fresh manifest still makes the writable open
+  create the link's target outside the vault directory — filed, pinned as a
+  cost. Test pause points live in
   `rotate_pause.rs`, never inline here — an inline `#[cfg(test)]` blinds
   `rotation_names_every_key_derived_artifact`),
   bulk ingest
@@ -1849,7 +1894,8 @@ Consequences that are binding, not advisory:
   closes the REWIND direction below the witnessed height and nothing above
   it; three records that said it closes forged-append were corrected beside.
   Own door on the `verify-forgetting` precedent, CLI always read-only, typed
-  verdict, foreign vault = integrity finding; on `/v1` as `GET`/`POST
+  verdict, foreign vault = integrity finding, an unknown version or key NOT
+  CHECKED before the signature (O315, the receipt's fence); on `/v1` as `GET`/`POST
   …/witness` (the fourth POST that reads) and the orchestrator's ops plane;
   **not on MCP** by the maintainer's ruling. The emit refuses a genesis
   chain and a pending A10 walk, whose relabel moves the digest)
@@ -2300,11 +2346,14 @@ Consequences that are binding, not advisory:
   the posture one call later was already too late. Each of those is
   DETECTED and REPORTED instead, on `VaultStats.unhealed` (all three
   surfaces) and as a warning at open. Two conditions refuse rather than
-  report, both 409: an absent `vault.db` under a present manifest
-  (`DatabaseMissing`, A33 — "empty" is not "absent", and it is an
-  integrity verdict, so exit 2), and a schema a read-only role would have
-  had to migrate (`ReadOnlyUnmigrated`, exit 1 — the vault is intact, the
-  posture is simply wrong for it). A vault whose writer crashed
+  report, all 409: an absent `vault.db` under a manifest that records
+  history (`DatabaseMissing`, A33 — "empty" is not "absent", and it is an
+  integrity verdict, so exit 2, on the writable posture too since O308), a
+  manifest that records NO anchored write — what `init` leaves
+  (`ReadOnlyNoAnchoredWrite`, exit 1, O213: it was A33's exit 2 on every
+  fresh volume) — and a schema a read-only role would have had to migrate
+  (`ReadOnlyUnmigrated`, exit 1 — the vault is intact, the posture is simply
+  wrong for it). A vault whose writer crashed
   mid-rotation still opens, which is the case that made reporting the
   right rule — **and since O266 it verifies too**: the open adopts the
   staged keys in memory and compares the rows with the STAGED manifest.
@@ -2824,7 +2873,8 @@ Consequences that are binding, not advisory:
   the vendored `tiny_http`), `LICENSE` (BUSL 1.1 — see Conventions)
 - `.github/workflows/release.yml` — on every `v*` tag: five binary
   targets (linux x86_64/arm64 native, macOS Intel cross-compiled on
-  macos-latest + Apple Silicon, windows) uploaded to the release with
+  macos-latest + Apple Silicon, windows), each built on the toolchain
+  `rust-toolchain.toml` pins (ROADMAP O294), uploaded to the release with
   sha256, and the multi-arch `ghcr.io/sealcroft/undercroft` image
   (per-arch native builds merged into one manifest; index annotations
   carry the package description). Since the posture-configs unit also
@@ -2857,8 +2907,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1380 run,
-                                      # 17 #[ignore]d = 1397 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1425 run,
+                                      # 17 #[ignore]d = 1442 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -3004,8 +3054,8 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (833 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (189 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (878 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (201 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (62 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
@@ -3230,7 +3280,7 @@ own teardown was the place it had not been applied. Gated by the
 `destructive compose scope` preflight, which requires every compose teardown
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the twenty-three host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the twenty-four host-side preflights
 and no suite**, which is what CI invokes. They read the release tags since
 O309: a `--depth 1` clone fetches them first, as CI's `preflight` job does. **A count the battery cannot trust is never compared to a published figure, and there are TWO ways to earn that (O97/O103): the suite EXITED NON-ZERO — `cargo test` aborts at the first failing target, so a numeric, replay-free count arrives over a fraction of them — or the reader disowned it with a `PREMISE FAILURE` marker. `count_untrustworthy` is the one place that question is answered, because it used to be answered twice and differently: the cargo arm guarded on the marker, the shell arm stripped it with a trailing `.*`, and neither looked at the exit code. It fails either way — a gate that cannot measure must not report clean — and the verdict names WHICH cause, because the message was written for a replay and told the reader to re-run a failure that was deterministic. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
@@ -3277,7 +3327,7 @@ code — including the post-run comparison of each suite's MEASURED check count
 against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
 and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
 request and a leg dropping from 370 checks to 3 was green. The flag skips the
-twenty-three preflights because the dedicated `preflight` job already runs them
+twenty-four preflights because the dedicated `preflight` job already runs them
 (twice since O314, the second time under Debian 12's mawk). **The shared readers — `test_summary`, `suite_summary`,
 `declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
 skipped block**, and that is not tidiness: with them inside, `--no-preflight`
@@ -3425,7 +3475,7 @@ mount it — `docker compose run --rm test` without `--build` silently
 re-runs whatever was baked into the last image, so a "green" run can be
 testing code you already changed. rustfmt cannot fix host files from those
 images either; mount the repo instead:
-`docker run --rm -v "<repo>:/src" -w /src rust:1.90-slim-bookworm sh -c "rustup component add rustfmt; cargo fmt --all"`
+`docker run --rm -v "<repo>:/src" -w /src rust:1.98.1-slim-bookworm sh -c "rustup component add rustfmt; cargo fmt --all"`
 
 CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
 (no `--workspace`, so the two excluded model crates are fmt'd but not clippy'd
@@ -3435,7 +3485,7 @@ does** (O84).
 **That job runs cargo DIRECTLY, not the compose service, and the two
 definitions can disagree** — a fact worth knowing before adding a check to
 either. It is not an oversight to route around: the job runs in a
-`rust:1.90-slim-bookworm` container with no docker, so it cannot go through
+`rust:1.98.1-slim-bookworm` container with no docker, so it cannot go through
 `tests/battery.sh` the way M13 routed the suite legs. It bit immediately —
 O84's first fix added the telemetry lint to the compose service alone, which
 would have covered every local battery and NO pull request, i.e. exactly what
@@ -3458,6 +3508,32 @@ for the target, and linking stays `release.yml`'s job. **A target you SHIP is
 a target that must be compiled on a pull request** — the same rule as *ask
 what a gate can SEE*, applied to the platform axis rather than to an
 observable.
+**One toolchain builds everything, and CI's supply chain is pinned (ROADMAP
+O294, O326, O327).** `rust-toolchain.toml` names the version the Docker images
+carry — the Dockerfile's builder and CI's lint container name it in full,
+`rust:1.98.1-slim-bookworm` — and `.github/scripts/pinned-toolchain.sh` is the
+one way CI installs it: by name, the job's target added, and a failure unless
+`rustc` in the checkout reports exactly that version. Until it existed every
+release binary was built by its runner image's own stable (1.97.1 or 1.98.x
+across the v1.* releases, two compilers inside one release from v1.2.0 to
+v1.5.1) while every suite and every image ran 1.90.0 — and **the pin's VALUE
+is an identity decision**, which the first build missed: the hash embedder's
+tokens read std's Unicode tables, 1.90's are Unicode 16 and every shipped
+binary's were 17, so one `undercroft-hash-v3` named two token spaces (O421,
+whose walk ships in the same release as this pin; no tag carries one without
+the other). `undercroft-core` therefore asserts at COMPILE time that std's and
+the locked `unicode-normalization`'s tables are both Unicode 17.0.0, so a
+toolchain whose std moves Unicode version fails every build until someone
+rules it (O422). Every third-party action is named by its
+full commit SHA with its version in a comment (GitHub-owned `actions/*` by
+version tag); every workflow reads by default and a job takes the write it
+needs, checks out with `persist-credentials: false`, and keeps the token out
+of every `env:` block but its step's — and out of any step that runs cargo.
+The binary jobs still HOLD `contents: write` while their build scripts run,
+which O325's separate upload jobs close. The `supply chain is pinned` preflight
+holds all of it, and every container the preflights launch: by digest,
+read-only, offline. **A toolchain bump is one change** to the file and both
+image references, and the preflight names whichever was missed.
 The tenth is **`house-figures`** (ROADMAP O65), and it is the ONLY check in
 the tree that needs the INTERNET — which is exactly why it is a CI job and
 not a `tests/battery.sh` preflight: the preflights run on every local battery

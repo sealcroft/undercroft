@@ -176,6 +176,23 @@ pub struct DrawerMeta {
     pub occurrences: Vec<Occurrence>,
 }
 
+impl DrawerMeta {
+    /// This metadata as it is stored: [`Drawer::meta_at_rest`]'s one
+    /// implementation, which that method calls. Here so a caller holding only
+    /// the metadata — a review-queue convergence comparing a stored row with
+    /// what it would write (ROADMAP O226) — compares the stored form without a
+    /// second copy of what the stored form drops.
+    #[must_use]
+    pub fn at_rest(&self) -> DrawerMeta {
+        let mut meta = self.clone();
+        for m in &mut meta.time_mentions {
+            m.text.clear();
+        }
+        meta.entities.clear();
+        meta
+    }
+}
+
 /// A drawer: one verbatim piece of content, its deterministic id, and its metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Drawer {
@@ -336,12 +353,7 @@ impl Drawer {
     /// storage contract instead of two.
     #[must_use]
     pub fn meta_at_rest(&self) -> DrawerMeta {
-        let mut meta = self.meta.clone();
-        for m in &mut meta.time_mentions {
-            m.text.clear();
-        }
-        meta.entities.clear();
-        meta
+        self.meta.at_rest()
     }
 
     /// Record that this same content was also seen as `other`, keeping the

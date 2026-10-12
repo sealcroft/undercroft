@@ -869,6 +869,43 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-cli/src/ui.html",
         "async function loadAdmission()",
     ),
+    // ROADMAP O221: the queue reports the rows it cannot verify BESIDE the
+    // readable ones, and `ok` is the verdict. The CLI and the console project
+    // all three by hand, and `/v1` builds its reply object field by field —
+    // a fourth key added to the struct would reach none of them silently.
+    (
+        "undercroft-store/src/admission.rs",
+        "AdmissionQueue",
+        "undercroft-cli/src/main.rs",
+        "AdmissionAction::List",
+    ),
+    (
+        "undercroft-store/src/admission.rs",
+        "AdmissionQueue",
+        "undercroft-cli/src/tenant.rs",
+        "fn admission_list(&mut self",
+    ),
+    (
+        "undercroft-store/src/admission.rs",
+        "AdmissionQueue",
+        "undercroft-cli/src/ui.html",
+        "async function loadAdmission()",
+    ),
+    // Each unverifiable row, on the two renderers that print it by hand
+    // (`/v1` serializes it whole). Its `id` travels only when it has a
+    // derived id's shape, so both renderers name the other arm by its length.
+    (
+        "undercroft-store/src/admission.rs",
+        "UnverifiableQueueRow",
+        "undercroft-cli/src/main.rs",
+        "AdmissionAction::List",
+    ),
+    (
+        "undercroft-store/src/admission.rs",
+        "UnverifiableQueueRow",
+        "undercroft-cli/src/ui.html",
+        "async function loadAdmission()",
+    ),
     (
         "undercroft-store/src/retention.rs",
         "RetentionPolicy",
@@ -1597,6 +1634,56 @@ mod tests {
         assert!(
             window.contains("401"),
             "the 401 branch is not inside connect()"
+        );
+    }
+
+    /// **The console calls only an INTEGRITY verdict a failed attestation**
+    /// (ROADMAP O315, the fourth renderer).
+    ///
+    /// The engine answers a receipt carrying a field or a version it does
+    /// not know with the caller's 400 — refused unread, NOT CHECKED — and
+    /// keeps 409 + `class: "integrity"`
+    /// for a document that does not describe the vault. The console toasted
+    /// "ATTESTATION FAILED" on EVERY error, so it went on calling a genuine
+    /// receipt forged on the surface most operators drive, after every other
+    /// surface had stopped. The page compiles nothing, so its source is the
+    /// observable: the failed toast must sit behind the class, and the class
+    /// must travel on the error `api()` throws.
+    ///
+    /// COUNTERFACTUAL, run against `5108dfa`'s `ui.html`: the gate is absent
+    /// and the first assertion fails.
+    #[test]
+    fn the_console_calls_only_an_integrity_verdict_a_failed_attestation() {
+        let src = include_str!("ui.html");
+        let at = src
+            .find("async function verifyAttestation()")
+            .expect("verifyAttestation() is not in ui.html any more — stale gate");
+        let end = at + src[at..].find("\n}\n").expect("the function's end");
+        let body = &src[at..end];
+        // The toast CALL, never the bare words: the comment above it quotes
+        // them, and finding the comment first measured the wrong line.
+        let failed = body
+            .find("toast(\"ATTESTATION FAILED")
+            .expect("premise: the failed toast is inside verifyAttestation()");
+        let gate = body.find("e.cls === \"integrity\"").expect(
+            "the failed toast must be gated on the integrity class — a refusal that is not a \
+             verdict (a receipt the engine could not read, a malformed body) must not read as forged",
+        );
+        assert!(
+            gate < failed,
+            "the class check must come before the failed toast"
+        );
+        assert!(
+            body.contains("NOT CHECKED"),
+            "a refusal that is not a verdict must say the document was not checked"
+        );
+        let api = src
+            .find("async function api(")
+            .expect("api() is not in ui.html any more — stale gate");
+        let api_end = api + src[api..].find("\n}\n").expect("api()'s end");
+        assert!(
+            src[api..api_end].contains("err.cls = cls"),
+            "api() must carry the response's class on the error it throws"
         );
     }
 

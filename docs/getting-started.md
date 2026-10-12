@@ -24,7 +24,9 @@ full `docker run -i` command below.
 Prebuilt binaries (Linux x86_64/arm64, macOS Intel/Apple Silicon, Windows) are
 attached to every [release](https://github.com/sealcroft/undercroft/releases/latest),
 with SHA-256 checksums. Or native: `cargo build --release` →
-`target/release/undercroft`.
+`target/release/undercroft` — rustup builds it with the toolchain
+`rust-toolchain.toml` pins, the one the release binaries are built with, and
+fetches it on first use.
 
 ## First palace
 

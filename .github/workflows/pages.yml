@@ -4,10 +4,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# The workflow reads. The deploy job alone writes Pages and mints the OIDC
+# token a deployment authenticates with; the build job, which runs the
+# third-party mdBook action, reads the Pages site's configuration and nothing
+# more (ROADMAP O326). Third-party actions are pinned by commit.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -16,9 +18,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read # configure-pages reads the site's configuration
     steps:
       - uses: actions/checkout@v5
-      - uses: peaceiris/actions-mdbook@v2
+      - uses: peaceiris/actions-mdbook@ee69d230fe19748b7abf22df32acaa93833fad08 # v2.0.0
         with:
           mdbook-version: "0.5.4"
       # Build + assemble + check, through the same script `docker compose run
@@ -36,6 +41,9 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write # publish the deployment
+      id-token: write # the OIDC token deploy-pages authenticates with
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
