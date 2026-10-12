@@ -1360,6 +1360,28 @@ impl Vault {
         )
     }
 
+    /// [`ManifestHistory`] over the manifest IN FORCE, read from disk now —
+    /// the manifest rule's fifth reader (ROADMAP O213), for the store's
+    /// read-only arms that meet a database beside which nothing was migrated.
+    /// They read it BEFORE they read the database, O253's order: read after,
+    /// a first writable open committing and anchoring between the two reads
+    /// would pair an empty database with a manifest that records history, a
+    /// false tamper verdict.
+    ///
+    /// It raises nothing and answers `None` for any miss — a caller that needs
+    /// the miss's class asks [`verified_manifest`](Self::verified_manifest),
+    /// which raises what a refusal raises — so a forged manifest pages once,
+    /// where the open would page it anyway, never twice.
+    pub fn manifest_history_in_force(&self) -> Option<ManifestHistory> {
+        self.manifest_in_force().ok().map(|m| {
+            ManifestHistory::of(
+                &m.manifest.chain_head_hex,
+                m.manifest.writes,
+                self.has_pending(),
+            )
+        })
+    }
+
     /// **Whether `vault.json` is still the bytes this handle's unlock
     /// MAC-verified** (ROADMAP O308, its ruling of 2026-10-08, item 2) — the
     /// binding that makes the unlock's verified values evidence about the
@@ -5014,16 +5036,20 @@ mod tests {
         };
 
         let call = concat!("self.manifest_in", "_force()");
+        // ROADMAP O213: a fifth, `manifest_history_in_force`, which the
+        // store's read-only arms ask BEFORE the database (O253's order) and
+        // which raises nothing.
         assert_eq!(
             prod.matches(call).count(),
-            4,
-            "the manifest rule has exactly four readers"
+            5,
+            "the manifest rule has exactly five readers"
         );
         for reader in [
             "anchored_head",
             "anchored_writes",
             "verified_manifest",
             "deferral_in_force",
+            "manifest_history_in_force",
         ] {
             assert!(
                 body(reader).contains(call),
@@ -5129,6 +5155,7 @@ mod tests {
             "deferral_in_force",
             "absent",
             "unlock_still_binds",
+            "manifest_history_in_force",
         ] {
             assert!(
                 !body(silent).contains(emit)

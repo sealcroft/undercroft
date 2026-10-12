@@ -482,7 +482,8 @@ Consequences that are binding, not advisory:
   rule for which manifest a handle's rows answer to (O266)**:
   `manifest_in_force`, read by `anchored_head`, `anchored_writes`,
   `verified_manifest` and, since O288, the read-only open's
-  `deferral_in_force` alone. Ordinarily `vault.json`; on a handle whose
+  `deferral_in_force` alone, and since O213 `manifest_history_in_force`, which
+  the read-only open's arms ask before the database. Ordinarily `vault.json`; on a handle whose
   keys came from `vault.json.next` (a read-only open that adopted a
   committed rotation, or the rotating handle after a deferred promote),
   the STAGED manifest — `.next` read first, then `vault.json`, and only
@@ -509,7 +510,7 @@ Consequences that are binding, not advisory:
   early return there turned a directory planted at `.next` into `VERIFY OK`
   beside a forged manifest. The strict readers — `manifest_on_disk_is_mine`,
   the anchor's own read, `promote` — never take it, and a source gate
-  counts the four readers, the guarded read's callers, and the three bare
+  counts the five readers, the guarded read's callers, and the three bare
   manifest reads left in `lib.rs` (O293 files them, and the ones in
   `restores.rs` and `backups.rs`); a
   `test-fixture` feature carries the fault seam, since a nonce name cannot
@@ -1823,7 +1824,11 @@ Consequences that are binding, not advisory:
   `undercroft_vault::ManifestHistory` over the MAC-covered head and height:
   *History* is `DatabaseMissing` on both postures with nothing created, *Mixed*
   `ManifestTampered`, *Fresh* starts writable and is the read-only posture
-  refusal (O213). Every open-path refusal after O7's rename or the schema
+  refusal (O213) — for an empty chain too, with or without its table. A
+  read-only arm that reads the database's emptiness as an erased trail reads
+  the manifest FIRST (O253's order) and never raises the integrity class on a
+  BLIND handle, `immutable=1` beside a non-empty `-wal` it cannot read — the
+  unit's first build did, measured by its review. Every open-path refusal after O7's rename or the schema
   batch says what it leaves as found (`CHAIN_AS_FOUND`, O322), never "nothing
   was written", and a source gate classifies every such literal. A dangling
   link at `vault.db` beside a fresh manifest still makes the writable open

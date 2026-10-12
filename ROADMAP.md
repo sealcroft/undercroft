@@ -12620,9 +12620,11 @@ vault's EMPTY chain).
 **Noted 2026-10-12 by O213's build** (its ruling of 2026-10-08, item 3, which this entry's note bound
 the empty chain to): the read-only open answers the EMPTY chain `ReadOnlyNoAnchoredWrite` beside a
 manifest that records no anchored write, and `ManifestTampered` beside one that records something —
-it was `ReadOnlyUnmigrated`. Its absent-table twin, a database holding every other table, keeps
-`ReadOnlyUnmigrated` under item 3's "part of a schema", so the pair answers two variants of one exit
-class. The pinned read-only class moved in `headless_tests::o303_only_the_empty_chain_is_adopted`
+it was `ReadOnlyUnmigrated`. Its absent-table twin answers the same — this entry's "one state, one
+class", kept (the unit's first build split them; its review refused that). On a read-only handle that
+cannot see a hot `-wal` (`immutable=1`), the history arms answer `ReadOnlyUnmigrated` as before; this
+entry's own `Erased` and `Orphaned` arms share that hole and stand, named in O-NEW-o213-2. The pinned
+read-only class moved in `headless_tests::o303_only_the_empty_chain_is_adopted`
 and in the CLI's `o303_open_store_as_read_only_declines_the_empty_chain` and
 `o303_surfaces_answer_an_erased_trail_and_the_empty_chain`. A deleted `vault.db` beside a manifest
 past genesis is no longer this entry's `Erased` state on the writable posture: O308's door refuses it
@@ -16600,6 +16602,16 @@ open create the link's target outside the vault directory (126,976 bytes after o
 absent either way. Beside a *History* manifest the followed stat reads it as no content and refuses
 with nothing created (pinned). Filed as **O-NEW-o213-1**.
 
+**After the independent review (2026-10-12).** The CREATE gate counted the `SQLITE_OPEN_CREATE` token
+alone, while `Connection::open` (rusqlite's default flags) and `OpenFlags::default()` carry CREATE too:
+it now counts all three spellings, each proved on planted text, against a two-row allowlist — the vault
+grant in `connect_writable`, and `backup.rs`'s `Connection::open` of the archive's own stage under
+`backups/.staging`, never a vault directory. A planted `Connection::open` in another function fails it.
+The two doc comments that still described the pre-O308 flow (`open_read_only`'s, `recorded_embedder`'s)
+are corrected. The O322 literal gate met three literals `main` brought in at the merge
+(`admission.rs`'s `allow_in`, `keys.rs`'s `already_exists` and `corrupt_key_file_message`), each read
+and true where raised, and classifies them.
+
 **What remains.** O302's predicate goes between the door's (a) and (b) when it is built (its item
 5); until then the binding answers its absent-database race with the reopen class, and an absent
 `vault.json` at that arm is the manifest rule's integrity answer where O302 rules the reopen class.
@@ -16777,16 +16789,19 @@ reason; MCP never sees it, because `serve-mcp --read-only` refuses at start (exi
 store tests are split (item 7): each keeps a written-then-deleted arm (`DatabaseMissing`, nothing
 created) and gains a fresh arm (this variant, nothing created).
 
-**Read literally, and stated.** Item 3's "part of a schema" decides the EMPTY chain's absent-table
-twin: a database holding every other table and no `chain_meta` keeps `ReadOnlyUnmigrated`, where
-the empty chain with its table answers this variant — O303's "one state, one class" for the pair
-moves with O303's own note that the state follows this ruling. O303's pinned read-only class is
-moved in `headless_tests::o303_only_the_empty_chain_is_adopted` and the CLI's
+**The EMPTY chain and its absent-table twin answer one variant** — O303's "one state, one class",
+which item 3 moves to this variant for the empty chain and does not split: `refuse_headless_without_table`
+answers a judged `Headless::Empty` (the `audit` table empty, no `chain_meta` table, the anchor at
+genesis) through the same helper as `check_chain_read_only`. The first build of this unit kept the twin
+on `ReadOnlyUnmigrated` on its own reading of item 3's "part of a schema" — two variants for one state,
+which the unit's independent review refused; corrected the same day. A database holding part of the
+schema and no `audit` table keeps `ReadOnlyUnmigrated`. O303's pinned read-only class is moved in
+`headless_tests::o303_only_the_empty_chain_is_adopted` (both table arms) and the CLI's
 `o303_open_store_as_read_only_declines_the_empty_chain` and
 `o303_surfaces_answer_an_erased_trail_and_the_empty_chain`, recorded beside O303.
 
 **Gates.** `absent_tests.rs`: `o213_one_never_anchored_vault_answers_one_variant` (no database, a
-zero-length one, a one-page database with no table, an empty chain; part of a schema stays
+zero-length one, a one-page database with no table, an empty chain with and without its table; part of a schema stays
 `ReadOnlyUnmigrated`) and `o213_a_schema_less_database_beside_a_recording_manifest_is_tampering_on_both`
 (items 4 and 5). `tests/cli.rs`: `o213_o308_a_fresh_vault_and_a_deleted_database_on_every_surface` —
 P13 through the binary: `--read-only search` and `stats`, `--read-only serve-mcp`, `serve-mcp
@@ -16808,6 +16823,30 @@ run 1 found. On the mined corpus a fresh sibling vault exits 1 and `--read-only 
 verdict on a FRESH vault — the ruling's "fails silently if the A33 fixtures stay on fresh vaults
 only", live; under this build it answered the posture refusal. It writes through `--vault` now, with
 a premise that the manifest records a write.
+
+**After the independent review, own defects corrected (2026-10-12).** (1) **A FALSE TAMPER VERDICT
+this unit introduced, measured by the reviewer**: item 5's arm read "no `audit` table" as the erased
+trail on a handle that cannot see the `-wal` — a young vault whose writer was killed before any
+checkpoint (a one-page main file with no table, every table in a hot `-wal`), its `-shm` gone, on a
+read-only mount, escalates to `immutable=1`, which reads no `-wal`, and `--read-only stats` and `verify`
+answered `ManifestTampered`, exit 2, where they answered `ReadOnlyUnmigrated`, exit 1. A tamper verdict
+needs evidence the handle can SEE: the read-only open now marks a handle BLIND when it escalated and a
+non-empty `-wal` (or one a stat cannot read) stands beside its file, and on a blind handle item 5's arm
+and the empty chain's history arm answer the pre-unit `ReadOnlyUnmigrated` and say why in a warning; a
+*Mixed* manifest stays `ManifestTampered`, the manifest alone being that evidence.
+`o213_a_blind_handle_never_reads_a_hot_wal_as_an_erased_trail` builds the reviewer's state (the files a
+kill leaves, the escalation forced as O279's gate forces it, its pause point witnessed): red with
+`ManifestTampered` with the guard off, green with it. Whether a better answer exists is
+**O-NEW-o213-2**'s. O303's own head-less arms (`Erased`, `Orphaned`) share the hole on a blind handle
+and were left as they stand, named there. (2) **O253's order was inverted**: the strict manifest read
+came AFTER the database reads, so a first writable open committing and anchoring between them could
+pair an empty database with a recorded manifest. The read-only open now reads the manifest first
+(`Vault::manifest_history_in_force`, the manifest rule's fifth reader, which raises nothing) and the
+arms use that read, re-reading strictly only for a miss's class; a source gate holds the order.
+(3) The split above. (4) The tests asserted end states only; every refusal arm now carries a
+reached-step witness (no pause point that holds a descriptor on the database is reached; the connect's
+window test asserts the connect's own descriptor is not), and a create-then-remove counterfactual that
+leaves every end state as the fix does fails it.
 
 **Not driven, stated.** `serve-http --read-only` opens its `/mcp` vault at start, so on a fresh
 `default` it exits 1 before serving; P13's `/v1` 409 was measured with the server serving another
@@ -46782,6 +46821,14 @@ that removes the escalation fails it if the escalation is what it claims.
 
 **Relations:** sequenced before O285 — that entry's narrowing of the escalation's arrival route lands only once this measurement shows at which step a write-protected mount fails.
 
+**Relations:** shares a question with O-NEW-o213-2 — the escalation this entry would measure is where that entry's blind handle comes from.
+
+**Noted 2026-10-12 by O213's independent review.** A genuinely read-only mount reached the escalation:
+a vault directory mounted `:ro` in Docker, with the `-shm` removed and a hot `-wal`, printed the
+escalation's "opened with immutable=1" warning on `--read-only stats` (the reviewer's probe, in the
+O213 unit's evidence). That is one shape — no `-shm` — and does not settle the shape this entry names,
+where the `-shm` is present.
+
 
 ### O292 — a vault directory holding a database and no manifest reads as no vault at all, and `create` mints a new salt beside it
 
@@ -51900,7 +51947,7 @@ import keeping what its payload says. **Gate**: a `valid_from` that is not a dat
 refusal is ruled, one holding a C0 byte — is refused on MCP, the CLI and `/v1`, and an import of the
 vault's own export still lands; counterfactual, today's acceptance.
 
-### O-NEW-o213-1 — a dangling link at a vault's database name makes the writable open create the link's target outside the vault directory
+### O-NEW-o213-1 — a link, or a planted zero-length file, at a vault's database name becomes the vault's database — created outside the vault directory, or written into a file the vault did not make
 
 **Filed 2026-10-12 by O308's build, which measured its ruling's probe P-LINK.** Beside a manifest
 that records no anchored write, a link at `vault.db` whose target does not exist reads as absent —
@@ -51911,12 +51958,52 @@ there. The same happened before O308. Beside a manifest that records history the
 with nothing created (pinned by `absent_tests::o308_a_dangling_link_at_the_database_name`, which
 also pins the fresh arm as a cost).
 
+**Widened 2026-10-12 by the unit's independent review, measured on the build.** A link at `vault.db`
+to an EXISTING zero-length file anywhere is opened without CREATE, as the vault's database, and the
+file is overwritten with it (`/tmp/victim.log` became a 126,976-byte SQLite database). On an hmac-only
+vault the drawers' PLAINTEXT then sits outside the data directory: a `remember` beside a dangling link
+left its marker readable in the link's target. And no link is needed: a zero-length regular file planted
+at `vault.db` beside a fresh manifest — mode 0666, say — is opened and written as the vault's database,
+readable by whoever planted it. A link to a non-empty file that is not a database refuses ("file is not
+a database"), leaving it unchanged; beside a manifest that records history the door refuses with nothing
+created. Every case is pre-existing, not introduced by O308. Severity, the reviewer's: LOW to MEDIUM —
+the attacker needs write access to the vault directory, which can do worse, but the plaintext case moves
+content past the data directory's permissions silently.
+
 **Shape, for a ruling**: follow the link, as O279's gate G8 opens a linked database and as today, or
 refuse a link at a database name on the open path, as O283 refuses links on restore and O291 on
-delete. O308's ruling names it the maintainer's ratification of O283's extension.
+delete; and whether a zero-length file the vault did not make is adopted as a fresh vault's database,
+or refused for its owner or mode. O308's ruling names the link question the maintainer's ratification
+of O283's extension.
 
 **Gate**: a link at `vault.db` (dangling and resolving), beside a fresh and a recorded manifest, on
 both postures: the ruled answer, and no file created outside the vault directory.
+
+### O-NEW-o213-2 — a read-only handle that cannot see a hot `-wal` answers the head-less verdicts from the main file alone
+
+**Filed 2026-10-12 by O213's independent review, measured.** The read-only open escalates to
+`immutable=1` where its ordinary connection cannot open — a read-only mount, a snapshot — and an
+`immutable=1` connection reads no `-wal`. A young vault whose writer was killed before any checkpoint
+holds every table in its `-wal`: its main file is one page with none. O213's first build answered that
+`ManifestTampered`, exit 2, on a vault nothing had touched; the unit withholds the verdict on such a
+BLIND handle (immutable, beside a non-empty `-wal`) and answers `ReadOnlyUnmigrated`, exit 1, as before
+it — which is honest about the posture and wrong about the remedy: no writable open can run on a
+read-only mount, and "the schema predates this build" is not what happened. O303's `Erased` and
+`Orphaned` arms read the same main file on the same handle and are unguarded: a main file that holds an
+emptied `audit` while the `-wal` holds the records is called an erased trail, and one whose `chain_meta`
+sits only in the `-wal` beside records in the main file an orphaned one.
+
+**Shape, for a ruling**: a refusal of its own for a blind handle that names what it cannot see — the
+`-wal`, its size, and the remedy (copy the vault to a writable place and open it read-only there, or
+mount it writable) — classed as a posture refusal; or reading the `-wal` read-only without a wal-index,
+as SQLite's unreliable-shm path does when the `-shm` alone is missing; or refusing the escalation itself
+beside a non-empty `-wal`. And whether O303's arms take the same guard.
+
+**Gate**: the reviewer's state — a killed young writer's files, `-shm` removed, opened on a read-only
+mount — answers the ruled class with its text naming the `-wal`; a counterfactual of today's
+`ReadOnlyUnmigrated` fails it; O303's arms meet the same state at both of their shapes.
+
+**Relations:** shares a question with O286 — the review's read-only mount reached the escalation that entry asks a measurement of.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

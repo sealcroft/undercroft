@@ -545,17 +545,14 @@ fn o303_only_the_empty_chain_is_adopted() {
             empty_chain(root, level, table);
             // ROADMAP O213 (its ruling of 2026-10-08, item 3), which O303's
             // note bound this state to: the EMPTY chain answers what a fresh
-            // vault's absent database answers, `ReadOnlyNoAnchoredWrite`; with
-            // the table absent beside the rest of the schema the database
-            // holds PART of a schema and keeps `ReadOnlyUnmigrated`.
-            match (table, read_only(root)) {
-                (true, Err(StoreError::ReadOnlyNoAnchoredWrite { id })) => {
-                    assert_eq!(id, VAULT, "{level:?}")
+            // vault's absent database answers, `ReadOnlyNoAnchoredWrite` — and
+            // its absent-table twin with it, O303's "one state, one class",
+            // which O213's ruling did not split.
+            match read_only(root) {
+                Err(StoreError::ReadOnlyNoAnchoredWrite { id }) => {
+                    assert_eq!(id, VAULT, "{level:?} table={table}")
                 }
-                (false, Err(StoreError::ReadOnlyUnmigrated { missing })) => {
-                    assert!(missing.contains("chain_meta"), "{level:?}: {missing}")
-                }
-                (_, other) => panic!("{level:?} table={table}: read-only {:?}", other.err()),
+                other => panic!("{level:?} table={table}: read-only {:?}", other.err()),
             }
             let mut s = writable(root)
                 .unwrap_or_else(|e| panic!("{level:?} table={table}: not adopted: {e}"));

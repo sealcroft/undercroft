@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tempfile::TempDir;
 use undercroft_core::{Drawer, HashEmbedder};
@@ -129,6 +129,7 @@ fn err<T>(r: Result<T, StoreError>, label: &str) -> StoreError {
 /// file exactly as found; `check` judges each refusal.
 fn refused_everywhere(label: &str, root: &Path, check: impl Fn(&str, &StoreError)) {
     let before = files(root);
+    let seen = witness(root);
     for n in 0..2 {
         let e = err(writable(root), label);
         check(&format!("{label}: writable #{n}"), &e);
@@ -137,6 +138,40 @@ fn refused_everywhere(label: &str, root: &Path, check: impl Fn(&str, &StoreError
     let e = err(read_only(root), label);
     check(&format!("{label}: read-only"), &e);
     assert_eq!(files(root), before, "{label}: read-only changed a file");
+    open_pause::clear(&vdir(root));
+    no_descriptor(label, &seen);
+}
+
+/// The pause points at which an open HOLDS a descriptor on the vault's
+/// database: reaching one is reaching a connect, so a refusal that reached one
+/// opened the file — and a create-then-remove passes every end-state check.
+const DESCRIPTORS: [Opener; 6] = [
+    Opener::Writable,
+    Opener::ReadOnly,
+    Opener::Immutable,
+    Opener::RecordedEmbedder,
+    Opener::Legacy,
+    Opener::Hold,
+];
+
+/// Record every pause point the vault's opens reach.
+fn witness(root: &Path) -> Arc<Mutex<Vec<Opener>>> {
+    let seen: Arc<Mutex<Vec<Opener>>> = Default::default();
+    let push = seen.clone();
+    open_pause::set(
+        &vdir(root),
+        Arc::new(move |at| push.lock().unwrap().push(at)),
+    );
+    seen
+}
+
+/// No refusal reached a descriptor: every one was decided before a connect.
+fn no_descriptor(label: &str, seen: &Arc<Mutex<Vec<Opener>>>) {
+    let seen = seen.lock().unwrap();
+    assert!(
+        !seen.iter().any(|at| DESCRIPTORS.contains(at)),
+        "{label}: an open reached a descriptor on the database: {seen:?}"
+    );
 }
 
 fn is_missing_history(label: &str, e: &StoreError) {
@@ -333,18 +368,26 @@ fn o308_a_staging_file_decides_by_its_mac_never_by_its_presence() {
 }
 
 /// Set a hook on the vault's opens that runs `act` at `when`, the first time.
-fn at_first(root: &Path, when: Opener, act: impl Fn() + Send + Sync + 'static) -> Arc<AtomicUsize> {
+/// ... and record every pause point reached, the witness that a refusal came
+/// before any descriptor.
+fn at_first(
+    root: &Path,
+    when: Opener,
+    act: impl Fn() + Send + Sync + 'static,
+) -> (Arc<AtomicUsize>, Arc<Mutex<Vec<Opener>>>) {
     let fired = Arc::new(AtomicUsize::new(0));
-    let seen = fired.clone();
+    let reached: Arc<Mutex<Vec<Opener>>> = Default::default();
+    let (count, push) = (fired.clone(), reached.clone());
     open_pause::set(
         &vdir(root),
         Arc::new(move |at| {
-            if at == when && seen.fetch_add(1, Ordering::SeqCst) == 0 {
+            push.lock().unwrap().push(at);
+            if at == when && count.fetch_add(1, Ordering::SeqCst) == 0 {
                 act();
             }
         }),
     );
-    fired
+    (fired, reached)
 }
 
 /// **The connect's own layout read is the door too** (O308 item 5): a
@@ -358,9 +401,18 @@ fn o308_a_database_deleted_in_the_connects_window_creates_nothing() {
         let root = dir.path().to_path_buf();
         written(&root, level, 10);
         let r = root.clone();
-        let fired = at_first(&root, Opener::WritableLayout, move || remove_db(&r));
+        let (fired, reached) = at_first(&root, Opener::WritableLayout, move || remove_db(&r));
         let e = err(writable(&root), "window");
         open_pause::clear(&vdir(&root));
+        // `recorded_embedder` opened the database while it was there; the
+        // CONNECT, after the deletion, must reach no descriptor.
+        {
+            let reached = reached.lock().unwrap();
+            assert!(
+                reached.contains(&Opener::WritableLayout) && !reached.contains(&Opener::Writable),
+                "{level:?} window: the connect reached a descriptor: {reached:?}"
+            );
+        }
         assert_eq!(
             fired.load(Ordering::SeqCst),
             1,
@@ -389,12 +441,17 @@ fn o308_a_vault_replaced_beneath_the_open_is_the_reopen_class() {
         let root = dir.path().to_path_buf();
         mgr(&root).create(VAULT, level).unwrap();
         let r = root.clone();
-        let fired = at_first(&root, Opener::WritableLayout, move || {
+        let (fired, reached) = at_first(&root, Opener::WritableLayout, move || {
             std::fs::remove_dir_all(vdir(&r)).unwrap();
             mgr(&r).create(VAULT, level).unwrap();
         });
         let e = err(writable(&root), "replaced");
         open_pause::clear(&vdir(&root));
+        no_descriptor(&format!("{level:?} replaced"), &reached);
+        assert!(
+            reached.lock().unwrap().contains(&Opener::WritableLayout),
+            "{level:?} replaced: premise, the connect's layout read was reached"
+        );
         assert_eq!(
             fired.load(Ordering::SeqCst),
             1,
@@ -518,7 +575,7 @@ fn o213_one_never_anchored_vault_answers_one_variant() {
     /// A named way to leave a fresh vault's directory.
     type Shape = (&'static str, fn(&Path));
     for level in LEVELS {
-        let shapes: [Shape; 4] = [
+        let shapes: [Shape; 5] = [
             ("no database", |_| {}),
             ("zero-length", |root| {
                 std::fs::File::create(at(root, "vault.db")).unwrap();
@@ -529,6 +586,16 @@ fn o213_one_never_anchored_vault_answers_one_variant() {
                 drop(writable(root).unwrap());
                 let c = rusqlite::Connection::open(at(root, "vault.db")).unwrap();
                 c.execute_batch("DELETE FROM chain_meta; DELETE FROM audit;")
+                    .unwrap();
+                drop(c);
+                std::fs::write(at(root, "vault.json"), genesis).unwrap();
+            }),
+            // Its absent-table twin: O303's "one state, one class".
+            ("empty chain, no chain_meta table", |root| {
+                let genesis = std::fs::read(at(root, "vault.json")).unwrap();
+                drop(writable(root).unwrap());
+                let c = rusqlite::Connection::open(at(root, "vault.db")).unwrap();
+                c.execute_batch("DROP TABLE chain_meta; DELETE FROM audit;")
                     .unwrap();
                 drop(c);
                 std::fs::write(at(root, "vault.json"), genesis).unwrap();
@@ -604,6 +671,100 @@ fn o213_a_schema_less_database_beside_a_recording_manifest_is_tampering_on_both(
         drop(v);
         is_tampered("empty chain, mixed", &err(read_only(root), "ro"));
         is_tampered("empty chain, mixed", &err(writable(root), "rw"));
+    }
+}
+
+/// **A tamper verdict needs evidence the handle can SEE** (O213's
+/// independent review, measured): a young vault whose writer was killed
+/// before any checkpoint holds every table in its `-wal` and none in a one-page
+/// main file; with its `-shm` gone on a read-only mount the open escalates to
+/// `immutable=1`, which reads no `-wal`, and item 5's arm called the trail it
+/// could not see erased — `ManifestTampered`, exit 2, on a vault nothing had
+/// touched. On such a BLIND handle the arm answers the schema refusal it
+/// answered before O213, `ReadOnlyUnmigrated`, and the `-wal` is left exactly
+/// as found. The escalation is forced as O279's gate forces it: a directory
+/// stands at the `-wal` while the ordinary connection probes, and the real
+/// file is back before the immutable one opens.
+#[cfg(unix)]
+#[test]
+fn o213_a_blind_handle_never_reads_a_hot_wal_as_an_erased_trail() {
+    for level in LEVELS {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        mgr(root).create(VAULT, level).unwrap();
+        let mut w = VaultStore::open(mgr(root).unlock(VAULT).unwrap()).unwrap();
+        for i in 0..3 {
+            w.upsert(&drawer("young", i)).unwrap();
+        }
+        // The writer still holds the vault, so nothing has checkpointed: copy
+        // what a kill leaves — the main file, the hot `-wal`, no `-shm`.
+        let copy = TempDir::new().unwrap();
+        let croot = copy.path();
+        std::fs::create_dir_all(vdir(croot)).unwrap();
+        std::fs::copy(root.join("master.key"), croot.join("master.key")).unwrap();
+        for f in ["vault.json", "vault.db", "vault.db-wal"] {
+            std::fs::copy(at(root, f), at(croot, f)).unwrap();
+        }
+        drop(w);
+        let main_tables: i64 = rusqlite::Connection::open_with_flags(
+            format!("file:{}?immutable=1", at(croot, "vault.db").display()),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .unwrap()
+        .query_row("SELECT count(*) FROM sqlite_schema", [], |r| r.get(0))
+        .unwrap();
+        assert_eq!(
+            main_tables, 0,
+            "{level:?} premise: the main file holds no table"
+        );
+        let frames = std::fs::read(at(croot, "vault.db-wal")).unwrap();
+        assert!(!frames.is_empty(), "{level:?} premise: a hot -wal");
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(at(croot, "vault.json")).unwrap()).unwrap();
+        assert!(
+            manifest["writes"].as_u64().unwrap() > 0,
+            "{level:?} premise: the manifest records history"
+        );
+
+        let escalated = Arc::new(AtomicUsize::new(0));
+        {
+            let (wal, aside, escalated) = (
+                at(croot, "vault.db-wal"),
+                croot.join("wal.aside"),
+                escalated.clone(),
+            );
+            open_pause::set(
+                &vdir(croot),
+                Arc::new(move |here| match here {
+                    Opener::ReadOnly => {
+                        std::fs::rename(&wal, &aside).unwrap();
+                        std::fs::create_dir(&wal).unwrap();
+                    }
+                    Opener::Immutable => {
+                        std::fs::remove_dir(&wal).unwrap();
+                        std::fs::rename(&aside, &wal).unwrap();
+                        escalated.fetch_add(1, Ordering::SeqCst);
+                    }
+                    _ => {}
+                }),
+            );
+        }
+        let e = err(read_only(croot), "blind");
+        open_pause::clear(&vdir(croot));
+        assert_eq!(
+            escalated.load(Ordering::SeqCst),
+            1,
+            "{level:?} premise: the open escalated to immutable=1"
+        );
+        assert!(
+            matches!(&e, StoreError::ReadOnlyUnmigrated { missing } if missing.contains("audit")),
+            "{level:?}: a blind handle raised {e:?}"
+        );
+        assert_eq!(
+            std::fs::read(at(croot, "vault.db-wal")).unwrap(),
+            frames,
+            "{level:?}: the -wal as found"
+        );
     }
 }
 
@@ -942,6 +1103,29 @@ fn o322_every_nothing_was_written_literal_is_classified() {
             1,
             "the stat-only key classifier refuses before any key is read or written (O204)",
         ),
+        // Merged from `main` after O322's build (2026-10-12), each read where
+        // it is raised and true there.
+        (
+            "undercroft-store",
+            "admission.rs",
+            "allow_in",
+            1,
+            "an allow's decision re-asked inside its own lock, before its effect (O224's door)",
+        ),
+        (
+            "undercroft-vault",
+            "keys.rs",
+            "already_exists",
+            1,
+            "a create-new key or identity write refused before a byte is written (O210, O321)",
+        ),
+        (
+            "undercroft-vault",
+            "keys.rs",
+            "corrupt_key_file_message",
+            1,
+            "a short key file refused by the classifier, never rewritten in place (O210)",
+        ),
         (
             "undercroft-vault",
             "keys.rs",
@@ -1008,10 +1192,55 @@ fn o308_one_create_grant_one_predicate_and_the_door_first() {
             })
             .collect()
     };
+    // Every spelling that carries CREATE, each proved on planted text first:
+    // the flag itself (`open_with_flags` with it, or a flags variable built
+    // from it), `Connection::open` (rusqlite's default flags carry it) and
+    // `OpenFlags::default()` (the same default, spelled out).
+    const CREATES: [&str; 3] = [
+        "SQLITE_OPEN_CREATE",
+        "Connection::open(",
+        "OpenFlags::default()",
+    ];
+    for spelling in CREATES {
+        let planted = format!(
+            "fn planted() {{\n    let c = {spelling};\n    // {spelling} in a comment\n}}\n"
+        );
+        let text = literal_text(&planted);
+        let hits: Vec<_> = text.match_indices(spelling).collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "premise: the counter sees {spelling} in code alone"
+        );
+        assert_eq!(enclosing_fn(&text, hits[0].0), "planted");
+    }
+    let mut creates: Vec<(String, String, &str)> = CREATES
+        .iter()
+        .flat_map(|spelling| {
+            count(spelling)
+                .into_iter()
+                .map(move |(file, func)| (file, func, *spelling))
+        })
+        .collect();
+    creates.sort();
     assert_eq!(
-        count("SQLITE_OPEN_CREATE"),
-        vec![("lib.rs".to_string(), "connect_writable".to_string())],
-        "the one CREATE grant"
+        creates,
+        vec![
+            // The archive's own stage, a nonce path under `backups/.staging`
+            // this process made; never a vault directory (O256).
+            (
+                "backup.rs".to_string(),
+                "backup".to_string(),
+                "Connection::open("
+            ),
+            // The one grant on a vault's database (O308 item 5).
+            (
+                "lib.rs".to_string(),
+                "connect_writable".to_string(),
+                "SQLITE_OPEN_CREATE"
+            ),
+        ],
+        "every open that can CREATE a file, by spelling"
     );
     for spelling in ["writes() == 0", "writes() > 0", "writes() != 0"] {
         assert_eq!(
@@ -1056,5 +1285,27 @@ fn o308_one_create_grant_one_predicate_and_the_door_first() {
     assert!(
         connect.find("absent::door(").unwrap() < connect.find("SQLITE_OPEN_CREATE").unwrap(),
         "the CREATE grant reads the door's observation"
+    );
+    // O253's order on the read-only arms (O213's review): the manifest is read
+    // BEFORE the arms read the database, and an arm reads it again only for
+    // the class of a miss.
+    let ro = body("open_inner_read_only");
+    let first = ro
+        .find("manifest_history_in_force()")
+        .expect("the read-only open reads the manifest for its arms");
+    for arm in [
+        "refuse_headless_without_table(",
+        "check_read_schema(",
+        "check_chain_read_only(",
+    ] {
+        let at = ro
+            .find(arm)
+            .unwrap_or_else(|| panic!("the read-only open runs {arm}"));
+        assert!(first < at, "the manifest is read before {arm}");
+    }
+    let again = body("history_read_first");
+    assert!(
+        again.find("return Ok(history)").unwrap() < again.find("verified_manifest()").unwrap(),
+        "a manifest read before the database is used; a strict read only follows a miss"
     );
 }

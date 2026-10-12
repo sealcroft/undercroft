@@ -4005,13 +4005,17 @@ impl VaultStore {
     /// on this path, so neither is reported. A schema that would need a
     /// migration is the refusal below.
     ///
-    /// Two conditions refuse rather than report, because serving through
-    /// them would answer a question wrongly rather than partially: an absent
-    /// database ([`StoreError::DatabaseMissing`], A33 — "empty" is not
-    /// "absent"), and a schema this build would have had to migrate
-    /// ([`StoreError::ReadOnlyUnmigrated`]). Neither is a crash a replica
-    /// must survive; a vault whose writer crashed mid-rotation still opens,
-    /// which is the case that made reporting the right rule.
+    /// Three conditions refuse rather than report, because serving through
+    /// them would answer a question wrongly rather than partially: no
+    /// database content beside a manifest that records history
+    /// ([`StoreError::DatabaseMissing`], A33 — "empty" is not "absent"; the
+    /// absent-database door, ROADMAP O308, decides it before anything is
+    /// opened), a manifest that records NO anchored write beside a database
+    /// nothing has migrated ([`StoreError::ReadOnlyNoAnchoredWrite`], a
+    /// posture refusal, ROADMAP O213), and a schema this build would have had
+    /// to migrate ([`StoreError::ReadOnlyUnmigrated`]). None is a crash a
+    /// replica must survive; a vault whose writer crashed mid-rotation still
+    /// opens, which is the case that made reporting the right rule.
     pub fn open_read_only(
         vault: Vault,
         embedder: Box<dyn Embedder + Send>,
@@ -5679,7 +5683,7 @@ impl VaultStore {
                 id: vault.id().to_string(),
             });
         }
-        let (conn, opened_by) = Self::connect_read_only(&vault)?;
+        let (conn, opened_by, immutable) = Self::connect_read_only(&vault)?;
         // Before the keycheck read and `reconcile_read_only` (O284).
         if let Err(e) = Self::unlock_state_holds(&vault) {
             Self::close_refused(conn);
@@ -5732,10 +5736,33 @@ impl VaultStore {
         }
         let mut store = Self::assemble(conn, vault, embedder, true)?;
         store.unhealed.extend(foreign_note);
-        store.refuse_headless_without_table()?;
-        store.check_read_schema()?;
+        // What the manifest records, read BEFORE the database's tables and
+        // chain are (O253's order, ROADMAP O213): read after, a first writable
+        // open committing and anchoring between the two reads would pair an
+        // empty database with a manifest that records history. Asked only by
+        // the arms that meet a database beside which nothing was migrated.
+        let manifest_first = store.vault.manifest_history_in_force();
+        // Whether this handle may NOT see everything the database holds: an
+        // `immutable=1` handle reads no `-wal`, so beside a non-empty one it
+        // may find no table where the `-wal` holds them all (ROADMAP O213's
+        // review: a writer killed young, its `-shm` gone, mounted read-only).
+        // A stat that fails is no proof the handle sees everything.
+        let blind = immutable && {
+            let opened = if opened_legacy {
+                store.vault.legacy_db_path()
+            } else {
+                store.vault.current_db_path()
+            };
+            let wal = std::path::PathBuf::from(format!("{}-wal", opened.display()));
+            match std::fs::metadata(&wal) {
+                Ok(meta) => meta.len() > 0,
+                Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+            }
+        };
+        store.refuse_headless_without_table(manifest_first, blind)?;
+        store.check_read_schema(manifest_first)?;
         store.fts = store.probe_fts_read_only();
-        store.check_chain_read_only()?;
+        store.check_chain_read_only(manifest_first, blind)?;
         // The legacy-name note is DERIVED from the file the connector opened
         // (ROADMAP O284, O281's rule on the read-only posture), never taken
         // from the unlock's stat: a restore or another open's rename between
@@ -5785,7 +5812,7 @@ impl VaultStore {
     /// after the ordinary open has failed.
     fn connect_read_only(
         vault: &Vault,
-    ) -> Result<(Connection, undercroft_vault::DbLayout), StoreError> {
+    ) -> Result<(Connection, undercroft_vault::DbLayout, bool), StoreError> {
         use rusqlite::OpenFlags;
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         let probe = |conn: &mut Connection| -> Result<(), StoreError> {
@@ -5830,7 +5857,7 @@ impl VaultStore {
             false,
             probe,
         ) {
-            Ok(vault_db::Opened::Here(conn, ())) => return Ok((conn, layout)),
+            Ok(vault_db::Opened::Here(conn, ())) => return Ok((conn, layout, false)),
             Ok(vault_db::Opened::Moved) => return Err(vault_db::moved(&path)),
             Err(StoreError::Sqlite(e)) if is_busy(&e) => {
                 return Err(StoreError::VaultHeld(OPEN_HELD.into()))
@@ -5867,12 +5894,12 @@ impl VaultStore {
              process is still writing to it",
             path.display()
         );
-        Ok((conn, layout))
+        Ok((conn, layout, true))
     }
 
     /// Refuse a schema this build would have had to migrate, naming what is
     /// missing. See [`READ_SCHEMA`](Self::READ_SCHEMA).
-    fn check_read_schema(&self) -> Result<(), StoreError> {
+    fn check_read_schema(&self, manifest_first: Option<ManifestHistory>) -> Result<(), StoreError> {
         let mut missing: Vec<String> = Vec::new();
         for (table, columns) in Self::READ_SCHEMA {
             let present: i64 = self.conn.query_row(
@@ -5912,7 +5939,7 @@ impl VaultStore {
         // `refuse_headless_without_table`.
         let tables_missing = missing.iter().filter(|m| m.starts_with("table ")).count();
         if tables_missing == Self::READ_SCHEMA.len()
-            && self.manifest_history_now()? == ManifestHistory::Fresh
+            && self.history_read_first(manifest_first)? == ManifestHistory::Fresh
         {
             return Err(StoreError::ReadOnlyNoAnchoredWrite {
                 id: self.vault.id().to_string(),
@@ -5923,12 +5950,20 @@ impl VaultStore {
         })
     }
 
-    /// [`ManifestHistory`] over the manifest READ NOW — strictly, with no
-    /// fall-back ([`Vault::verified_manifest`]), as `adopt_empty_chain` reads
-    /// it under its lock — for the read-only arms that meet a database beside
-    /// which nothing was migrated (ROADMAP O213 items 3 to 5). Asked only on
-    /// those arms, never on the ordinary path.
-    fn manifest_history_now(&self) -> Result<ManifestHistory, StoreError> {
+    /// [`ManifestHistory`] over the manifest the read-only open read BEFORE
+    /// the database (`manifest_first`, O253's order) — for the arms that meet
+    /// a database beside which nothing was migrated (ROADMAP O213 items 3 to
+    /// 5), never on the ordinary path. A manifest that read missed is read
+    /// again strictly ([`Vault::verified_manifest`], as `adopt_empty_chain`
+    /// reads it under its lock), for the class of its miss and the tamper
+    /// event a refusal raises.
+    fn history_read_first(
+        &self,
+        manifest_first: Option<ManifestHistory>,
+    ) -> Result<ManifestHistory, StoreError> {
+        if let Some(history) = manifest_first {
+            return Ok(history);
+        }
         let manifest = self.vault.verified_manifest()?;
         Ok(ManifestHistory::of(
             manifest.chain_head(),
@@ -5937,16 +5972,47 @@ impl VaultStore {
         ))
     }
 
+    /// **A tamper verdict needs evidence this handle can SEE** (ROADMAP
+    /// O213's review): on a `blind` handle — `immutable=1` beside a non-empty
+    /// `-wal` it does not read — "the database holds no audit trail" may be
+    /// "the `-wal` holds it", so an arm whose only evidence is the database's
+    /// emptiness answers what it answered before O213, `ReadOnlyUnmigrated`,
+    /// and says why here. Whether a better answer exists is ROADMAP
+    /// O-NEW-o213-2's question.
+    fn withheld_for_a_blind_handle(&self, missing: &str) -> StoreError {
+        undercroft_obs::diag_warn!(
+            "vault {:?}: this read-only handle reads its database with immutable=1 and cannot \
+             see the -wal beside it, which may hold what the database file lacks ({missing}); \
+             the erased-trail verdict a handle that read the -wal could reach is withheld, and \
+             the open answers the schema refusal instead (ROADMAP O213)",
+            self.vault.id()
+        );
+        StoreError::ReadOnlyUnmigrated {
+            missing: missing.to_string(),
+        }
+    }
+
     /// What an EMPTY chain answers on the read-only posture (ROADMAP O213
-    /// item 3 and 4), by the predicate `adopt_empty_chain` asks on the
-    /// writable one: a manifest that records no anchored write is the posture
-    /// refusal — a writable open seeds it — and any other is the erased trail,
-    /// `ManifestTampered`, as the writable open answers it.
-    fn refuse_empty_chain_read_only(&self) -> StoreError {
-        match self.manifest_history_now() {
+    /// items 3 and 4), by the predicate `adopt_empty_chain` asks on the
+    /// writable one, and for its absent-table twin alike (O303's "one state,
+    /// one class"): a manifest that records no anchored write is the posture
+    /// refusal — a writable open seeds it; one no build writes is
+    /// `ManifestTampered`, the manifest alone being the evidence; one that
+    /// records history is the erased trail, `ManifestTampered` as the writable
+    /// open answers it — except on a `blind` handle, which cannot see the
+    /// trail it would call erased.
+    fn refuse_empty_chain_read_only(
+        &self,
+        manifest_first: Option<ManifestHistory>,
+        blind: bool,
+    ) -> StoreError {
+        match self.history_read_first(manifest_first) {
             Ok(ManifestHistory::Fresh) => StoreError::ReadOnlyNoAnchoredWrite {
                 id: self.vault.id().to_string(),
             },
+            Ok(ManifestHistory::History) if blind => {
+                self.withheld_for_a_blind_handle("chain_meta.head")
+            }
             Ok(ManifestHistory::Mixed | ManifestHistory::History) => {
                 StoreError::Vault(undercroft_vault::VaultError::ManifestTampered)
             }
@@ -5998,7 +6064,11 @@ impl VaultStore {
     /// writable open refuses as an inconsistent chain (moving O296's pinned
     /// read-only class, recorded beside it). Only the empty chain falls through
     /// to that check.
-    fn refuse_headless_without_table(&self) -> Result<(), StoreError> {
+    fn refuse_headless_without_table(
+        &self,
+        manifest_first: Option<ManifestHistory>,
+        blind: bool,
+    ) -> Result<(), StoreError> {
         let (chain_meta, audit): (i64, i64) = self.conn.query_row(
             "SELECT \
                  (SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'chain_meta'), \
@@ -6016,9 +6086,20 @@ impl VaultStore {
         // same file with after its schema batch; it returned early here, and
         // the schema check answered it `ReadOnlyUnmigrated`, exit 1. Beside one
         // that records no anchored write it falls through to that check.
+        //
+        // **Not on a blind handle** (O213's review, measured): an
+        // `immutable=1` handle reads no `-wal`, and a young vault whose writer
+        // was killed before a checkpoint holds every table in it — a one-page
+        // main file with none. That answered `ManifestTampered`, exit 2, on a
+        // vault nothing had touched; it answers the schema refusal again, as
+        // before O213, and says why. A manifest no build writes stays the
+        // verdict: the manifest alone is that evidence.
         if audit == 0 {
-            return match self.manifest_history_now()? {
+            return match self.history_read_first(manifest_first)? {
                 ManifestHistory::Fresh => Ok(()),
+                ManifestHistory::History if blind => {
+                    Err(self.withheld_for_a_blind_handle("table audit, table chain_meta"))
+                }
                 ManifestHistory::Mixed | ManifestHistory::History => Err(StoreError::Vault(
                     undercroft_vault::VaultError::ManifestTampered,
                 )),
@@ -6031,12 +6112,22 @@ impl VaultStore {
         match judged {
             ChainJudgement::Headless(Headless::Orphaned { .. } | Headless::Erased)
             | ChainJudgement::Inconsistent(_) => judged.answer().map(|_| ()),
+            // The EMPTY chain's absent-table twin answers what the empty chain
+            // answers — O303's "one state, one class", which O213's ruling
+            // moved to its variant for the empty chain and did not split.
+            ChainJudgement::Headless(Headless::Empty) => {
+                Err(self.refuse_empty_chain_read_only(manifest_first, blind))
+            }
             _ => Ok(()),
         }
     }
 
     /// [`reconcile_chain`](Self::reconcile_chain)'s verdict without its heal.
-    fn check_chain_read_only(&mut self) -> Result<(), StoreError> {
+    fn check_chain_read_only(
+        &mut self,
+        manifest_first: Option<ManifestHistory>,
+        blind: bool,
+    ) -> Result<(), StoreError> {
         // The anchor BEFORE the snapshot (ROADMAP O253), then the one
         // judgement, with the regime the V1 note needs read in that same
         // snapshot — it was a bare `head_state` of its own (ROADMAP O303).
@@ -6063,7 +6154,7 @@ impl VaultStore {
             // so one never-anchored vault carried two classes by how far its
             // first writable open got.
             ChainJudgement::Headless(Headless::Empty) => {
-                return Err(self.refuse_empty_chain_read_only())
+                return Err(self.refuse_empty_chain_read_only(manifest_first, blind))
             }
             _ => None,
         };
@@ -6088,7 +6179,7 @@ impl VaultStore {
         match self.anchor_at_open {
             AnchorState::Current => Ok(()),
             // Only the empty chain answers `Unseeded`, and it was refused above.
-            AnchorState::Unseeded => Err(self.refuse_empty_chain_read_only()),
+            AnchorState::Unseeded => Err(self.refuse_empty_chain_read_only(manifest_first, blind)),
             AnchorState::Healed { behind_by } => {
                 self.unhealed.push(format!(
                     "the manifest rollback anchor is {behind_by} record(s) behind the \
@@ -7310,12 +7401,15 @@ impl VaultStore {
     /// failure (exit 1) — on the incident path `--read-only` exists for, and
     /// against `CLAUDE.md`'s own words about evidence destruction there.
     ///
-    /// **The absent case returns `None` without opening at all**, which is
-    /// what keeps the contract above true for a writable caller on a fresh
-    /// vault: nothing is recorded, so `None` is the honest answer, and the
-    /// store's own `open` still creates the database a moment later. A
-    /// read-only caller then reaches A33 with the file still absent, which
-    /// is the whole point.
+    /// **No database content returns `None` without opening at all — once
+    /// the absent-database door has refused what it refuses** (ROADMAP O308):
+    /// a vault deleted since the unlock is the reopen class, a manifest that
+    /// records history is A33's `DatabaseMissing`, a non-empty `-wal` beside
+    /// no database is named and kept. For a manifest that records no anchored
+    /// write nothing is recorded, so `None` is the honest answer: the store's
+    /// writable `open` creates the database a moment later, and a read-only
+    /// caller reaches `ReadOnlyNoAnchoredWrite` (ROADMAP O213) with the file
+    /// still absent, which is the whole point.
     ///
     /// It also closes O91's residual by construction rather than by care: a
     /// `SQLITE_OPEN_READ_ONLY` connection cannot run a checkpoint, so this

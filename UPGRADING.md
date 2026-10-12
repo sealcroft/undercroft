@@ -450,8 +450,11 @@ a `--read-only` server answers its `/v1` routes **409 with no `class`**. Before
 installation now exits 0, naming the vault on its "unavailable" line. The same
 refusal answers a vault whose first writable open stopped early enough to leave
 a database holding none of the read schema's tables, or an EMPTY audit chain
-(it answered `ReadOnlyUnmigrated`, also exit 1); a database holding only part of
-the schema still answers *"this vault's schema predates this build"*.
+with or without its `chain_meta` table (it answered `ReadOnlyUnmigrated`, also
+exit 1); a database holding only part of the schema with no `audit` table still
+answers *"this vault's schema predates this build"*, and so does a vault read
+with `immutable=1` — a read-only mount — beside a non-empty `-wal` it cannot
+read, with a warning saying so.
 
 **Cause:** the read-only open answered A33's integrity verdict for every absent
 database, so every fresh volume a `--read-only` server was pointed at read as
