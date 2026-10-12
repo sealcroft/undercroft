@@ -254,7 +254,7 @@ jobs:
       # runs the suite, captures its exit code WITHOUT a pipe, and then
       # compares the suite's MEASURED check count against the figure the agent
       # guide publishes for it (`docs/agent-guide/build-and-test.md`, ROADMAP
-      # O433) — a comparison only a RUN can perform, which is why
+      # O436) — a comparison only a RUN can perform, which is why
       # it cannot be a preflight and why, until ROADMAP M13, it happened
       # nowhere on a pull request. A leg dropping from 370 checks to 3 was
       # green. `--no-preflight` skips the host-side preflights, which

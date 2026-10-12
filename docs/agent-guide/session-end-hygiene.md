@@ -8,7 +8,7 @@ ROADMAP heading and placement rule the `ROADMAP headings` preflight holds.
 Read it before you edit `ROADMAP.md` or the handover, and when a session nears
 its context budget.
 
-It was moved here unchanged when the guide was split (ROADMAP O433,
+It was moved here unchanged when the guide was split (ROADMAP O436,
 2026-10-12), and it governs over any one-line statement of the same rule in
 the core. In the moved text, "this file" and "here" mean the guide as a whole
 — the core and its reference documents.

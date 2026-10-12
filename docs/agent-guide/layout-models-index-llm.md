@@ -10,7 +10,7 @@ degrade counters of all three model roles), `crates/undercroft-embed-onnx` and
 a served or in-process model, an embedder, a reranker or a late-interaction
 encoder.
 
-It was moved here unchanged when the guide was split (ROADMAP O433,
+It was moved here unchanged when the guide was split (ROADMAP O436,
 2026-10-12), and it governs over any one-line statement of the same rule in
 the core. In the moved text, "this file" and "here" mean the guide as a whole
 — the core and its reference documents.

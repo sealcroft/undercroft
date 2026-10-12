@@ -7,7 +7,7 @@ and 7 of the definition of done; the core states all seven, these three in one
 line each. Read it when you write a test or a counterfactual, update a
 governance surface or the house page, or add a renderer.
 
-It was moved here unchanged when the guide was split (ROADMAP O433,
+It was moved here unchanged when the guide was split (ROADMAP O436,
 2026-10-12), and it governs over any one-line statement of the same rule in
 the core. In the moved text, "this file" and "here" mean the guide as a whole
 — the core and its reference documents.

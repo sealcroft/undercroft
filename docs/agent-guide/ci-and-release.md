@@ -8,7 +8,7 @@ pinned toolchain and supply chain, `house-figures`, the `CI verdict` — and the
 pre-release drift check and the release flow. Read it when you touch
 `.github/`, a toolchain pin, a release, a tag or a version bump.
 
-It was moved here unchanged when the guide was split (ROADMAP O433,
+It was moved here unchanged when the guide was split (ROADMAP O436,
 2026-10-12), and it governs over any one-line statement of the same rule in
 the core. In the moved text, "this file" and "here" mean the guide as a whole
 — the core and its reference documents.

@@ -7,7 +7,7 @@ indexes this document. This one holds, VERBATIM, the Layout entries for
 the gitignored `docs/research/` working sets. Read it when you run or change a
 benchmark, a measurement instrument, or a published benchmark figure.
 
-It was moved here unchanged when the guide was split (ROADMAP O433,
+It was moved here unchanged when the guide was split (ROADMAP O436,
 2026-10-12), and it governs over any one-line statement of the same rule in
 the core. In the moved text, "this file" and "here" mean the guide as a whole
 — the core and its reference documents.

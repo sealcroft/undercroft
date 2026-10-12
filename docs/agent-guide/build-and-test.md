@@ -9,7 +9,7 @@ preflights, `--preflight-only` and `--no-preflight`, the shared readers, line
 endings, and the local LLM. Read it when you run the battery or a suite, when
 a test or check count moves, or when you add a suite or a preflight.
 
-It was moved here unchanged when the guide was split (ROADMAP O433,
+It was moved here unchanged when the guide was split (ROADMAP O436,
 2026-10-12), and it governs over any one-line statement of the same rule in
 the core. In the moved text, "this file" and "here" mean the guide as a whole
 — the core and its reference documents.
@@ -20,7 +20,7 @@ are the battery's `FIGURES_DOC`, read by `tests/battery.sh` and by
 `tests/house-figures.sh`; the host-side preflight count is read by a `prose
 figures` row; and the battery refuses a core that republishes a suite figure.
 Where the moved text says a figure is `CLAUDE.md`'s, it means this document
-since O433: update a figure HERE when a count moves.
+since O436: update a figure HERE when a count moves.
 
 ---
 

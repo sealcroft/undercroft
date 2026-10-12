@@ -11,7 +11,7 @@ and the exported series inventory). Read it when your work touches one of
 those crates, an `UNDERCROFT_*` resolver, an outbound client, a CA pin, an
 HTTP body, stdout, or a metric.
 
-It was moved here unchanged when the guide was split (ROADMAP O433,
+It was moved here unchanged when the guide was split (ROADMAP O436,
 2026-10-12), and it governs over any one-line statement of the same rule in
 the core. In the moved text, "this file" and "here" mean the guide as a whole
 — the core and its reference documents.

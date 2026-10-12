@@ -55359,7 +55359,7 @@ the maintainer's, asked with the cumulative figures this ruling makes every unit
 its row in the battery's `UNVERSIONED_CLOSED` roster (O101). O252's escalated question names this entry beside
 it.
 
-### O433 — CLOSED 2026-10-12 by the maintainer's ruling: `CLAUDE.md` is split into a core every agent reads on every turn and reference documents read when the work touches their area, and the split is the standard
+### O436 — CLOSED 2026-10-12 by the maintainer's ruling: `CLAUDE.md` is split into a core every agent reads on every turn and reference documents read when the work touches their area, and the split is the standard
 
 **Filed and closed 2026-10-12, as a pure decision about the agent guide.** `CLAUDE.md` is injected
 into every agent's every turn, the session agent's and every subagent's alike, and at 359,360 bytes

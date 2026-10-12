@@ -9,7 +9,7 @@ mirror columns, migrations, and guard ordering. Read it when your work touches
 what is written to disk, an id or key derivation, the chain, a rotation, a
 migration, or a guard on the write path.
 
-It was moved here unchanged when the guide was split (ROADMAP O433,
+It was moved here unchanged when the guide was split (ROADMAP O436,
 2026-10-12), and it governs over any one-line statement of the same rule in
 the core. In the moved text, "this file" and "here" mean the guide as a whole
 — the core and its reference documents.

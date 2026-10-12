@@ -8,7 +8,7 @@ edits, counterfactuals and unbounded waits — each with the defect that taught
 it. Read it before a scripted edit or a counterfactual, when a build result
 contradicts the source, or when you poll for a result.
 
-It was moved here unchanged when the guide was split (ROADMAP O433,
+It was moved here unchanged when the guide was split (ROADMAP O436,
 2026-10-12), and it governs over any one-line statement of the same rule in
 the core. In the moved text, "this file" and "here" mean the guide as a whole
 — the core and its reference documents.

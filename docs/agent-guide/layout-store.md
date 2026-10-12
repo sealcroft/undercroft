@@ -13,7 +13,7 @@ vocabulary, egress auditing, key rotation and the external witness. Read it
 when your work touches that crate. Search it for the module or door you are
 changing rather than reading it end to end.
 
-It was moved here unchanged when the guide was split (ROADMAP O433,
+It was moved here unchanged when the guide was split (ROADMAP O436,
 2026-10-12), and it governs over any one-line statement of the same rule in
 the core. In the moved text, "this file" and "here" mean the guide as a whole
 — the core and its reference documents.

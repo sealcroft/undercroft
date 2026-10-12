@@ -10,7 +10,7 @@ the filesystem, and recipient-encrypted, signed export bundles. Read it when
 your work touches that crate, a key, a manifest, a vault's files on disk, or a
 bundle.
 
-It was moved here unchanged when the guide was split (ROADMAP O433,
+It was moved here unchanged when the guide was split (ROADMAP O436,
 2026-10-12), and it governs over any one-line statement of the same rule in
 the core. In the moved text, "this file" and "here" mean the guide as a whole
 — the core and its reference documents.

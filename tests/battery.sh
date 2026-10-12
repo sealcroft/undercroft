@@ -446,7 +446,7 @@ suite_summary() { # suite_summary <log>
 # which refuses it, so the gawk form would read empty there. CI's preflight
 # job runs these readers under Debian 12's mawk as well (ROADMAP O314).
 #
-# **WHERE the figures are published is one constant (ROADMAP O433).** They sat
+# **WHERE the figures are published is one constant (ROADMAP O436).** They sat
 # in `CLAUDE.md`'s Build & test block until the agent guide was split into a
 # core every agent reads on every turn and reference documents read on demand;
 # the block moved VERBATIM into the file below, and every reader here — and
@@ -1852,7 +1852,7 @@ UNVERSIONED_CLOSED=(
   "O244|closed by RULING: audit compaction refused; the replacement gate was met by O250 and the witness it was sequenced behind built by O245"
   "O313|two GitHub settings — up-to-date branches on main and a v* tag ruleset with no bypass — applied and observed to block"
   "O340|closed by RULING, the maintainer's: O234's read budget is a per-unit landing gate, the cumulative figure reported beside it"
-  "O433|closed by RULING, the maintainer's: CLAUDE.md is split into a core and reference documents under docs/agent-guide/, and the split is the standard — the agent guide's form, not engine code"
+  "O436|closed by RULING, the maintainer's: CLAUDE.md is split into a core and reference documents under docs/agent-guide/, and the split is the standard — the agent guide's form, not engine code"
 )
 ROADMAP_DRIFT=$(roadmap_scan ROADMAP.md)
 # The premise BEFORE the roster (ROADMAP O162). It used to run after it, so a
@@ -3979,7 +3979,7 @@ if [ -z "$SUITE_COUNTS" ]; then
 fi
 # The CARGO figures had no premise of their own: the post-run comparison skips
 # an empty read silently, so a reworded `(N run, M ignored)` or a moved
-# `= N compiled` would have compared nothing and said nothing. Since O433 moved
+# `= N compiled` would have compared nothing and said nothing. Since O436 moved
 # them out of `CLAUDE.md`, a figure that is not where its reader looks is the
 # likeliest failure, so it is refused here, before any suite runs.
 FIG_TOTALS=$(declare_test_totals)
@@ -3989,10 +3989,10 @@ if [ -z "$CARGO_COUNTS" ] ||
   echo "FAIL  $FIGURES_DOC does not publish the cargo figures its readers want:"
   echo "      legs='${CARGO_COUNTS//$'\n'/ }' totals='${FIG_TOTALS//$'\n'/ }'."
   echo "      Without them the post-run comparison compares nothing and says so to"
-  echo "      nobody (ROADMAP O433)"
+  echo "      nobody (ROADMAP O436)"
   FIG_FAIL=1
 fi
-# A figure lives in ONE file (ROADMAP O433). The core `CLAUDE.md` is read on
+# A figure lives in ONE file (ROADMAP O436). The core `CLAUDE.md` is read on
 # every turn and is compared against nothing, so a suite figure it repeated
 # would be the un-gated copy — the "number in prose beside a gated list" this
 # project keeps finding stale. Asked through the SAME readers, so the two
@@ -4002,7 +4002,7 @@ CORE_FIGS="$(declare_suite_counts CLAUDE.md; declare_cargo_counts CLAUDE.md; dec
 if [ -n "$CORE_FIGS" ]; then
   echo "FAIL  CLAUDE.md republishes suite figures that live in $FIGURES_DOC:"
   printf '%s\n' "$CORE_FIGS" | sed 's/^/        /'
-  echo "      State them there only; the core names the file (ROADMAP O433)"
+  echo "      State them there only; the core names the file (ROADMAP O436)"
   FIG_FAIL=1
 fi
 
@@ -5960,7 +5960,7 @@ if [ -n "$RF_HEAD" ]; then
   fi
 fi
 
-# ── the agent guide: the core's size and its index (ROADMAP O433) ──────────
+# ── the agent guide: the core's size and its index (ROADMAP O436) ──────────
 # The maintainer ruled the split of `CLAUDE.md` the standard: the core every
 # agent reads on every turn stays at or under the limit its own organisation
 # section states, and every reference document under `docs/agent-guide/` is a
@@ -6020,7 +6020,7 @@ if [ "$AG_PROBE_BAD" != "$AG_PROBE_WANT" ] || [ -n "$AG_PROBE_OK" ]; then
 else
   AG_ROWS=$(ag_findings CLAUDE.md docs/agent-guide)
   if [ -n "$AG_ROWS" ]; then
-    echo "FAIL  the agent guide breaks its own standard (ROADMAP O433):"
+    echo "FAIL  the agent guide breaks its own standard (ROADMAP O436):"
     printf '%s\n' "$AG_ROWS" | sed 's/^/        /'
     echo "      Move text to the reference document that owns it, and keep the"
     echo "      core's index naming exactly the files under docs/agent-guide/"
@@ -6875,7 +6875,7 @@ fi
 # **The per-leg cargo figures** (ROADMAP O134b). `test` is handled above
 # against its three whole-tree surfaces; every OTHER cargo-shaped suite is
 # compared against its own `(N run, M ignored)` on its `docker compose run`
-# line in $FIGURES_DOC (in `CLAUDE.md` until ROADMAP O433).
+# line in $FIGURES_DOC (in `CLAUDE.md` until ROADMAP O436).
 #
 # Each leg is guarded on ITS OWN count, never on the global accumulator —
 # O156's rule, applied here from the start rather than inherited.

@@ -9,7 +9,7 @@ indexes this document. This one holds, VERBATIM, the Layout entries for
 when your work touches either binary, a surface (CLI, MCP, `/v1`, the
 orchestrator, a console), or the parity inventories.
 
-It was moved here unchanged when the guide was split (ROADMAP O433,
+It was moved here unchanged when the guide was split (ROADMAP O436,
 2026-10-12), and it governs over any one-line statement of the same rule in
 the core. In the moved text, "this file" and "here" mean the guide as a whole
 — the core and its reference documents.

@@ -57,7 +57,7 @@ public — GitHub Free will not serve Pages from a private repo.
 This file is the agent guide's CORE: what every agent needs on every turn. The
 rest of the guide lives in reference documents under `docs/agent-guide/`, each
 opened only when the work touches its area; the last section of this file is
-the index that says which document covers what. The split (ROADMAP O433,
+the index that says which document covers what. The split (ROADMAP O436,
 2026-10-12, ruled by the maintainer: *"1 -> split and 2 also let that be the
 standard"*) deleted nothing: every paragraph this file held before it is in
 exactly one place, here or verbatim in a reference document, and where this
@@ -65,7 +65,7 @@ core states a rule in one line, the full text in the document it names governs.
 Wherever the guide says "this file", it means the whole guide — this core and
 its reference documents.
 
-**The split is the standard (O433).** The core stays at or under 60 KiB, the
+**The split is the standard (O436).** The core stays at or under 60 KiB, the
 size every agent pays on every turn. New layout, lessons and doctrine go into
 the reference document that owns the area, with at most a one-line pointer
 here; an area with no document gets one, and a row in the index. A figure a
