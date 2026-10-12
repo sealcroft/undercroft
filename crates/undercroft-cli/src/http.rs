@@ -216,6 +216,28 @@ pub(crate) fn resolve_mcp_token(declared: Option<&str>) -> Result<Option<String>
     }
 }
 
+/// The refuse-to-bind rule: a network-exposed memory server must require a
+/// bearer token, and a loopback one may run without.
+///
+/// **It asks [`undercroft_config::host_is_loopback`], and `host` is the bare
+/// `--host`, never an address** (ROADMAP O177). This was an inline comparison
+/// with the three loopback literals while `undercroft_config::addr_is_loopback`
+/// held a second copy behind a `host:port` split — two implementations of one
+/// security predicate, recorded by O160 as byte-identical. They were not: the
+/// address predicate reads a bare `::1` as host `":"` and port `1`, so the
+/// drop-in that record invited would have refused a working
+/// `serve-http --host ::1` with no token. One predicate now, and which
+/// addresses bind without a bearer did not move.
+pub(crate) fn refuse_to_bind(host: &str, port: u16, token: Option<&str>) -> Result<()> {
+    if token.is_none() && !undercroft_config::host_is_loopback(host) {
+        bail!(
+            "refusing to bind {host}:{port} without UNDERCROFT_MCP_HTTP_TOKEN — a network-exposed \
+             memory server must require a bearer token"
+        );
+    }
+    Ok(())
+}
+
 /// **This takes no `VaultStore`, and that is the point** (ROADMAP O242).
 ///
 /// The `/mcp` surface used to own one while `Tenancy` opened its own for the
@@ -229,13 +251,7 @@ pub(crate) fn resolve_mcp_token(declared: Option<&str>) -> Result<Option<String>
 pub fn serve_http(tenancy: Tenancy, host: &str, port: u16, read_only: bool) -> Result<()> {
     let token = resolve_mcp_token(std::env::var("UNDERCROFT_MCP_HTTP_TOKEN").ok().as_deref())
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    let loopback = host == "127.0.0.1" || host == "localhost" || host == "::1";
-    if !loopback && token.is_none() {
-        bail!(
-            "refusing to bind {host}:{port} without UNDERCROFT_MCP_HTTP_TOKEN — a network-exposed \
-             memory server must require a bearer token"
-        );
-    }
+    refuse_to_bind(host, port, token.as_deref())?;
 
     // Prometheus /metrics is opt-in (behind the bearer gate; no bind-address
     // check of its own — the bind rule above is the whole listener's).
@@ -686,5 +702,52 @@ mod tests {
         assert!(resolve_mcp_token(Some("  "))
             .expect_err("must refuse")
             .contains("names no token"));
+    }
+
+    /// **ROADMAP O177 — the refuse-to-bind rule asks the HOST predicate.**
+    ///
+    /// `::1` is the row that decides it. The rule used to compare `--host`
+    /// with three inline literals while `undercroft_config::addr_is_loopback`
+    /// held a second copy behind a `host:port` split, and O160's record called
+    /// the two byte-identical. Make this rule call `addr_is_loopback(host)` —
+    /// the drop-in that record invited — and `::1` is read as host `":"` and
+    /// port `1`, and this row fails: a working `serve-http --host ::1` would
+    /// have refused to start without a token. Every row answers what the
+    /// inline copy answered, so which addresses bind without a bearer did not
+    /// move.
+    #[test]
+    fn the_refuse_to_bind_rule_lets_every_loopback_host_through_without_a_token() {
+        // (--host, may it bind with no token?)
+        let rows: [(&str, bool); 9] = [
+            ("127.0.0.1", true),
+            ("localhost", true),
+            ("::1", true),
+            ("0.0.0.0", false),
+            ("::", false),
+            ("192.168.1.10", false),
+            ("127.0.0.1.example", false),
+            // Loopback, and refused without a token as it always was: the
+            // conservative direction, pinned so a widening is a decision.
+            ("127.0.0.2", false),
+            // An address spelling, not a host: nothing binds it.
+            ("[::1]", false),
+        ];
+        for (host, may_bind) in rows {
+            let tokenless = refuse_to_bind(host, 8765, None);
+            assert_eq!(tokenless.is_ok(), may_bind, "--host {host} with no token");
+            if let Err(e) = tokenless {
+                let e = e.to_string();
+                assert!(
+                    e.contains(&format!("refusing to bind {host}:8765"))
+                        && e.contains("UNDERCROFT_MCP_HTTP_TOKEN"),
+                    "the refusal names the bind and the way out: {e}"
+                );
+            }
+            // A token lifts the rule for every host, loopback or not.
+            assert!(
+                refuse_to_bind(host, 8765, Some("s3cret")).is_ok(),
+                "--host {host} with a token"
+            );
+        }
     }
 }

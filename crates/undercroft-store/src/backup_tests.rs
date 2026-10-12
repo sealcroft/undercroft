@@ -804,3 +804,99 @@ fn o256_a_foreign_key_generation_marker_refuses_inside_the_snapshot() {
         .unwrap()
         .is_empty());
 }
+
+/// **ROADMAP O273: a `backups/.staging` that is a symbolic link refuses the
+/// backup before anything is swept, staged or copied through it.** The stage
+/// followed the link — the copied database went wherever it pointed, and was
+/// published from there — and the sweep removed every 32-hex directory older
+/// than an hour inside it. Asserted by the steps REACHED as well as by what is
+/// left: the manifest read fires, the snapshot is never pinned, so the refusal
+/// is the stage's; the directory the link names keeps its listing, its bytes
+/// and its mtime, which any create or removal inside it moves; no archive is
+/// published. The control is the fix's own behaviour: with the link replaced
+/// by a real directory the same handle archives, and the archive is exactly
+/// the reported state.
+#[cfg(unix)]
+#[test]
+fn o273_a_linked_staging_refuses_the_backup_before_the_snapshot_and_changes_nothing() {
+    let dir = corpus(SecurityLevel::Sealed, 30);
+    let root = dir.path();
+    std::fs::create_dir_all(backups(root)).unwrap();
+    let elsewhere = TempDir::new().unwrap();
+    let victim = elsewhere.path().join("victim");
+    let shaped = victim.join("cd".repeat(16));
+    std::fs::create_dir_all(&shaped).unwrap();
+    std::fs::write(
+        shaped.join("vault.db"),
+        b"not a backup's, but shaped like one",
+    )
+    .unwrap();
+    let two_hours_ago = std::time::SystemTime::now() - Duration::from_secs(2 * 60 * 60);
+    for d in [&shaped, &victim] {
+        std::fs::File::open(d)
+            .unwrap()
+            .set_modified(two_hours_ago)
+            .unwrap();
+    }
+    let mtime = |p: &Path| std::fs::metadata(p).unwrap().modified().unwrap();
+    assert!(
+        mtime(&shaped).elapsed().unwrap() > undercroft_vault::backups::STALE_STAGE,
+        "premise: the sweep removes it if it reaches it"
+    );
+    std::os::unix::fs::symlink(&victim, backups(root).join(".staging")).unwrap();
+    let (before, victim_mtime) = (tree(&victim), mtime(&victim));
+
+    let s = open_at(root);
+    let fired = Arc::new(Mutex::new(Vec::<Phase>::new()));
+    {
+        let fired = fired.clone();
+        pause::set(
+            &vdir(root),
+            Arc::new(move |p| fired.lock().unwrap().push(p)),
+        );
+    }
+    let answer = s.backup(&backups(root));
+    match answer {
+        Err(StoreError::Vault(undercroft_vault::VaultError::Io(e))) => assert!(
+            e.to_string().contains("ROADMAP O273") && e.to_string().contains("symbolic link"),
+            "{e}"
+        ),
+        other => panic!("a linked .staging must refuse the backup: {other:?}"),
+    }
+    assert_eq!(
+        *fired.lock().unwrap(),
+        [Phase::ManifestRead],
+        "refused at the stage, before the snapshot was pinned or anything copied"
+    );
+    assert!(
+        tree(&victim) == before,
+        "nothing swept, made or copied there"
+    );
+    assert_eq!(
+        mtime(&victim),
+        victim_mtime,
+        "nothing created or removed there"
+    );
+    assert_eq!(
+        files_in(&backups(root)),
+        [".staging"],
+        "no archive published"
+    );
+    assert!(std::fs::symlink_metadata(backups(root).join(".staging"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+
+    // The control: the link replaced by a real directory, the same handle
+    // archives exactly the reported state, every phase reached.
+    fired.lock().unwrap().clear();
+    std::fs::remove_file(backups(root).join(".staging")).unwrap();
+    let report = created(s.backup(&backups(root)).unwrap());
+    pause::set(&vdir(root), Arc::new(|_| {}));
+    assert_eq!(
+        *fired.lock().unwrap(),
+        PHASES,
+        "control: every phase reached"
+    );
+    assert_is_the_reported_state(root, &report, "control");
+}

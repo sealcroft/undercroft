@@ -141,6 +141,15 @@ impl Latch {
         true
     }
 
+    /// One write that must know its own fate: attempted unless the stream is
+    /// already lost, classified like any other, and answered with the state
+    /// it left — so a stream lost BEFORE it reports the loss and the write is
+    /// never reached.
+    fn reported(&mut self, op: impl FnOnce() -> io::Result<()>) -> Delivery {
+        self.attempt(op);
+        self.state.clone()
+    }
+
     /// Record the first loss; a later one changes nothing.
     fn lose(&mut self, e: &io::Error) {
         if self.state == Delivery::Delivered {
@@ -196,6 +205,22 @@ pub fn write_bytes(bytes: &[u8]) {
     door(|latch| {
         latch.attempt(|| io::stdout().lock().write_all(bytes));
     });
+}
+
+/// Bytes to stdout through the door, FLUSHED, and what became of them — for
+/// the one write whose loss the command must report itself: a destruction's
+/// receipt, which is the only copy (ROADMAP O262). It latches exactly as
+/// [`write_bytes`] does, so the exit status is the fold's as ever; the answer
+/// only tells the caller what to say. `Delivered` is not a proof of receipt:
+/// a pipe accepts what fits in its buffer (see [`EXIT_SUCCESS`]).
+pub fn write_bytes_flushed(bytes: &[u8]) -> Delivery {
+    door(|latch| {
+        latch.reported(|| {
+            let mut out = io::stdout().lock();
+            out.write_all(bytes)?;
+            out.flush()
+        })
+    })
 }
 
 /// A write a library makes to stdout itself — clap's help and version text
@@ -300,6 +325,41 @@ mod tests {
         }));
         assert_eq!(reached, 2, "the write after the reader left was reached");
         assert_eq!(latch.state, Delivery::ReaderLeft);
+    }
+
+    /// The reported write (ROADMAP O262): it answers what became of ITSELF,
+    /// and a stream already lost is answered without the write being reached
+    /// — the door must not let a caller claim a copy went out after a latch.
+    #[test]
+    fn a_reported_write_answers_its_own_fate_and_is_skipped_after_a_latch() {
+        let mut latch = Latch::new();
+        let mut reached = 0;
+        assert_eq!(
+            latch.reported(|| {
+                reached += 1;
+                Ok(())
+            }),
+            Delivery::Delivered
+        );
+        assert_eq!(
+            latch.reported(|| {
+                reached += 1;
+                Err(full())
+            }),
+            Delivery::Failed("No space left on device".into())
+        );
+        assert_eq!(
+            latch.reported(|| {
+                reached += 1;
+                Ok(())
+            }),
+            Delivery::Failed("No space left on device".into()),
+            "a write after the stream was lost reported delivery"
+        );
+        assert_eq!(reached, 2, "the write after the loss was reached");
+        let mut latch = Latch::new();
+        latch.attempt(|| Err(broken()));
+        assert_eq!(latch.reported(|| Ok(())), Delivery::ReaderLeft);
     }
 
     #[test]

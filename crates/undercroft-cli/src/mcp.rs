@@ -853,10 +853,24 @@ fn call_tool(store: &mut VaultStore, name: &str, args: &Value) -> Result<String>
                     report.tampered_receipts()
                 )
             };
+            // ROADMAP O231: `bad_records` by COUNT, split the way the CLI
+            // splits it — a failed HMAC, and a drawer whose HMAC verifies over
+            // covered meta that does not parse — with no `_`, so a new reason
+            // is placed before it compiles. Counts only, as every leg on this
+            // transport is; the named lines are the CLI's and `/v1`'s.
+            let hmac_failures = report
+                .bad_records
+                .iter()
+                .filter(|b| match b.reason {
+                    undercroft_store::BadReason::TagFailed => true,
+                    undercroft_store::BadReason::MetaUnparseable => false,
+                })
+                .count();
             let text = format!(
-                "records checked: {}\nhmac failures: {}\naudit chain: {}\naudit labels: {}\norphan labels: {}\nmirror drift: {}\npolicy drift: {}\nversion replay: {}{}{}\nresult: {}",
+                "records checked: {}\nhmac failures: {}\nunreadable: {}\naudit chain: {}\naudit labels: {}\norphan labels: {}\nmirror drift: {}\npolicy drift: {}\nversion replay: {}{}{}\nresult: {}",
                 report.records_checked,
-                report.bad_records.len(),
+                hmac_failures,
+                report.bad_records.len() - hmac_failures,
                 if report.chain_ok { "ok" } else { "BROKEN" },
                 report.label_commitment.as_str(),
                 report.orphan_labels.len(),
@@ -999,13 +1013,23 @@ fn call_tool(store: &mut VaultStore, name: &str, args: &Value) -> Result<String>
             let tax = store.taxonomy()?;
             Ok(serde_json::to_string_pretty(&tax)?)
         }
+        // A repeated create names the tunnel the first one wrote and writes
+        // nothing — no row, no chain record (ROADMAP O236) — and says so,
+        // rather than telling an agent it created what was already there.
         "undercroft_create_tunnel" => {
-            let id = store.create_tunnel(
+            let out = store.create_tunnel(
                 req_str(args, "from_wing")?,
                 req_str(args, "to_wing")?,
                 opt_str(args, "label").unwrap_or("related"),
             )?;
-            Ok(format!("tunnel {id} created"))
+            if out.created {
+                Ok(format!("tunnel {} created", out.id))
+            } else {
+                Ok(format!(
+                    "tunnel {} already exists — nothing was written",
+                    out.id
+                ))
+            }
         }
         "undercroft_list_tunnels" => {
             let t = store.list_tunnels(opt_str(args, "wing"))?;
@@ -1327,6 +1351,38 @@ mod tests {
                 .unwrap_or_default()
                 .to_string(),
         )
+    }
+
+    /// **ROADMAP O236, on the surface the entry names: an agent calling
+    /// `undercroft_create_tunnel` twice is told the second call wrote
+    /// nothing, and nothing was written.** The reply was "tunnel {id} created"
+    /// both times while the second call appended a chain record for a row it
+    /// never inserted.
+    #[test]
+    fn o236_a_repeated_tunnel_create_over_mcp_writes_nothing_and_says_so() {
+        let (_d, mut h, mut store) = handler();
+        let args = json!({ "from_wing": "notes", "to_wing": "archive", "label": "see also" });
+        let (err, first) = call(&mut h, &mut store, "undercroft_create_tunnel", args.clone());
+        assert!(!err && first.ends_with(" created"), "premise: {first}");
+        let height = store.chain_state().unwrap();
+
+        let (err, again) = call(&mut h, &mut store, "undercroft_create_tunnel", args);
+        assert!(!err, "a repeated create is not an error: {again}");
+        assert!(
+            again.contains("already exists") && again.contains("nothing was written"),
+            "the reply says it was a no-op: {again}"
+        );
+        assert!(!again.contains("created"), "{again}");
+        let id = first
+            .split_whitespace()
+            .nth(1)
+            .expect("the reply names the tunnel");
+        assert!(again.contains(id), "the same tunnel: {again}");
+        assert_eq!(
+            store.chain_state().unwrap(),
+            height,
+            "a repeated create appended a chain record for a write that never happened"
+        );
     }
 
     /// **ROADMAP O224, on the route an agent drives alone: a flagged update
