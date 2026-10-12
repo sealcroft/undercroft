@@ -2,9 +2,9 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and forty-seven fixes. The witness
+MINOR: one new capability, backward compatible, and fifty-three fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Fourteen fixes change what a deployment must do: every process writing a
+start-up. Sixteen fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
@@ -26,17 +26,26 @@ and `verify --read-only` is the pre-flight before the upgrade (O231); `backup cr
 refuses a `backups/.staging` that is a link or anything but a directory (O273), and a
 restore refuses a live vault holding any entry that is not a regular file (O301);
 `bundle keygen` and `bundle sign-keygen` refuse a link at the identity's path, a dangling
-one included (O321); and a key file is published whole by a hard link of a fsynced temp,
+one included (O321); a key file is published whole by a hard link of a fsynced temp,
 so a first start whose link fails for any reason but a filesystem without hard links exits
-1 naming the temp that holds the key (O210) — all in
+1 naming the temp that holds the key (O210); `verify-forgetting` and `witness check`
+answer a document carrying a field or a version this build does not know as NOT CHECKED,
+exit 1 and 400 over `/v1`, where a receipt with a key added beside its signature verified
+and a newer build's signed field read as forged (O315); and a `--read-only` open of a vault
+nothing has written yet exits 1, a `/v1` 409 with no class, where it exited 2 with
+`class: "integrity"`, so an alert keyed on exit 2 stops firing for it (O213) — all in
 `UPGRADING.md`, beside O279's note that a filesystem whose inode numbers are not
 stable now refuses every open (which `config check` pre-flights), O255's note that
 a destruction now holds the write lock for as long as it runs, O256's that an
 archive taken by an older release beside a writer may be torn, O303's that a
 vault whose `chain_meta` has lost its committed head or its height is refused
 instead of adopted, O236's that a repeated tunnel create, or an import, over a
-tunnel row edited offline exits 2, and O259's and O260's that a source delete and an
-allow now change everything or nothing, a failure part-way changing nothing. (This line said "one fix" while O243 and
+tunnel row edited offline exits 2, O259's and O260's that a source delete and an
+allow now change everything or nothing, a failure part-way changing nothing, O221's that
+the admission queue is decided by each row's covered wing, so `admission list` over a queue
+an offline writer touched answers 200 with `ok: false` where it answered 409, and walks the
+whole vault, and O308's, amending O303's, that a deleted `vault.db` beside a manifest that
+records history is refused on both postures with nothing created. (This line said "one fix" while O243 and
 O246 were both below it; corrected with O247. It said "nine" until O268,
 "ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
 until O279, which closed four entries, "seventeen" until O281, "eighteen" until O284,
@@ -47,11 +56,16 @@ by counting the entries — "twenty-seven" until O305, "twenty-eight" until O309
 until O314, "thirty" until O212, "thirty-one" until O287, which closed two entries, and
 "thirty-three" until train 1's integration, which closed six — O331, O199, O200, O177,
 O236 and O262 — "thirty-nine" until O231, and "forty" until the units of O273, O211 and O210,
-which closed five — O273, O301, O211, O210 and O321, and "forty-five" until O259's unit closed O259 and
-O260; it said "Three fixes change what a deployment must do" until O283 made
+which closed five — O273, O301, O211, O210 and O321, "forty-five" until O259's unit closed O259 and
+O260, and "forty-seven" until train 3's integration, which closed six — O221, O226, O315, O308,
+O213 and O322;
+it said "Three fixes change what a deployment must do" until O283 made
 it four, "Four" until O291 made it five, "Five" until O212 made it six, "Six"
-until O287 made it seven, "Seven" until train 1 made it nine (O200, O262), "Nine" until O231 made it ten, and "Ten" until those units made it fourteen (O273, O301,
-O321, O210). O303's
+until O287 made it seven, "Seven" until train 1 made it nine (O200, O262), "Nine" until O231 made it ten, "Ten" until those units made it fourteen (O273, O301,
+O321, O210), and "Fourteen" until train 3's integration made it sixteen (O315, O213), O221's
+entry joining the notes beside it — every answer it moves is on a queue an offline writer
+touched, and its cost is the kind O255's note records — and O308's amending O303's there;
+O322 moves only what a refusal's message says. O303's
 note was missing from it from O303 until train 1's integration, which found it by reading
 `UPGRADING.md`'s entries against this line.)
 
