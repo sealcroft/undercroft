@@ -4324,6 +4324,8 @@ The carrier is settled by the reference-holder and mixed-version evidence, the d
 - `config check` owes nothing, by O154's argued exemption.
 - M3 stays the MAJOR shape.
 
+**Noted 2026-10-12 by O294's build, beside item 3's scope (O294's ruling of that date, its sentence owed here).** "So is `hash`, whose identity is its code's" was false of the released state: hash's identity was its code times the compiler's `char` tables times the locked normalization crate, and the GHCR images (Rust 1.90, Unicode 16) and the prebuilt binaries (1.97.1 to 1.98.1, Unicode 17) computed two spaces under one name (O421). It is true again from O294's build on, whose compile-time assertion in `undercroft-core` fixes both tables at Unicode 17.0.0. This entry's carrier does not transfer to that case — for hash an older image computes a different space — which is why O421 mints `v4` instead (its ruling).
+
 #### PANEL RECORD 2026-10-08 — a probe decides first
 
 **The question.** What the fingerprint's VALUE is, and the two tolerances the ruled shape needs. The candidates:
@@ -5613,6 +5615,8 @@ process). Windows (P5). The busy tail (O258). One writable open in about 40
 beside two writers failed `constraint failed` in the gate's second round, from
 a statement not yet identified — recorded in O253, whose unit owns concurrent
 opens.
+
+**Noted 2026-10-12 by O294's build (its ruling's item 5).** "`std::fs::File::lock` compiles on the pinned toolchain (1.90)" was a statement about the images' compiler; no shipped binary was built by 1.90. Under the pin every build uses from O294 on, 1.98.1, the workspace compiles, `File::lock`'s public function and Windows body are identical to 1.90.0's, and its unix body is the same `flock(LOCK_EX)` on Linux and Apple, now behind `cfg_select!`.
 
 ### O257 — CLOSED 2026-09-24: a key rotation holds the vault alone and refuses beside any other holder, and a handle whose keys are not the vault's commits nothing
 
@@ -10761,6 +10765,8 @@ a symbolic link are O293's.
 
 **Item 3a's `deferral_in_force` clause, REVISED 2026-09-29 by O290's ruling** (recorded beside it). An absent `vault.json` on the read-only open's check answers `CorruptManifest` (no event, never a reopen), no longer `Io`: the item itself rules absent "integrity … on EVERY handle", its carve-out cited O288 item 2's read-failure principle while this entry reclassified absent as no read failure, and measured, one state answered exit 1 and a `/v1` 500 on the deferred read-only window where the non-deferred windows answer exit 2 and 409 integrity. An unreadable file stays `Io`.
 
+**Noted 2026-10-12 by O294's build (its ruling's item 5).** The records above that read Rust 1.90's Windows `rename` and `decode_error_kind` described the images' compiler, not what shipped, as this entry's own review said. Desk-read in 1.98.1's `rust-src`, the pin every build uses from O294 on: `rename` is the same code (one `// SAFETY:` comment moved two lines), and `decode_error_kind`, moved to `std/src/sys/io/error/windows.rs`, maps `ERROR_ACCESS_DENIED` to `PermissionDenied` and a sharing violation and delete-pending to no specific kind, as 1.90.0's did. Both readings now describe what ships.
+
 
 ### O277 — CLOSED 2026-09-28: a `vault.json` that is missing, or is not a manifest file, is the integrity verdict on every live handle, never a fall-back to `VERIFY OK`
 
@@ -14746,6 +14752,8 @@ payload digest catches that, at import.
 All seven were mine to catch; the review found them. The prose figure in O47's record moves to
 `363 of the 378` with O333.
 
+**Noted 2026-10-12 by O294's build (its ruling's item 5).** "The tree's pinned 1.90" and P4's reading of rustc 1.90's Windows error mapping described the images' compiler. Under the pin every build uses from O294 on, 1.98.1, `decode_error_kind` still maps both `ERROR_BROKEN_PIPE` and `ERROR_NO_DATA` to `BrokenPipe` (desk-read in its `rust-src`, the function moved to `std/src/sys/io/error/windows.rs`), and one new arm reaches the kind the latch keys on: `WSAESHUTDOWN`, a socket written after its write end shut, is `BrokenPipe` too. And P8 is now probed on the pin: 1.98.1 refuses `-Zon-broken-pipe` as 1.90 did (``the option `Z` is only accepted on the nightly compiler``).
+
 ### O328 — CLOSED 2026-10-08: no diagnostic can kill a server or lose a verdict — the default build's diagnostics, an FDE warning and the search trace write a best-effort line, and a server whose stderr reader is gone keeps serving
 
 **Filed 2026-10-06 by O287's ruling; unmeasured.** The default build's `_diag` is a bare `eprintln!`
@@ -14980,6 +14988,8 @@ changes: the script fails with an empty `GH_TOKEN` or an empty override, inside 
 workflow that runs it without a token, and with an expired `GH_TOKEN` exported (401 where it used to
 pass unauthenticated) — and `gh` already prefers an exported `GH_TOKEN` to its stored login, so one
 exported for this read is also what `--update`'s write uses.
+
+**Corrected 2026-10-12, beside the record above and not in place, as read off CI by the integrator.** Gate (2)'s observable on CI read `release read: HTTP 200, with GH_TOKEN; rate limit 5000 (core)` — 5000, not the "1,000 an hour per repository" the record says the job's `GITHUB_TOKEN` gets (GitHub's documented figure, which the record had not measured), and not the stub's `limit 1000`, which was the stub's own figure. The gate's intent holds, and it is what the line measures: the token reaches the read, which a `rate limit 60` would have denied. The limit a hosted job's token is given is GitHub's to set, read off a run, never asserted here.
 
 ### O199 — CLOSED 2026-10-08: the observability engine runs `undercroft init && exec …`, so a failed init stops it with init's own error
 
@@ -16321,6 +16331,556 @@ filed it, and the witness gate counts three `Ruled`; the review's own
 (`unwrap_or(false)` at the door) — the failed-fence test stays GREEN, the
 in-lock fence refusing it with nothing deleted, which is what the witness is
 for.
+
+### O294 — CLOSED 2026-10-12: one toolchain builds everything — `rust-toolchain.toml` pins 1.98.1, which built every v1.5.2 to v1.6.1 binary and whose std carries Unicode 17.0.0; `undercroft-core` refuses to compile on any other Unicode version; CI installs the pin by name, and a preflight holds the images and every workflow to it
+
+**Filed 2026-09-28 by O289's ruling (its engineering lens, confirmed by the refuter).** The
+Docker images pin `rust:1.90-slim-bookworm`, so every suite, the lint and the Linux images build
+on 1.90. `release.yml`'s binary targets build with whatever stable toolchain each runner has
+installed (it only adds the target), and `windows-check` takes `dtolnay/rust-toolchain@stable` —
+so the Windows, macOS and native Linux artifacts are built by a compiler no suite ran, and a claim
+about "Rust 1.90's std" (O289's Windows reading) is not a claim about what ships.
+
+**Shape**: one pinned toolchain for every build — a `rust-toolchain.toml`, or the version named in
+both workflows — with a gate that the Dockerfile's image and the pin agree.
+
+**Gate**: a preflight comparing the Dockerfile's `rust:` tag with the workflows' toolchain, both
+directions.
+
+**Noted 2026-10-12 by this entry's build — two relations that were declared here.** "Sequenced
+before O275 — a claim about Rust's rename on Windows is a claim about the toolchain that builds the
+shipped binary, which this entry pins", and "shares a diff surface with O168 — both change
+`windows-check`'s toolchain step". This entry is closed and both partners are open, so each is a note
+on both sides rather than a `Relations:` line, which names open entries only; O275 and O168 carry the
+matching notes.
+
+**Noted 2026-10-08 by O166's ruling (its item 5).** The hash identity's token space depends on std's
+Unicode tables (`is_alphanumeric` in `segment`, `to_lowercase` in `search_key`), so two native
+release artifacts built on different stable toolchains can tokenize a newly assigned codepoint
+differently under one name. O166's golden-vector assertion runs only in the Docker toolchain and
+cannot see the native release builds until this entry pins them.
+
+**Noted 2026-10-12 by this entry's ruling (its item 6).** Before this pin the images tokenized with
+Unicode 16 and the prebuilt binaries with 17 under one identity, and O421 heals it.
+
+#### RULED 2026-10-12 by three lenses (Agentic Memory Architecture; Retrieval and text processing (Unicode segmentation, normalization stability, vector-space identity); Release engineering and supply chain (reproducible toolchains, what was shipped vs tested, UPGRADING)) and an adversarial refuter
+
+**The question.** Which toolchain do the releases, the images and the tests pin, and what does
+`UPGRADING.md` owe? The build under review (`train2-o294` at `91559e5`, carrying O326 and O327 too)
+pins `1.90.0`, the images' compiler. The question this entry did not know it carried: the hash
+identity's tokens read std's Unicode tables, so the pin's VALUE decides which released population's
+vector space and room derivation move.
+
+**Prior rulings found, and their disposition.** Searched case-insensitively for `rul(ed|ing)` in
+O294 and in every entry it names (O289, O275, O168, O166), plus O163, O189, O233 and O238.
+- O294 carries none. "Filed … by O289's ruling" and "Noted … by O166's ruling" are filings; the
+  shape ("the Dockerfile's image and the pin agree") is a hypothesis, not a ruled value.
+- **O168's ruling, items 4 and 5** (the legs check with the release's mechanism; "O294's pin must
+  cover these legs"): FOLLOWED. Any pin value satisfies them, and the build's script already does.
+- **O275's maintainer ruling** ("approve all as recommended", 2026-10-08), whose approved text runs
+  the Windows probe "on the pinned 1.90 toolchain (O294 first, or pinned in that file and stated)":
+  its INTENT is FOLLOWED and its NUMBER is REFUTED beside it. The intent is O275's own relations line,
+  "a claim about Rust's rename on Windows is a claim about the toolchain that builds the shipped
+  binary, which that entry pins". The number described the pin the panels then assumed. No Windows
+  binary was ever built by 1.90 (below), so "1.90" never described what ships. This is an
+  engineering value inside a maintainer-approved text, not a product, licence or naming choice, so
+  it is revised in the open: a sentence beside O275, and the changed number put before the
+  maintainer in the pull request that carries this pin, before O275's run is dispatched.
+- **O166's ruling, items 2, 5 and 6**: FOLLOWED, item 2 amended (O166's record of this date).
+- **O189's `textfit` version assertion** (a derived artifact pinned to one Unicode version, with a
+  check that refuses a runtime that does not match): FOLLOWED as the precedent for the assertion
+  below.
+- **O233 and O238** (an older binary refusing a vault a newer one has touched, shipped as a fix and
+  documented in `UPGRADING.md`): FOLLOWED for the identity entry this ruling files.
+
+**The evidence, re-read here.**
+- What built each release (`o294/p2-result.txt`, the runner image's documented toolchain; every
+  `release.yml` binary job ran `rustup target add` alone, lines 48 and 123): 1.97.1 built 47 of the
+  130 v1.* binaries, 1.98.0 built 53, 1.98.1 built 30 (v1.5.2, v1.6.0 and v1.6.1, ten of ten). No
+  tag carries a `rust-toolchain` file. Every tag's Dockerfile builds `FROM rust:1.90-slim-bookworm`
+  (read at `v1.0.0`, `v1.5.2`, `v1.6.1`), so every GHCR image, `docker build`, compose service and
+  suite is 1.90.
+- What the tables are. The review's `rev-o294/uni/u.rs` counted 144,434 alphanumerics under 1.90.0
+  (Unicode 16.0.0) and 149,106 under 1.97.1 and 1.98.1 (17.0.0); its output was saved nowhere. Lens
+  2 regenerated 149,106 independently from the locked `icu_properties_data` 2.2.0 Alphabetic list
+  and `unicode-properties` 0.1.4's General_Category (both Unicode 17), and found 4,672 codepoints
+  newly assigned in 17 that are Alphabetic or Numeric there, 4,298 of them CJK Extension J; 28 of the
+  newly assigned change when lowercased; no character assigned in 16 changes General_Category across
+  the letter/number line or its Changes_When_Lowercased value. That is UCD data, not std's tables,
+  and the Other_Alphabetic leg for existing characters was not compared as a set — P-U1 owes both.
+  The refuter's own read of the locked normalization tables (`refuter/ranges.out`): no character new
+  in 17 has a canonical decomposition, the one with a compatibility decomposition (U+A7F1) lies
+  outside `expand_compat`'s ranges, and the 25 new ones inside its Arabic-presentation range carry
+  none — so `search_key`'s output moves between the two tables only through case, which is what
+  `drawers_fts` stores.
+- The locked `unicode-normalization` 0.1.25 declares `UNICODE_VERSION: (u8, u8, u8) = (17, 0, 0)`
+  (`tables.rs` 18, re-exported at `lib.rs` 64); the workspace asks for `"0.1"` (`Cargo.toml` 66).
+- Every compiler-dependent site the brief listed exists as stated, and three more do:
+  `lexical_score`'s split (`crates/undercroft-store/src/lib.rs` 13000), and two `is_numeric` guards
+  in channels that admit or rank (11243, 12609). A hand list of sites is therefore incomplete, which
+  matters only to a decoupling (the escalated entry below), never to an assertion over the tables.
+- A codepoint alphanumeric under 17 and not under 16 is a delimiter under 16 (`script.rs` 259), so
+  a query made of such characters tokenizes to nothing and its drawer cannot be found on any channel.
+  Under 17 it is a token. No walk changes that: it is the table, not a stored vector.
+- `drawers_fts` is `fts5(text)` (`lib.rs` 6672, 6756), so its token boundaries are SQLite 3.46.0's
+  `unicode61`, pinned by the lock, and a codepoint absent from SQLite's table is category 0, which is
+  a token character (`sqlite3.c` 255652, 256132-256155). `fts_candidates` (`lib.rs` 10483-10520)
+  ORs Rust's query terms as phrases. So under 16 a newly assigned letter glued to other letters
+  makes Rust's term (`abc`) differ from the index's token (`abcX`): the prefilter can return a
+  non-empty set without that drawer and cut it, which is the failure `needs_full_scan`'s comment
+  names (12766-12773). Under 17 the two agree for a caseless one. The images' hmac-only vaults carry
+  that cut today (a sealed vault has no FTS); 1.90 in the binaries would carry it to theirs.
+- The build's own record: "macOS, arm64 Linux and the Windows `-ort` build first meet 1.90.0 at the
+  next release". 1.98.1 built all ten v1.6.1 assets.
+
+**Ruled.**
+1. **One pin for every build, and its std carries Unicode 17.0.0** — the toolchain that built
+   v1.5.2 to v1.6.1, `1.98.1`, unless P-U8 clears only another 17-carrying version. The build's
+   mechanism stays whole: `rust-toolchain.toml`, `.github/scripts/pinned-toolchain.sh` and the
+   `supply chain is pinned` preflight are pin-agnostic; the Dockerfile's builder and CI's lint
+   container move to the pin's full-version image together with the file, as that preflight already
+   requires. The build does not merge with `1.90.0`.
+2. **The space is asserted at COMPILE time, in `undercroft-core`**, which every binary links: an
+   unnamed `const` asserting all three components of `core::char::UNICODE_VERSION` and of
+   `unicode_normalization::UNICODE_VERSION` equal `(17, 0, 0)`, its message naming the hash identity
+   and this entry. A test-only assertion cannot see a native build; this fails the compile on every
+   path that ignores `rust-toolchain.toml` (`cargo +x`, `RUSTUP_TOOLCHAIN`, a distro `cargo`) and in
+   every `cargo check`. The workspace pins `unicode-normalization = "=0.1.25"` so no `cargo update`
+   moves NFC under the identity unannounced; the assertion is the gate, the exact pin the convenience.
+3. **What the pin moves is the identity entry's** (filed by this ruling, below): the GHCR images'
+   token space moves from Unicode 16 to 17, which is healed by a `undercroft-hash-v4` walk in the SAME
+   release. **No tag carries this pin without that walk.** Merging the pin to `main` is allowed; the
+   identity entry is placed under the release heading that carries this entry once the maintainer
+   fixes that release, and O309's tag-reading arm then refuses to mark the release released while
+   the identity entry is open. Building the two in one train is simpler and preferred.
+4. **`UPGRADING.md`.** The build's entry is rewritten for the pin it names, and gains what the
+   assertion stops: a native source build on a toolchain whose std is not Unicode 17.0.0 fails to
+   compile, with the assertion's message. Its last paragraph's "The prebuilt binaries, the GHCR
+   images and a `docker build` are unaffected" is true only of the fetch symptom and under this ruling
+   is false of the images' token space; it is scoped to the fetch and points to the identity entry's
+   own `UPGRADING.md` lines. `undercroft config check` cannot detect a build failure: a build is not
+   a declaration (the build's own sentence, kept).
+5. **Records that rest on 1.90 are scoped, not deleted.** Thirty-one `ROADMAP.md` lines name 1.90 on
+   `c578c76`. Each that states a std or cargo behaviour as a property of what ships — at least O254's
+   `File::lock` (5305), O289's Windows `rename` (10389), O287's P4 error mapping (14283), O275's
+   `FileRenameInfoEx` reading (43010, 43655), O157's cargo reach (23042) and P-SLICE (35652) — gains a
+   sentence beside it after a desk read of the pin's `rust-src`: the same, or what differs. None of
+   them ever described a shipped Windows or macOS binary; under this ruling they are verified against
+   what ships for the first time. O275's probe runs on the pin.
+6. **The "Noted 2026-10-08" paragraph gains its population sentence**: before this pin the images
+   tokenized with Unicode 16 and the prebuilt binaries with 17 under one identity, and the identity
+   entry heals it.
+
+**Decision rule, written before the probes.** If P-U1 shows 1.90.0 and the pin carry IDENTICAL
+token-path tables (the review's unsaved figures refuted), no released divergence exists, the
+identity entry is withdrawn by evidence, and the pin's value becomes an engineering choice this
+ruling does not make: it is re-asked with the release-engineering costs below (a first compile of
+four shipped builds at the tag under 1.90, an older std, against the 1.90 records' re-reading), and
+the compile-time assertion lands at whatever version that answer pins. If P-U1 shows 1.97.1,
+1.98.0 and 1.98.1 differ from each other on a token-path property, the pin is still the newest of
+them and the walk heals the third population. If P-U8 finds no `rust:<pin>-slim-bookworm` image, the
+pin is the newest 17-carrying version that has one; the builder and the runtime stage never change
+distribution apart (a newer glibc in the builder than in the runtime stage fails at start, not at
+build).
+
+**Options that lost.**
+- **T1, 1.90.0 alone (the build under review).** Every prebuilt-binary vault loses lexical and
+  vector reach to 4,672 codepoints at upgrade, and no walk restores it; the FTS cut above reaches
+  those vaults; the token path keeps reading Unicode-16 `char` tables beside Unicode-17 normalization;
+  both macOS targets, arm64 Linux and the Windows `-ort` build meet a compiler that never built them
+  first at the tag; and the shipped std goes back eight minor releases (1.90.0 is dated 2025-09-14,
+  1.98.1 2026-09-01).
+- **T1 with the token path decoupled at Unicode 17 (lens 1).** Sound, and not refuted: once a
+  decoupling lands the pin is a free engineering choice. It waits on a licence and dependency
+  decision that is the maintainer's (escalated below) and on an exactness probe, and it ships the
+  same walk. A Unicode-17 pin now does not prevent it later.
+- **T3, no pin.** The next tag is built by whatever the runner image carries, and the space moves
+  with it unannounced.
+- **Split pins.** The entry's own shape refuses them.
+
+**Claims refuted.**
+- The brief: "1.98.0, which built 47 of the 130 release binaries" — it built 53; 47 is 1.97.1.
+- The brief's T1 costs omit the live retrieval loss, and its site table omits `lexical_score`'s
+  split and both `is_numeric` guards (above).
+- The brief: a source builder outside CI "is unguarded" and O166's assertion "runs in Docker alone"
+  — true of a test, false of a `const` assertion, which no option offered.
+- The brief: under T2 "every published test count is re-measured under the new compiler" — the
+  battery compares counts on every run under any compiler; nothing here moves a count.
+- Lens 3: "under any heal, the vault-space cost of T1 and T2 is the same" — false: T1 removes reach a
+  walk cannot restore, T2 removes none.
+- Lens 3: T1 reaches tested-equals-shipped "by moving the one untested artifact" — it moves both
+  macOS targets, arm64 Linux and the Windows `-ort` build onto a compiler that never built them (its
+  own item 4, and the build's record), while 1.98.1 built every v1.6.1 asset.
+- Lens 3: the build's `UPGRADING.md` entry "contradicts itself" — its cause and fix paragraphs are
+  consistent about the fetch; the defect is its silence on the token space (lens 2's reading).
+- Lens 2: "no caseless newly assigned codepoint can make the prefilter under-return" — true once
+  the query side reads 17; under 16, today's images, one glued to a letter can.
+- Lens 2's equality |A17 ∩ assigned-in-16| = |A16| proves equal COUNTS, the inference the brief
+  warned against, and |A16| is the unsaved figure; P-U1 settles it.
+
+**Probes owed (the integrator's: a private `CARGO_TARGET_DIR` per tree and toolchain;
+`MSYS_NO_PATHCONV=1` on any ad-hoc `docker run` passing `-e`, `-v` or `-w` container paths; each
+binary proved fresh; every scratch edit chained to its run with `&&`).**
+- **P-U1, first.** One standalone program, outside the workspace so `rust-toolchain.toml` cannot
+  override it, built in `rust:1.90.0-`, `1.97.1-`, `1.98.0-` and `1.98.1-slim-bookworm`. For every
+  scalar value: `is_alphanumeric`, `is_alphabetic`, `is_numeric`, `is_uppercase`, `is_lowercase`,
+  `is_whitespace`, `is_control`, the `to_lowercase` and `to_uppercase` strings, and
+  `str::to_lowercase` of `"A" + c + "Σ"` and `c + "Σ"` (Final_Sigma reads Cased and Case_Ignorable of
+  neighbours); plus `char::UNICODE_VERSION`. Sha256 each file, diff pairwise, and classify each
+  difference as newly assigned in 17 or assigned in 16 by the host Python 3.14's `unicodedata`
+  (asserted 16.0.0, so no download). Required: per-property symmetric differences, the count of
+  assigned-in-16 changes, the Hebrew ranges, Cc and White_Space, and whether 1.97.1, 1.98.0 and
+  1.98.1 are byte-identical. Premise: 1.90.0 and 1.98.1 print different versions, or one toolchain
+  was compared with itself.
+- **P-U8, before the number is written.** `rust:<pin>-slim-bookworm` exists, and its index digest;
+  `cargo fmt --check` and the clippy runs of the `lint` service (default and both telemetry builds)
+  under it; the whole battery under the new images; `cargo build --locked` leaves `Cargo.lock`
+  byte-identical (O371); the runtime stage starts the built binary.
+- **The assertion's counterfactual.** `undercroft-core` with the assertion fails to compile under
+  1.90.0 and compiles under the pin; premise, the error text names the assertion.
+- **The desk reads of item 5**, from the pin's `rust-src`.
+- **P-U2, optional, the maintainer's permission (a download).** Each v1.* asset's embedded
+  `/rustc/<commit>/library/` paths mapped to a release, which reads ELF, Mach-O and PE alike;
+  counterfactual, the GHCR image's binary shows 1.90.0's `1159e78c4`.
+
+**Dissent.** Lens 3 holds T1 at Unicode 16; refuted above. Lens 1 holds T1 conditional on a
+decoupling at Unicode 17, with this ruling's pin as its own stated fallback; recorded, and open again
+if the escalated decoupling lands.
+
+**Fails silently if** the assertion is written as a `#[test]`, or in a crate a release target does
+not compile, or compares only the major version; the pin moves without the identity walk in the same
+release; O275's probe runs on 1.90 after the pin has moved; a 1.90 reading is left describing what
+ships; P-U1's premise arm compared one toolchain with itself; or the builder's distribution moves
+without the runtime stage's.
+
+**What remains.** P-U1 and P-U8; which release carries the pin and the walk (the maintainer's); the
+sentences beside O275 and the 1.90 records; O424 and O425 as the build filed them.
+O326 and O327 are separable from this pin and unaffected by it.
+
+**Version class.** PATCH: what ships was built by a compiler no suite ran, and one identity named two
+token spaces; the pin removes that defect, and the token-space change it makes is healed by the
+identity entry in the same release. The assertion can stop a native source build, which the
+rewritten `UPGRADING.md` entry states; `config check` cannot detect it. Rides `1.7.0`, already MINOR.
+
+#### BUILT 2026-10-12, with O326 and O327 — the ruling's pin and its compile-time assertion; the first build, at 1.90.0, was mine and was stopped by its review
+
+**The first build was wrong, and the defect was mine.** Built on 2026-10-08 on this branch
+(`91559e5`), it pinned 1.90.0, the images' compiler, reading the filed shape ("a gate that the
+Dockerfile's image and the pin agree") as the answer to which version. Its own measurement said no
+v1.* binary had ever been built by 1.90.0, and it did not ask what moving every shipped target onto
+that compiler would move. The independent review found it: the hash identity's tokens read std's
+Unicode tables, and 1.90.0's are Unicode 16.0.0 where every shipped binary's were 17.0.0, so that pin
+would have taken lexical and vector reach to 4,672 codepoints from every prebuilt-binary vault at
+upgrade, with no walk able to give it back. The ruling above settled the value; this record is the
+rebuild. The first build's record never reached `main` and is not kept.
+
+**What landed.**
+- `rust-toolchain.toml`: `channel = "1.98.1"`, `profile = "minimal"` and nothing else, because a
+  `components` or `targets` line would make rustup fetch inside the offline images; the full version,
+  because the images install the toolchain under that name. Measured in `rust:1.98.1-slim-bookworm`
+  with the checkout mounted read-only: `rustup show active-toolchain` answers
+  `1.98.1-x86_64-unknown-linux-gnu (overridden by '/src/rust-toolchain.toml')`, nothing fetched.
+- The Dockerfile's builder and CI's lint container name `rust:1.98.1-slim-bookworm` (index digest
+  `sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730`, read by pulling it). The
+  runtime stage stays `debian:bookworm-slim`, the builder's distribution, so the glibc the binary is
+  linked against is the one it starts on (the ruling's decision rule; measured below).
+- `.github/scripts/pinned-toolchain.sh` is the one installer: it holds the file whole, installs the
+  channel by name with `--profile minimal --no-self-update`, adds the job's target, and fails unless
+  `rustc` in the checkout reports exactly the pin, because a `RUSTUP_TOOLCHAIN` or a directory
+  override outranks the file. Its `--channel` mode prints the pin and touches nothing, and the
+  preflight reads the pin through it, so the file has one reader. `release.yml`'s `binaries` and
+  `binaries-ort` call it with their target in place of `rustup target add`, `windows-check` in place
+  of `dtolnay/rust-toolchain@stable`, and `audit` before `cargo audit`.
+- **The assertion** (the ruling's item 2): an unnamed `const` in `crates/undercroft-core/src/embed.rs`,
+  beside `HASH_EMBEDDER`, asserting all three components of `core::char::UNICODE_VERSION` and of
+  `unicode_normalization::UNICODE_VERSION` equal `(17, 0, 0)`, its message naming `HASH_EMBEDDER`,
+  this entry and O421. Every binary links `undercroft-core`, so the assertion stops every path that
+  ignores the file — `cargo +x`, `RUSTUP_TOOLCHAIN`, a distro `cargo` — and every `cargo check`. The
+  workspace pins `unicode-normalization = "=0.1.25"`; `Cargo.lock` already held 0.1.25.
+- **Seven sites the newer clippy refuses**, eight minor releases of lints arriving at once, each
+  rewritten to the form its lint names with the result unchanged: `manual_checked_ops` (`late.rs`,
+  `checked_div(dim).unwrap_or(0)` for the `dim == 0` guard it replaces), `useless_borrows_in_formatting`
+  twice (the orchestrator's `engine.rs`), `chunks_exact_to_as_chunks` three times (vault `lib.rs`,
+  store `fdeidx.rs` and `pq.rs`, where `as_chunks::<4>().0` drops the remainder exactly as
+  `chunks_exact(4)` did), `explicit_counter_loop` (`pqidx.rs`, the page numbers zipped rather than
+  counted) and `unnecessary_sort_by` (the bench's `vs.rs`, a stable `sort_by_key` on `Reverse`, the
+  order the stable `sort_by` gave).
+- `CONTRIBUTING.md`, `README.md` and `docs/getting-started.md` say a native build uses the pin, and
+  `CONTRIBUTING.md` that a std of another Unicode version does not compile; `UPGRADING.md`'s entry is
+  written for 1.98.1 and the assertion (the ruling's item 4).
+
+**Measured — P-U1, first.** One program outside the workspace, built by each toolchain's own `rustc`
+in `rust:1.90.0-`, `1.97.1-`, `1.98.0-` and `1.98.1-slim-bookworm` (each by its index digest) and run
+with no network, printed eleven properties of each of the 1,112,064 scalar values and
+`char::UNICODE_VERSION` — the ruling's list, `is_alphanumeric` through `str::to_lowercase` of the two
+sigma contexts. 1.97.1, 1.98.0 and 1.98.1 print byte-identical files (sha256 `e2b92bc5…`,
+Unicode 17.0.0), so the three released populations are one, 1.98.0 — which the review had not
+measured — among them. 1.90.0 prints Unicode 16.0.0 (`d1afc722…`; the premise: two versions from two
+toolchains) and differs on 4,702 scalars, 4,699 of them newly assigned in 17 (classified by the host
+Python 3.14's `unicodedata`, asserted at 16.0.0): `is_alphanumeric` on 4,672, every one newly
+assigned and every one gaining the property, none losing it, 4,298 of them in CJK Extension J (lens
+2's figures, now read from std itself), `is_alphabetic` 4,662, `is_numeric` 13,
+`is_uppercase`, `is_lowercase`, `to_lowercase` and `to_uppercase` 28 each, `str::to_lowercase` of
+`"A" + c + "Σ"` 100 and of `c + "Σ"` 55; `is_whitespace`, `is_control` and both Hebrew ranges 0.
+**Three characters assigned in 16 move.** U+0295 LATIN LETTER PHARYNGEAL VOICED FRICATIVE leaves
+Lowercase, so it is no longer Cased and, not being Case_Ignorable either, stops a following capital
+sigma reading as final: `str::to_lowercase` of `ʕΣ` is `ʕς` under 1.90.0 and `ʕσ` under 1.98.1.
+`search_key` lowercases through `str::to_lowercase`, so a word in which U+0295 precedes a capital
+sigma is the one class of characters assigned in 16 whose token moves; its `is_alphanumeric` does not,
+U+0295 being Alphabetic in both. U+A7D3 and U+A7D5 gain uppercase mappings (U+A7D2, U+A7D4), which no
+token path reads (`to_uppercase` capitalises a speaker label in `convo.rs` alone). `entity.rs`'s
+capitalised-word test reads `is_lowercase`, live and unstored, so it moves with the toolchain and
+needs no walk. By the ruling's decision rule the tables differ, the identity entry stands, and the
+pin is the newest of the three identical toolchains; CHANGELOG names U+0295's class, as O421's
+ruling asks.
+
+**P2, the population.** Read from the runner image each `Binaries` job logged and that image's own
+readme (the jobs ran `rustup target add` alone, which installs no toolchain): v1.0.0, v1.1.0 and
+v1.1.1 on 1.97.1, ten jobs of ten; v1.2.0 to v1.5.1 on 1.97.1 and 1.98.0 mixed inside a release (four
+and six, three and seven, four and six, four and six, one and nine, then v1.5.0 all ten on 1.98.0 and
+v1.5.1 one and nine); v1.5.2, v1.6.0 and v1.6.1 on 1.98.1, ten of ten — 47, 53 and 30 of the 130
+binaries. None was built by 1.90.0, and every GHCR image was.
+
+**P-U8.** `rust:1.98.1-slim-bookworm` exists (digest above). Under it, with the checkout mounted
+read-only: `cargo fmt --all --check` is clean; the `lint` service's three clippy runs (default, and
+the CLI's and the orchestrator's telemetry builds) are clean with `-D warnings` once the seven sites
+above were rewritten; `cargo build --locked --release` leaves `Cargo.lock` byte-identical (sha256
+`43814f1f…` before and after). The Dockerfile's test and runtime stages build from this tree under the pin (`docker build`, no
+compose; the builder reports `rustc 1.98.1 (48a229cea 2026-09-01)`), and the runtime stage starts the
+built binary on `debian:bookworm-slim`'s glibc 2.36 with no library unresolved (`undercroft
+--version`: `undercroft 1.6.1`). `cargo test --release` in that test stage — the battery `test` suite's command, run in the image by
+hand rather than through compose — passes 1,380 tests with none failed and 17 ignored, over 20 targets
+(12 binaries and 8 doc-test runs), `model_e2e` not among them, as on every unnamed invocation; the
+integrator compares the count with the published figure at the integrated tree. The whole battery under the new images is the
+integrator's: no suite runs in this unit's worktree, because parallel worktrees race on compose.
+
+**The assertion's counterfactual.** `cargo check -p undercroft-core` under 1.90.0 fails, exit 101,
+with `error[E0080]: evaluation panicked: the hash embedder's token space (HASH_EMBEDDER) is defined
+over Unicode 17.0.0, and this toolchain's std or the locked unicode-normalization carries another
+version: …` at the assertion; under 1.98.1 the same check and every build above compile. The premise
+is the message: the error names the assertion, not some other incompatibility of 1.90.
+
+**The desk reads of the ruling's item 5**, 1.90.0's `rust-src` against 1.98.1's, read and not run:
+- `std::fs::rename` on Windows (`sys/fs/windows.rs`) is the same code, one `// SAFETY:` comment
+  moved two lines. The readings O271, O275 and O289 took from 1.90's — `MoveFileExW` with
+  `MOVEFILE_REPLACE_EXISTING`, then `FileRenameInfoEx` with POSIX semantics on `ERROR_ACCESS_DENIED`,
+  the first error returned unless the second is `DIR_NOT_EMPTY` — hold of 1.98.1.
+- `decode_error_kind` on Windows moved from `sys/pal/windows/mod.rs` to `sys/io/error/windows.rs`; the
+  arms the records cite — `ERROR_ACCESS_DENIED` to `PermissionDenied`, `ERROR_BROKEN_PIPE` and
+  `ERROR_NO_DATA` to `BrokenPipe`, a sharing violation and delete-pending to no specific kind — are
+  unchanged. Three arms are new: `ERROR_TOO_MANY_OPEN_FILES` and `WSAEMFILE` to `TooManyOpenFiles`, and
+  `WSAESHUTDOWN` to `BrokenPipe`, a socket written after its write end shut. O277's, O289's and O287's
+  P4 readings hold.
+- `File::lock`: the public function and the Windows body are identical; the unix body is the same
+  `flock(LOCK_EX)` on Linux and Apple, now behind `cfg_select!`, answering `Unsupported` on targets
+  this project ships none of. O254's reading holds, and the workspace compiles under the pin.
+- **The `str` slice panic differs** (O181's P-SLICE). 1.90.0's names up to 256 bytes of the string it
+  was slicing; 1.98.1's names the byte indices, the string's length and, for an index inside a
+  character, that one character — never the string.
+- O157's reach rests on cargo behaviour the Cargo reference does not document, measured on cargo 1.90.
+Measured again on cargo 1.98.1: naming `model_e2e` without its features is still a hard error naming
+them — ``target `model_e2e` in package `undercroft-cli` requires the features: `onnx`, `ort`,
+`undercroft-embed-onnx/test-fixture` ``, exit 101 — the `dep/feature` entry read as a feature, and the
+unnamed `cargo test --release` above skips the target. The positive arm, the target built and run
+with its features, is the `ort-build` leg's and was not run here.
+- O287's P8, which said "1.98.1 was not probed": 1.98.1 refuses `-Zon-broken-pipe` as 1.90 did
+(``the option `Z` is only accepted on the nightly compiler``), so the verdict that did not rest on it
+stands.
+
+**A real corpus under the pin.** The runtime image the pin built, with no network: `init`, then the LoCoMo feed mined into three wings
+of a sealed vault — 85 drawers each, 255 in all, audit height 256 — a wing-scoped search in 97 ms on a
+host shared with other work, and `verify` OK in 25 ms. One more drawer names U+323B0, a CJK Extension J
+ideograph assigned in Unicode 17, and a search for that character alone finds it; under 1.90's tables
+the character is a delimiter and the query segments to nothing (the ruling's reading of `script.rs`,
+not run here, no build being on 1.90 now).
+
+**Gate**: the toolchain arm of the `supply chain is pinned` preflight (O326's record has the whole
+preflight) and the compile-time assertion. The arm reads an image where an image is NAMED — a
+Dockerfile's `FROM` with its flags skipped, an `image:` or `container:` key — and takes any image
+whose repository's last component is `rust` as a Rust image, whatever registry is in front of it;
+such an image must be Docker Hub's official one, tagged with the pin in full. No workflow, Dockerfile
+or compose file may name a toolchain another way (`dtolnay/rust-toolchain`, `actions-rs`, any
+`setup-rust` action, a `toolchain:` input,
+`rustup default|override|toolchain|install|update|target|set|run`,
+`RUSTUP_TOOLCHAIN`, `cargo +` or `rustc +`); every job that runs cargo outside a container
+calls the script before its first cargo line; and the pin's reader refuses a `stable` channel, an
+extra line and an absent file, on copies of itself. **Widened after the review**, which found the
+first build's arm blind to four of its plants — an untagged `FROM rust`, another registry's Rust
+image (`ghcr.io/rust-lang/rust:nightly`), `rustup run nightly cargo build`, and
+`actions-rust-lang/setup-rust-toolchain` with `toolchain: stable` — each now a probe the arm must
+refuse, beside `rust:latest` behind a `--platform` flag. The review's own three files, planted in a
+copy of the tree, are refused by name: eleven refusals across four readers. The probes pass under
+Debian 12's mawk 1.3.4 20200120 and gawk 5.2.1, and the real files hold two Rust images and four
+native cargo jobs, each through the script.
+
+**No tag carries this pin without O421's walk** (the ruling's item 3). This entry closes because the
+pin, the assertion and the gate are built. The images' token space moves from Unicode 16 to 17 with
+it, and only O421's `undercroft-hash-v4` walk heals the vaults the images wrote. O421 stays under
+`## Open` until the maintainer names the release that carries both; it then moves under that
+release's heading, where O309's tag-reading arm refuses to mark the release released while O421 is
+open. Until the maintainer names it, nothing gates it but this sentence and CHANGELOG's, which the
+release flow reads.
+
+**What stays outside it, stated.** Every shipped target has compiled under 1.98.1 — it built all ten
+v1.6.1 assets — but only `windows-check` (Windows, default features, `check`) compiles natively on a
+pull request; O168's legs are what will compile the rest. The pin moves by hand: a bump is one change
+to the file and both image references, which the preflight requires, and a bump whose std carries
+another Unicode version stops at the assertion — how that is ever moved is O422's, who learns that a
+bump is due O425's. The builder image is pinned by version, not digest (O424). Of the two model crates, `undercroft-embed-onnx` compiles under the pin with its tests (`cargo check
+--all-targets`, no warning); `undercroft-embed-ort`, which fetches ONNX Runtime at build time, was not
+built here, and neither crate's tests were run — the `onnx-build` and `ort-build` legs do both.
+
+**Notes beside, owed by the ruling.** O275 (its maintainer ruling's "1.90"), O163 (`hash`'s identity
+"is its code's"), and each record that states a 1.90 std or cargo behaviour as a property of what
+ships — O254, O271, O275, O287, O289, O157 and O181 — carry a sentence beside, from the desk reads
+above. Of the 31 lines naming 1.90 on `main` at `2b69f04`, the rest name it as the images', the
+suites' or CI's lint toolchain, which it was (O84, O159, O168, O255, O256, O268 and this entry's own
+filing), or as an audit's or a panel's input (O135; O166's, which O166's record of this date
+corrects). O168, O275, O310, O313, O325, O395 and O397 carry notes for the relations this entry and
+O326 declared with them.
+
+### O326 — CLOSED 2026-10-12: every third-party action is pinned by its commit SHA with its version beside it, every workflow reads by default, a write token is granted per job, kept out of every `env:` block and every step that runs cargo, and never persisted by a checkout
+
+**Filed 2026-10-06 by O313's ruling (its refuter).** Every third-party action is referenced by a tag that
+can move: `docker/setup-buildx-action@v4`, `docker/login-action@v4` and `docker/build-push-action@v7` in
+`release.yml` and `republish-ort-image.yml`; `aquasecurity/trivy-action@v0.36.0`,
+`dtolnay/rust-toolchain@stable` (O294's unpinned toolchain) and `taiki-e/install-action@v2` in `ci.yml`;
+`peaceiris/actions-mdbook@v2` in `ci.yml` and `pages.yml`. `release.yml` grants `contents: write` and
+`packages: write` at WORKFLOW level (15-17), so jobs that need only packages hand a contents-write token
+to third-party code — the moved-tag class O313 is about, pointed inward, and a route by which assets
+could be replaced with no tag moving.
+
+**Shape**: pin every third-party action by commit SHA, its version in a comment, and move permissions to
+each job at least privilege. **Gate**: a host-side preflight refusing a `uses:` without a 40-hex SHA
+outside `actions/*` (or with a reasoned allowlist), and refusing workflow-level write permissions in
+`release.yml`; counterfactual, today's files.
+
+**Noted 2026-10-12 by this entry's build — five relations that were declared here**, each a shared diff
+surface: with O310 ("that entry's `guard` job takes its permissions per job, read-only, before the rest
+of this entry lands"), with O325 ("that entry's `draft`, upload, `verify` and publication jobs are the
+only ones that hold `contents: write`"), with O168 ("both change `windows-check`'s toolchain step"),
+with O395 ("inputs through `env:` and per-job permissions in the same workflow") and with O397 ("the
+publishing jobs' permissions"). This entry is closed and the five are open, so each is a note on both
+sides rather than a `Relations:` line, which names open entries only; the partners carry the matching
+notes, with what this build left them.
+
+#### BUILT 2026-10-12, in O294's unit — the filed shape, with the token's exposure inside a job closed beside it
+
+**The pins, each read from the API on 2026-10-08** (the tag's ref, dereferenced through an annotated
+tag where there is one, then the exact version tag that shares the commit; the release's `immutable`
+flag; the commit's signature):
+
+| action | was | pinned to | release | commit |
+|---|---|---|---|---|
+| `docker/setup-buildx-action` | `@v4` | `f87e5991a6d7451dcb8d9637bfbc97413f497069` (v4.4.1) | immutable | verified |
+| `docker/login-action` | `@v4` | `dbcb813823bdd20940b903addbd779551569679f` (v4.6.0) | immutable | verified |
+| `docker/build-push-action` | `@v7` | `c3c9e263c25d99ce0380d002d59b67737d91b0dc` (v7.4.0) | immutable | verified |
+| `aquasecurity/trivy-action` | `@v0.36.0` | `ed142fd0673e97e23eac54620cfb913e5ce36c25` (v0.36.0, annotated tag `a9c7b0f0…`) | immutable | verified |
+| `taiki-e/install-action` | `@v2` | `f7e5d7c961414b23f5b25b2da9294395d08513ad` (v2.87.26) | immutable | unsigned |
+| `peaceiris/actions-mdbook` | `@v2` | `ee69d230fe19748b7abf22df32acaa93833fad08` (v2.0.0, annotated tag `948b432f…`; `v2` is annotated tag `062dc9e3…` on the same commit) | not immutable | verified |
+| `dtolnay/rust-toolchain` | `@stable` (a branch) | removed (O294) | — | — |
+
+The first version of this table gave `062dc9e3…` as v2.0.0's tag object; it is `v2`'s, and v2.0.0's is
+`948b432f…` — both dereference to the pinned commit, so the pin was right and its record was not
+(found by the build's independent review; re-read from the API on 2026-10-12).
+`install-action` resolves `tool: cargo-audit` from its own `manifests/cargo-audit.json`, which at that
+commit names 0.22.2 with a sha256 per platform, so the SHA pins the tool and its checksum too.
+`actions/*` stay on version tags, as filed: GitHub runs the runner and mints the token such an action
+could steal, so a moved `actions/` tag is a compromise of the party every job already trusts in full;
+a branch there is refused.
+
+**Permissions.** Every workflow states `permissions: contents: read` at the top. Per job:
+`release.yml`'s `binaries` and `binaries-ort` take `contents: write` (they create and upload the
+release's assets), `docker` and `docker-ort` take `contents: read` and `packages: write`, the two
+manifest jobs `packages: write` alone; `republish-ort-image.yml` the same two image grants, which it
+had at the workflow level; `pages.yml`'s `build` takes `contents: read` and `pages: read` (for
+`configure-pages`) and its `deploy` alone takes `pages: write` and `id-token: write` — the build job
+runs the third-party mdBook action, and with the OIDC grant beside it that action could have minted
+the token a Pages deployment authenticates with. `ci.yml` already read by default and grants nothing.
+**And the token's exposure inside a job**, which per-job permissions alone leave open: the binary jobs
+held `GH_TOKEN` in a job-level `env:`, so `cargo build` — every crate's build script — ran with a
+`contents: write` token in its environment, and their checkout persisted the token into
+`.git/config`. `GH_TOKEN` is now the upload step's alone, and every checkout in a job holding a write
+grant passes `persist-credentials: false`.
+
+**Gate: the `supply chain is pinned` preflight** (`tests/battery.sh`), placed before the first
+preflight that launches a container. Its actions arm refuses any `uses:` that is not a local path, an
+`actions/*` action by version tag or SHA, a `docker://` image by digest, or a third-party action by a
+40-hex SHA with a `# v…` comment, and refuses a line it cannot parse. Its permissions arm refuses a
+workflow with no top-level `permissions:` or with a write there, a workflow-level or job-level `env:`
+carrying the token, a STEP that runs cargo while it holds the token, and a job holding a write whose
+checkout persists credentials — the token matched in every spelling an expression accepts, the
+property and index forms in any case (`github.token`, `github['token']`, `secrets.GITHUB_TOKEN`,
+`secrets["github_token"]`). **Those last two were added after the review**, which planted a cargo
+step holding `${{ github['token'] }}` and the first build's reader, matching `github.token` and
+`secrets.GITHUB_TOKEN` alone and only in a job's or the workflow's `env:`, passed it. Each arm is
+driven on planted input both ways before the real files are believed (five refs and six grants it
+must refuse, a clean set of each it must pass). Counterfactual: over `main`'s files at `2b69f04` the
+actions reader prints 18 third-party refs by tag and the permissions reader 7 grants — five
+workflow-level writes (two in `release.yml`, two in `pages.yml`, one in `republish-ort-image.yml`) and
+the token in both binary jobs' `env:`. On the built tree, one at a time: the token put back in the
+binary jobs' `env:` (two refusals), their `persist-credentials: false` dropped (two), trivy back on
+its tag (two), Pages' writes back at the workflow level (two), each refused by name; and the review's
+workflow, planted in a copy of the tree, refused twice — the cargo step holding the token, and the
+second checkout of its write job persisting credentials.
+
+**What stays outside it, stated.** A pinned action can still fetch at run time — trivy's database,
+cargo-audit's advisory database, the mdBook release tarball (no checksum) — so the pin fixes the
+code, not its downloads. The arm reads `uses:` lines in `.github/workflows/`; it does not see an
+action a pinned action calls in turn (a composite action's own `uses:`), which is the pinned commit's
+content and moves only with it. **The binary jobs still HOLD `contents: write` while their build
+scripts run.** The token is in no environment and no file a build script reads, but code running in a
+job can reach a token the job holds without either — the runner's own process memory, which is how
+compromised actions have read secrets — so a build script that turns hostile can still write the
+release. The build and the upload belong in separate jobs, the build holding nothing: O325's upload
+jobs, ruled and not built, close it. Pins move only by a reviewed change, and nothing reports a pinned
+action's advisory: filed as O425. `release.yml` and `pages.yml` run only at a tag and on `main`, so
+the new permissions are first exercised there; what was verified here is the YAML, every SHA against
+its tag, and the preflight.
+
+**O310, O313 and O325, noted.** O313's ruling lists "a mutable-tag action holding the workflow-level
+write token is compromised (O326)" among what fails silently; that route is closed by this build, its
+line kept as the record. O310's `guard` job and O325's `draft`, upload, `verify` and publication jobs,
+ruled 2026-10-08 and not yet built, take their permissions per job as their rulings say, which is
+this build's layout; a third-party action either adds must be pinned by SHA, which the preflight
+refuses otherwise.
+
+### O327 — CLOSED 2026-10-12: the former-name scan runs `python:3.14-slim` by its index digest, with the checkout mounted read-only and no network, and the preflight that holds the supply chain refuses any launch that is not
+
+**Filed 2026-10-06 by O314's ruling of that day (its refuter).** `tests/battery.sh` (791, 808-810,
+817-818) runs the no-trace scan in `python:3-slim`, unpinned by digest, with the working tree mounted
+read-write (`-v "$(pwd):/r"`, no `:ro`). The tag moves upstream routinely, and on the maintainer's host a
+replaced image runs with write access to the checkout, `.git/hooks` included, while `verify.py` only
+reads.
+
+**Shape**: pin the image by digest and mount the tree `:ro`, as O189 and O314 pin what they bring in.
+**Gate**: the preflight's own source check refuses an unpinned image or a writable mount, with a premise
+that the scan still runs and fires on its known positive.
+
+#### BUILT 2026-10-12, in O294's unit — the filed shape, with the network removed beside it
+
+`tests/battery.sh`'s `NOTRACE_IMG` is `python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2`
+— the multi-arch index `python:3-slim` resolved to on 2026-10-08, which Docker Hub dates
+2026-10-06 (read from the Hub, pulled, and `imagetools inspect` reporting an OCI image index; Python
+3.14.8), so the scan runs the image it ran the day before, and no other. Both launches mount the
+checkout `:ro` and pass `--network none`: the scan reads the tracked list from stdin and writes only
+into the container's own temporary directory, and a preflight is offline (O65), while the mount
+exposes the whole working tree, gitignored files included, to whatever the image runs.
+
+**Gate: the containers arm of the `supply chain is pinned` preflight**, which runs before the
+former-name trace so a launch it refuses never happens: every container this script launches names
+its image through a `*_IMG` variable assigned once, by digest, mounts read-only and gets no network.
+It joins continuation lines and skips comments and heredoc bodies, and is driven both ways first —
+five planted defects it must refuse, and a clean launch it must pass beside a heredoc and a comment
+that each name a bad one. The former-name preflight's own premise — the planted known-positive must be
+caught — still fires through the read-only, offline launch: on this host, at this unit's merged tree, the trace answered `ok` with 418 files scanned and 127 PDF
+streams examined across 11 PDFs, every pattern probed on its known positive first. Counterfactual: the launches as
+`main` has them (`python:3-slim`, a writable mount, network) print six refusals, three per launch.
+
+**What stays outside it, stated.** The arm reads `tests/battery.sh` alone: the compose suites' images
+live in the compose files (the builder and lint images are pinned by tag, filed as O424), and
+`tests/tls-pins.sh`, a host-side suite, launches its own. The digest fixes the image; a newer Python is
+a deliberate edit to it.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -24993,6 +25553,8 @@ saves is dominated by one `jq` and one `curl` process per request.
   #184); the Windows `-ort` asset compiled on no pull request is O168; and
   `vendor/tiny_http` is a `[patch]` path, not a workspace member, so it is no
   target that no leg runs.
+
+**Noted 2026-10-12 by O294's build (its ruling's item 5).** The reach above rests on "measured cargo 1.90 behaviour", and 1.90 built none of what shipped. Measured again on cargo 1.98.1, the pin every build uses from O294 on: naming `model_e2e` without its features is still a hard error naming them (``target `model_e2e` in package `undercroft-cli` requires the features: `onnx`, `ort`, `undercroft-embed-onnx/test-fixture` ``, exit 101), the `dep/feature` entry read as a feature, and the unnamed `cargo test --release` still skips the target. The positive arm is the `ort-build` leg's, not run by that build.
 
 ### O165 — CLOSED 2026-09-14: the handover gate read a token that moves on its own, so it now reads the text a session acts on first
 
@@ -36509,6 +37071,85 @@ space.
 **Version class.** PATCH-class: a test and corrected records, no observable change. It rides
 1.7.0. No `UPGRADING.md` entry: nothing that worked stops.
 
+#### RULED 2026-10-12 by three lenses (Agentic Memory Architecture; Retrieval and text processing (Unicode segmentation, normalization stability, vector-space identity); Release engineering and supply chain (reproducible toolchains, what was shipped vs tested, UPGRADING)) and an adversarial refuter
+
+**The question.** O294's measurement found the released binaries and the released images tokenizing
+with different std Unicode tables under `undercroft-hash-v3`. Does that refute or confirm this
+entry's 2026-10-08 ruling, and what does this entry now owe?
+
+**Prior ruling found, and its disposition.** This entry's ruling of 2026-10-08 (two panels and a
+reconciling refuter). Its Hebrew verdict (item 1) is FOLLOWED; four of its general statements are
+corrected beside; item 2 is amended before it is built; item 6 is followed in substance.
+
+**Ruled.**
+1. **The Hebrew verdict stands.** Hebrew's class is an explicit range (`script.rs` 172), its points
+   are stripped by explicit ranges, Hebrew has no case, and its letters have been assigned since
+   Unicode 1.1, so the only std table its tokens read is `is_alphanumeric` over letters both versions
+   class alike; lens 2 found no codepoint new in, or changing General_Category in, U+0590–U+05FF or
+   U+FB1D–U+FB4F between 16 and 17 (UCD data, not std's tables). The population that holds the
+   Hebrew stale space is still the five branch commits, decided by git, and the toolchain axis does
+   not reach it. P-U1's Hebrew rows are the confirming probe; a
+   difference there would be the identity entry's divergence, not this verdict's.
+2. **Corrections beside the 2026-10-08 ruling, never in place.**
+   - "From `db2e470` to HEAD the token path does not move … the Dockerfile builds on
+     `rust:1.90-slim-bookworm`": true of the SOURCE and of every image; the prebuilt binaries were
+     built by 1.97.1, 1.98.0 and 1.98.1 (O294's measurement), whose std tables the review measured at
+     Unicode 17 for 1.97.1 and 1.98.1 (1.98.0 unmeasured, P-U1), so their
+     token path differed from the images' from `v1.0.0` on, for every drawer holding one of the
+     codepoints new in 17.
+   - "true for every vault a release wrote" (of "the walk recomputes byte-identical vectors"): false
+     for a vault one release population wrote and the other re-walks, wherever such a drawer exists.
+   - "Fails silently if … a native release toolchain moves past 1.90's Unicode version while O294
+     stays open": already met when written; `v1.0.0`'s binaries were 1.97.1.
+   - Item 6's trigger is P1's digests, which run both trees in one Docker toolchain and cannot see
+     this axis; its consequence — "a RELEASED stale space with a v4 back on the table" — is reached by
+     O294's measurement instead. Followed in substance: the identity entry filed by this ruling is that
+     new entry.
+3. **Item 2 is amended before it is built.**
+   - The two version checks become the compile-time assertion of O294's ruling of this date, in
+     `undercroft-core`, at `(17, 0, 0)` for both; the test keeps the digest.
+   - The corpus gains: one CJK Extension J ideograph (U+323B0); one ideograph from Extensions G, H or
+     I, which pins today's `Script::Other` treatment so the Han-arm entry filed by this ruling moves the
+     digest loudly; one of the 28 newly assigned cased letters in its uppercase form (U+A7CE, or one of
+     U+16EA0–U+16EB8), which probes the case leg; and one letter from a script new in 17. With them the
+     DIGEST discriminates a table change, not only the assertion.
+   - The table stays keyed by identity alone, and one identity names exactly one Unicode version. A
+     key of (identity, version) would let the version move under an unchanged identity — the in-place
+     redefinition the v2 precedent refused.
+   - The pinned digests are first computed under the pin O294 rules, so `v4` is the first identity the
+     table carries; item 3's tag read compares from the first release that carries the table.
+4. **Sequencing.** This entry's unit builds after O294's pin and with or after the identity entry's
+   `v4`, because the digest must name the identity it pins. The identity entry's walk also re-embeds a
+   branch-built vault, so P3's remedy becomes automatic from the release that carries it; item 1's "no
+   v4 for Hebrew" is unchanged — the `v4` is the identity entry's, for a released divergence.
+5. **The comment at `crates/undercroft-store/src/lib.rs` 731-751 and `CLAUDE.md` 276-288** are
+   rewritten by the identity entry's unit rather than twice; `CLAUDE.md` through the maintainer's
+   approval of the pull request, as item 4 of the 2026-10-08 ruling already says.
+
+**Options that lost.** Keeping this entry open for the toolchain axis (R2): it would imply released
+vaults hold stale HEBREW vectors, which git refutes. Folding the axis into O294 (R3): it would turn a
+build-reproducibility entry into a vector-space entry with different reference holders, gate and
+`UPGRADING.md` text. A sentence inside a finished entry: O171 refuses it.
+
+**Claims refuted.** The three general statements of the 2026-10-08 ruling corrected in item 2. Lens
+2's (identity, version) keying (item 3). The brief is right that P1 cannot see the toolchain axis, so
+item 6 cannot fire on its literal trigger; reading it literally would leave a known released
+divergence unfiled, which is why it is followed in substance.
+
+**Probes owed.** P-U1's Hebrew, Cc and White_Space rows (O294's record of this date). P1 stays this
+entry's first step, run under the pin.
+
+**Dissent.** None on the verdict.
+
+**Fails silently if** the corpus is pasted as designed on 2026-10-08, so only the assertion
+discriminates; the assertion sits in a test; or the digest is pinned under one toolchain and the
+release built under another.
+
+**What remains.** Item 2 as amended, item 3, the corrections of item 4 of the 2026-10-08 ruling, P3.
+
+**Version class.** PATCH-class: a test, a compile-time assertion and corrected records. No
+`UPGRADING.md` line for the Hebrew leg; the identity entry carries the walk's.
+
 ### O168 — seven of the ten release binaries are compiled on no pull request: Windows `-ort`, and both macOS targets and Linux arm64 in both builds
 
 **Filed 2026-09-14, from a gap the drift sweep stated in a `ci.yml` comment.**
@@ -36573,9 +37214,9 @@ branch adding `#[cfg(windows)] compile_error!("probe");` inside
 both Apple legs and `#[cfg(all(target_os = "linux", target_arch = "aarch64"))]`
 the arm64 leg, each while every job CI runs today stays green.
 
-**Relations:** shares a diff surface with O294 — both change `windows-check`'s toolchain step.
+**Noted 2026-10-12, a relation that was declared here:** shares a diff surface with O294 — both change `windows-check`'s toolchain step. O294 closed on that date: `windows-check` now runs `bash .github/scripts/pinned-toolchain.sh` after its checkout, the installer `release.yml`'s binary jobs call with their target, so a leg built to this entry checks with the pin (1.98.1) installed the release's way and names no version itself; the images' toolchain this entry's record calls 1.90 is that pin too. This is a note rather than a `Relations:` line, which names open entries only.
 
-**Relations:** shares a diff surface with O326 — both change `windows-check`'s toolchain step.
+**Noted 2026-10-12, a relation that was declared here:** shares a diff surface with O326 — both change `windows-check`'s toolchain step. O326 closed on that date: the job holds no third-party action, and the `supply chain is pinned` preflight refuses a job that runs cargo outside a container without the pin's script first. A note rather than a `Relations:` line, for the same reason.
 
 #### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
 
@@ -37159,6 +37800,21 @@ an O(corpus) read per call is a cost lever on a served vault." Item 6's inventor
   maintainer's word.
 - The cost run at ~10⁵ sealed drawers (probe P1), on the maintainer's explicit go if it is long.
 
+#### RULED 2026-10-12 by the maintainer
+
+**The question.** The name the 2026-10-08 ruling left open: the new door's command and its route.
+
+**The maintainer's answer, as relayed to O294's build by the integrator on 2026-10-12:** O174's door is
+`undercroft vault holes` and `GET /v1/vaults/{id}/holes`.
+
+**Decided.** The CLI command `undercroft vault holes` and the `/v1` route `GET /v1/vaults/{id}/holes`, on
+the surfaces the 2026-10-08 ruling decided: the orchestrator's ops plane on the `verify-forgetting`
+precedent, and absent from MCP with an `OPERATOR_ONLY` entry and a `Boundary` row in `SURFACE_ABSENCES`.
+
+**What remains open.** The build, under the panels' items 1-8, and the cost run at ~10⁵ sealed drawers
+(P1) on the maintainer's explicit go if it is long — the answer recorded on O421 of this date covers that
+entry's walk, not this probe.
+
 ### O187 — `refine`'s fact-mirror drawers are embedded and screened with no record naming those endpoints
 
 **Filed 2026-09-15 by O167's panel; verified by reading.** `refine` files each
@@ -37582,6 +38238,8 @@ ORT fence, which depends on P-ORT. O182 does not change. O328 is sequenced first
 **Version class.** PATCH. The documented prefixes and the `panicked at` line survive; the payload
 text was never a contract. Nothing stops, so no `UPGRADING.md` entry is owed; a CHANGELOG note goes
 to anyone parsing the lines.
+
+**Noted 2026-10-12 by O294's build (its ruling's item 5) — P-SLICE, answered for what ships.** Against 1.90.0 the `str` slice panic embeds up to 256 bytes of the string it was slicing (`slice_error_fail_rt`: "byte index {} is not a char boundary; it is inside {:?} (bytes {:?}) of `{}`"). Against 1.98.1, the pin every build uses from O294 on, it never embeds the string: its panics name the byte indices, the string's length and, for an index inside a character, that one character. So under the pin a slice panic carries at most one character of its input. The shipped binaries from v1.5.2 on were built by 1.98.1; 1.97.1's and 1.98.0's source was not read.
 
 ### O182 — whether the tokenizer can panic on arbitrary text is unmeasured
 
@@ -45354,6 +46012,8 @@ point, or a non-empty directory that is not a vault at `vaults/<id>`, with sympt
 holding a database and no manifest; the probes G1-G6 are the integrator's; the Windows arms are O275's W9 and
 W10.
 
+**Noted 2026-10-12 by O294's build (its ruling's item 5).** The reading above that run 1's refuter took from 1.90.0's source — `FileRenameInfoEx` with POSIX semantics after `ERROR_ACCESS_DENIED` — is the same in 1.98.1's `std::fs::rename` on Windows (the same code, one comment moved), the pin every build uses from O294 on, so it now describes what ships; no Windows binary was built by 1.90.
+
 ### O272 — `validate_name` measures the trimmed value while its callers keep the raw one
 
 **Filed 2026-09-26 by O268's ruling (security lens, confirmed by the refuter).**
@@ -45996,7 +46656,7 @@ only where a Windows deployment that worked stops (delete's narrowed retry may r
 to move). A refusal of restore-over-existing on Windows (C) is PATCH where W1 shows it never
 worked there; were it to work today and be withdrawn, the maintainer weighs it as a possible MAJOR.
 
-**Relations:** sequenced after O294 — a claim about Rust's rename on Windows is a claim about the toolchain that builds the shipped binary, which that entry pins.
+**Noted 2026-10-12, a relation that was declared here:** sequenced after O294 — a claim about Rust's rename on Windows is a claim about the toolchain that builds the shipped binary, which that entry pins. O294 closed on that date, pinning 1.98.1, so this is a note rather than a `Relations:` line (the maintainer's ruling below, and the note after it).
 **Relations:** shares a question with O285 — the moved-file check answers nothing off unix, so whether a move can happen there decides what that entry's check leaves uncovered.
 **Relations:** shares a question with O271 — that entry's directory publish and its link check are measured on native Windows here.
 
@@ -46027,6 +46687,8 @@ helper is built with the order the probe selects, never before it (item 3).
   and a second `unsafe` block is, by `CLAUDE.md`'s Conventions, a new decision for the maintainer, so before
   outcome (A)'s check is built the integrator confirms with the maintainer, measurement attached, that this
   answer granted it.
+
+**Noted 2026-10-12 by O294's build — the "1.90" in the maintainer's answer, refuted beside by O294's ruling of that date.** "On the pinned 1.90 toolchain" described the pin the panels then assumed. The pin O294 ruled carries Unicode 17 and is 1.98.1, not 1.90, and no Windows binary was ever built by 1.90 (O294's P2: every v1.* binary was built by 1.97.1, 1.98.0 or 1.98.1). The probe runs on the pin, which is the toolchain that builds the shipped binary — the intent this entry's relation to O294 stated — and the changed number is put before the maintainer in the pull request that carries the pin, before this entry's run is dispatched. The 1.90 readings above hold of the pin: 1.98.1's `std::fs::rename` on Windows is the same code as 1.90.0's (one comment moved), so a failed fallback still returns the first error unless the second is `DIR_NOT_EMPTY`, and its `decode_error_kind` maps `ERROR_ACCESS_DENIED`, a sharing violation and delete-pending as 1.90.0's did (O294's desk reads).
 
 ### O285 — an `immutable=1` handle whose database moved after its open serves the set-aside vault for its life
 
@@ -46480,31 +47142,6 @@ gate admits no read of a manifest file outside the guarded read.
 **Amended 2026-09-29 by O290's ruling.** The store's open no longer reaches `promote`'s bare read of `vault.json`: its promote is licensed by the manifest rule's guarded reads, and the body that writes reads no `vault.json`. The rotation alone still makes that read, under its exclusive hold, where a FIFO would hold the fence; its ruled miss stays the rotation's heal, and an unreadable file must stay `Io`, never "not current, so write". The bare `staged_on_disk` read inside `remove_staged_if_unchanged` is still reached under the write lock on the licence's promoted-since branch, so a FIFO at `.next` there still blocks — this entry's, with how an unreadable `.next` beside a verified `vault.json` answers. Sequenced after O290 deliberately: a guarded `promote` read refusing a missing file, landed first, would have closed two of O290's arms on its own and let its counterfactual pass.
 
 **Noted 2026-09-29 by O291's ruling.** Restore's hold on a FIFO at `vault.db` answers a raw SQLite `SystemIoFailure` ("disk I/O error") in 78 µs — no hang, but no named refusal either (O291's PR5). O291's delete refuses any entry that is not a regular file before its hold opens anything; restore's door surveys no entries, so this stays here with its other bare reads.
-
-### O294 — the native release targets build on an unpinned toolchain
-
-**Filed 2026-09-28 by O289's ruling (its engineering lens, confirmed by the refuter).** The
-Docker images pin `rust:1.90-slim-bookworm`, so every suite, the lint and the Linux images build
-on 1.90. `release.yml`'s binary targets build with whatever stable toolchain each runner has
-installed (it only adds the target), and `windows-check` takes `dtolnay/rust-toolchain@stable` —
-so the Windows, macOS and native Linux artifacts are built by a compiler no suite ran, and a claim
-about "Rust 1.90's std" (O289's Windows reading) is not a claim about what ships.
-
-**Shape**: one pinned toolchain for every build — a `rust-toolchain.toml`, or the version named in
-both workflows — with a gate that the Dockerfile's image and the pin agree.
-
-**Gate**: a preflight comparing the Dockerfile's `rust:` tag with the workflows' toolchain, both
-directions.
-
-**Relations:** sequenced before O275 — a claim about Rust's rename on Windows is a claim about the toolchain that builds the shipped binary, which this entry pins.
-
-**Relations:** shares a diff surface with O168 — both change `windows-check`'s toolchain step.
-
-**Noted 2026-10-08 by O166's ruling (its item 5).** The hash identity's token space depends on std's
-Unicode tables (`is_alphanumeric` in `segment`, `to_lowercase` in `search_key`), so two native
-release artifacts built on different stable toolchains can tokenize a newly assigned codepoint
-differently under one name. O166's golden-vector assertion runs only in the Docker toolchain and
-cannot see the native release builds until this entry pins them.
 
 ### O295 — the rotation's own promote overwrites a `vault.json` edited inside its fence, and reports nothing
 
@@ -48089,7 +48726,7 @@ the workflow.
 
 **Relations:** calls O324 — the guard runs that entry's tag-ruleset decision before anything publishes, and first-parent is durable only while `main` stays append-only, which that entry's ruleset (A) makes readable.
 
-**Relations:** shares a diff surface with O326 — the `guard` job's job-level `contents: read` is that entry's per-job permissions, applied first to the one job that must never hold a write token.
+**Noted 2026-10-12, a relation that was declared here:** shares a diff surface with O326 — the `guard` job's job-level `contents: read` is that entry's per-job permissions, applied first to the one job that must never hold a write token. O326 closed on that date: `release.yml` reads at the workflow level and grants each job its write, with `persist-credentials: false` on every checkout in a write job, so the guard job takes `contents: read` in that layout, and a third-party action it uses must be pinned by commit with its version beside it, which the `supply chain is pinned` preflight requires. A note rather than a `Relations:` line, which names open entries only.
 
 **Version class.** Release tooling inside the unreleased 1.7.0: PATCH-class at most, with a CHANGELOG
 line and no `UPGRADING.md` entry. No documented operator contract moves and nothing an operator runs
@@ -49640,7 +50277,7 @@ the escalation that follows.
 
 **Relations:** depends on O310 — that entry's `guard` runs first, and every pointer move here asks its item 5 again.
 
-**Relations:** shares a diff surface with O326 — `draft`, the upload legs, `verify` and publication are the only jobs that hold `contents: write`.
+**Noted 2026-10-12, a relation that was declared here:** shares a diff surface with O326 — `draft`, the upload legs, `verify` and publication are the only jobs that hold `contents: write`. O326 closed on that date: `release.yml` reads at the workflow level, its `binaries` and `binaries-ort` take `contents: write` per job and give `GH_TOKEN` to their upload step alone, and the image jobs take `packages: write`; the placeholder `gh release create` and the `--clobber` uploads cited above (78-82, 188-190) sit at 107-108 and 221-222 of `release.yml` now. Those binary jobs still HOLD the grant while their build scripts run, which is what this entry's separate upload jobs close. They take their grants in that layout, and a third-party action they use must be pinned by commit. A note rather than a `Relations:` line, which names open entries only.
 
 **Version class.** Release tooling: PATCH-class, with a CHANGELOG line and no `UPGRADING.md` entry.
 Install URLs and asset names do not move; a release named latest only once complete keeps the promise
@@ -49796,44 +50433,6 @@ analysis lists. The costs stated above are taken. Not on in the same unit as dra
 
 **What remains open.** The maintainer applies the setting once all five conditions hold; until then it stays
 off.
-
-### O326 — the workflows run third-party actions by mutable tag, and `release.yml` hands every job a token that can write the repository and its packages
-
-**Filed 2026-10-06 by O313's ruling (its refuter).** Every third-party action is referenced by a tag that
-can move: `docker/setup-buildx-action@v4`, `docker/login-action@v4` and `docker/build-push-action@v7` in
-`release.yml` and `republish-ort-image.yml`; `aquasecurity/trivy-action@v0.36.0`,
-`dtolnay/rust-toolchain@stable` (O294's unpinned toolchain) and `taiki-e/install-action@v2` in `ci.yml`;
-`peaceiris/actions-mdbook@v2` in `ci.yml` and `pages.yml`. `release.yml` grants `contents: write` and
-`packages: write` at WORKFLOW level (15-17), so jobs that need only packages hand a contents-write token
-to third-party code — the moved-tag class O313 is about, pointed inward, and a route by which assets
-could be replaced with no tag moving.
-
-**Shape**: pin every third-party action by commit SHA, its version in a comment, and move permissions to
-each job at least privilege. **Gate**: a host-side preflight refusing a `uses:` without a 40-hex SHA
-outside `actions/*` (or with a reasoned allowlist), and refusing workflow-level write permissions in
-`release.yml`; counterfactual, today's files.
-
-**Relations:** shares a diff surface with O310 — that entry's `guard` job takes its permissions per job, read-only, before the rest of this entry lands.
-
-**Relations:** shares a diff surface with O325 — that entry's `draft`, upload, `verify` and publication jobs are the only ones that hold `contents: write`.
-
-**Relations:** shares a diff surface with O168 — both change `windows-check`'s toolchain step.
-
-**Relations:** shares a diff surface with O395 — inputs through `env:` and per-job permissions in the same workflow.
-
-**Relations:** shares a diff surface with O397 — the publishing jobs' permissions.
-
-### O327 — the former-name preflight runs an unpinned `python:3-slim` with the checkout mounted read-write
-
-**Filed 2026-10-06 by O314's ruling of that day (its refuter).** `tests/battery.sh` (791, 808-810,
-817-818) runs the no-trace scan in `python:3-slim`, unpinned by digest, with the working tree mounted
-read-write (`-v "$(pwd):/r"`, no `:ro`). The tag moves upstream routinely, and on the maintainer's host a
-replaced image runs with write access to the checkout, `.git/hooks` included, while `verify.py` only
-reads.
-
-**Shape**: pin the image by digest and mount the tree `:ro`, as O189 and O314 pin what they bring in.
-**Gate**: the preflight's own source check refuses an unpinned image or a writable mount, with a premise
-that the scan still runs and fires on its known positive.
 
 ### O329 — an exit-2 verdict on a telemetry build skips the flush of its spans and metrics
 
@@ -51374,7 +51973,7 @@ publishes nothing.
 
 **Relations:** shares a question with O310 — this workflow publishes outside that entry's guard.
 
-**Relations:** shares a diff surface with O326 — inputs through `env:` and per-job permissions in the same workflow.
+**Noted 2026-10-12, a relation that was declared here:** shares a diff surface with O326 — inputs through `env:` and per-job permissions in the same workflow. O326 closed on that date: `republish-ort-image.yml` reads at the workflow level, grants `packages: write` to its two jobs (`docker-ort` and `manifest-ort`) alone, and names its third-party actions by commit. A note rather than a `Relations:` line, which names open entries only.
 
 ### O396 — the default release artifacts are never smoke-probed, and the ort image is pushed before its smoke
 
@@ -51414,7 +52013,7 @@ on) and the two annotations.
 
 **Relations:** shares a diff surface with O325 — a digests asset uploaded before that entry's `verify`.
 
-**Relations:** shares a diff surface with O326 — the publishing jobs' permissions.
+**Noted 2026-10-12, a relation that was declared here:** shares a diff surface with O326 — the publishing jobs' permissions. O326 closed on that date: every publishing job takes its write per job (`packages: write` for the image and manifest jobs, `contents: write` for the binary jobs), the workflow reading by default. A note rather than a `Relations:` line, which names open entries only.
 
 ### O403 — a vault 1.6.0 or 1.6.1 wrote may hold a resurrected tunnel that a surplus repeat record hides from `verify`
 
@@ -51596,6 +52195,25 @@ three a linkless filesystem gets:
 either no file at the name or a whole one (or the refusal, writing nothing); on a real vfat mount the
 same. Windows' link error on FAT is unmeasured and owed by whichever option is ruled.
 
+#### RULED 2026-10-12 by the maintainer
+
+**The question.** Which writer a filesystem without hard links gets for a key: the in-place create as
+built, a no-replace rename, or a refusal.
+
+**The maintainer's answer, as relayed to O294's build by the integrator on 2026-10-12:** O210's
+no-link-filesystem fallback becomes a no-replace rename, through the `rustix` crate.
+
+**Decided.** The second option. Where `link()` answers "unsupported", the key's fsynced temp is
+published by a rename that refuses an existing name, so the torn-key window the in-place create keeps
+closes there too. Through `rustix`, a new dependency, rather than a second `unsafe` block, which
+`CLAUDE.md` reserves to the maintainer and which this answer does not grant.
+
+**What remains open.** The build and the gate above. Which call `rustix` reaches on each target
+(`renameat2(RENAME_NOREPLACE)` on Linux, `renamex_np(RENAME_EXCL)` on macOS, `MoveFileExW` without
+`MOVEFILE_REPLACE_EXISTING` on Windows), and what a target it does not reach gets, is the build's to
+establish and state; Windows' link error on FAT stays unmeasured until then. `rustix`'s licence and its
+`NOTICE` line are the build's.
+
 ### O413 — nothing reports a secret file's leftover temp, including one that is a second hard link to the live key
 
 **Filed 2026-10-12 by the independent review of O210's build.** O210's publisher leaves a
@@ -51719,6 +52337,304 @@ validation joins that narrower refusal is this entry's question.
 import keeping what its payload says. **Gate**: a `valid_from` that is not a date — or, if only item 10's
 refusal is ruled, one holding a C0 byte — is refused on MCP, the CLI and `/v1`, and an import of the
 vault's own export still lands; counterfactual, today's acceptance.
+
+### O421 — `undercroft-hash-v3` names two token spaces in released builds: the GHCR images tokenize with Unicode 16, the prebuilt binaries with Unicode 17
+
+**Filed 2026-10-12 by the ruling on O294 and O166 (three lenses and a refuter).** `HashEmbedder`'s
+tokens read std's `char` tables (`is_alphanumeric` in `segment`, `script.rs` 259; `is_uppercase` and
+`to_lowercase` in `search_key`, `normalize.rs` 115 and 330), and so does the room `mine` and `sweep`
+derive from a file stem (`normalize_wing_name`, `normalize.rs` 625-635, through `room_for_file`,
+`crates/undercroft-cli/src/main.rs` 4944-4949), which is a component of the drawer id. Every image
+since `v1.0.0` was built by Rust 1.90 (Unicode 16); every prebuilt binary by 1.97.1, 1.98.0 or 1.98.1
+(Unicode 17 as the review measured 1.97.1 and 1.98.1; 1.98.0 is P-U1's). `enforce_embedder_identity` returns on a name match (store `lib.rs` 3925-3927), so a vault one
+population wrote and the other opens is not walked and nothing says so. O294's ruling of this date
+pins a Unicode-17 toolchain, which moves the image population.
+
+**Noted 2026-10-12 by O294's build — a relation the ruling declared here.** Sequenced with O294 — that
+entry's pin ships in no tag without this entry's walk. O294 closed on that date, so this is a note
+rather than a `Relations:` line, which names open entries only. Until the maintainer names the release
+that carries both, this entry stays under `## Open`; it then moves under that release's heading, where
+O309's tag-reading arm refuses to mark the release released while this entry is open.
+
+**Relations:** sequenced after O423 — a fix to the Han arm, if ruled, rides this identity.
+**Relations:** sequenced before O422 — a decoupled token path must reproduce this identity.
+
+#### RULED 2026-10-12 by three lenses (Agentic Memory Architecture; Retrieval and text processing (Unicode segmentation, normalization stability, vector-space identity); Release engineering and supply chain (reproducible toolchains, what was shipped vs tested, UPGRADING)) and an adversarial refuter
+
+**The question.** Must the released hash space be healed, and how: a new identity with the automatic
+walk, a second identity leg, a targeted re-embed, or a stated residual?
+
+**Prior rulings found, and their disposition.**
+- **O166's ruling of 2026-10-08.** Its option (A), a `v4`, "is not refused as MAJOR (it migrates)"
+  and lost "on the 1.0.0 decision and the fleet-wide cost". The 1.0.0 decision does not reach these
+  populations; both are release populations. Its item 6 put "a v4 back on the table" for exactly a
+  released stale space. Its item 2: "editing a pinned digest IS minting an identity". FOLLOWED.
+- **The v2 precedent** (`embed.rs` 341-356): v2 "could have been redefined in place … Minting v3
+  anyway", because a redefinition leaves vectors "stale and unmigrated, with the identity matching
+  and therefore no warning". FOLLOWED: re-reading `v3` as "Unicode 17" in place is that redefinition,
+  for released vaults.
+- **The documented contract** — `KNOWN_EMBEDDER_UPGRADES`'s doc (store `lib.rs` 707-716): "a user who
+  merely upgraded did not choose a new embedding space and should not have to repair one by hand";
+  `docs/EMBEDDERS.md` 217-219; `CLAUDE.md` 276-283. It is consistent across three surfaces including
+  the doctrine, so by the drift-direction rule the documents lead.
+- **O163's ruling of 2026-10-08.** Its carrier (a second leg, the name unchanged) rests on "an older
+  binary using the same model computes the same space"; for hash an older image computes a DIFFERENT
+  space, so the carrier does not transfer — a distinction, not a refutation. Its scope phrase "`hash`,
+  whose identity is its code's" (ROADMAP 4235) is REFUTED as a description of the released state and
+  restored as a property by O294's compile-time assertion; a sentence goes beside it. Its open point
+  "Sequencing with O166" is the maintainer's; this entry uses the existing name comparison and walk
+  and has no technical ordering constraint with O163's one comparison function, which must carry the
+  `KNOWN_EMBEDDER_UPGRADES` arm whichever lands second.
+- **O233 and O238**: an older binary refusing a vault a newer one has touched shipped as a fix
+  (`UPGRADING.md` 608-636: "There is no supported downgrade after the first writable open"). FOLLOWED.
+- **The code comment at store `lib.rs` 748-749** ("a whole-fleet re-embed is not worth one script's
+  cosine leg"): a judgement about a population O166 then showed no release produced. It is not a
+  ruling and does not outweigh the documents above for a released one.
+
+**Ruled.**
+1. **`HASH_EMBEDDER` becomes `undercroft-hash-v4`**: v3's token rules over the Unicode-17.0.0 tables
+   O294's assertion pins, its doc saying so. A new `HASH_EMBEDDER_V3` constant holds the old name, and
+   `KNOWN_EMBEDDER_UPGRADES` gains `(v3, v4)` beside the v1 and v2 rows, which follow the constant.
+   Every hash vault walks once at its first writable open through `migrate_embedding_space` (store
+   `lib.rs` 4004-4085): every drawer re-embedded through `get`, PQ and IVF dropped
+   (`invalidate_embedding_space`, 4097-4103), one `migrate/embedding-space` chain record, the identity
+   recorded last. Prebuilt-binary vaults recompute byte-identical vectors; image and mixed vaults are
+   healed. No marker tells them apart (O166's option E), so no narrower walk is possible.
+2. **`FTS_KEY_VERSION` moves in the same unit** (store `lib.rs` 705), because `search_key`'s output
+   moves for the 28 newly assigned cased letters and `drawers_fts` holds it; the existing
+   `init_fts_schema` rebuild runs at the first writable open, and a read-only open falls back to the
+   announced full scan until then.
+3. **Mirrors are refused `IndexStale` until `index push`** — correct, since a mirror holds the vectors
+   that were pushed (`remote.rs` 545-557).
+4. **Rooms and refine's KG terms are a stated cost, never a migration.** No walk may move a drawer
+   id. An image vault re-mining a file whose stem holds a codepoint new in 17 derives a new room
+   (under 16 such a stem lost those characters, and a stem made only of them fell to `unsorted`), so a
+   second drawer set counted `created`, outside any room-scoped retention policy; prebuilt-binary
+   vaults re-derive the same room. `refine` re-run moves a triple id only through the 28 cased
+   letters. CHANGELOG names both and the recovery (a re-mine into a fresh wing, or `forget` by source
+   for the old set). Bumping `NORMALIZE_VERSION` (moves every id) and a history-aware room (an id
+   would depend on vault state) are rejected.
+5. **The CJK Extension G–J classification is its own entry** (O423, filed by this ruling),
+   ruled before this entry's unit is built; if it is fixed, it rides this identity so the fleet walks
+   once.
+
+**Options that lost.**
+- **No walk, `v3` redefined as Unicode 17 and `repair` named in CHANGELOG (lens 2).** It leaves image
+  vaults holding Unicode-16 vectors under a name that now means 17 — the redefinition in place the v2
+  precedent refused, the "two spaces under one name" O166 refused in its option (B), and it makes the
+  user "repair one by hand", which the documented contract forbids. Its argument is prevalence, which
+  no corpus on hand can measure for the fleet.
+- **A second identity leg with an unconditional walk, the name unchanged (S4).** Same walk cost; no
+  mirror re-push and no older-binary refusal. It loses because the name would still name two spaces
+  (older images keep writing Unicode-16 vectors into a healed vault with nothing refusing, and a
+  legacy mirror marker is trusted under O163's rule), against O166 item 2's minting rule, and it adds
+  a second mechanism beside a tested one.
+- **Re-embed only the affected drawers (S5)**: O166's option (B), two spaces under one name, and a
+  full decrypt on a sealed vault.
+- **The Unicode version in the identity string per build (S3)**: every reference holder moves with the
+  distribution, and a mixed deployment walks back and forth.
+- **A `v4` over Unicode 16 (lens 3)**: removes reach from every prebuilt-binary vault (O294's record).
+
+**Claims refuted.**
+- Lens 1's end-to-end probe: "the 1.6.1 binary then refuses the vault `EmbedderMismatch`, exit 1,
+  writing nothing" — the open runs `init_fts_schema` (store `lib.rs` 5259) before
+  `enforce_embedder_identity` (3748), so an older WRITABLE open finds `fts_key_version` foreign,
+  rebuilds `drawers_fts` under its own key, writes its own marker, and only then refuses. The next new
+  open rebuilds again. Nothing is lost, and it is stated rather than tested as "nothing written".
+- Lens 1: the name change is a fence. Partly: it also refuses prebuilt-binary 1.6.x binaries that
+  compute identical vectors — a cost O163 counted for its own question, accepted here on the O233
+  precedent.
+- Lens 2's additive standard for future bumps ("V moves with the toolchain" without an identity):
+  refuted by O166 item 2 and the v2 precedent.
+
+**Probes owed.**
+- **P-U1** (O294's record) first. If it shows no std-table difference between 1.90.0 and the pin,
+  this entry is withdrawn by evidence. If it shows an assigned-in-16 character changing a token-path
+  property, the ruling is unchanged and CHANGELOG names that wider class.
+- **P-L2, end to end, no download.** Stand-ins: `git archive v1.6.1` built in
+  `rust:1.98.1-slim-bookworm` (the binaries' population) and in `rust:1.90.0-slim-bookworm` (the
+  images'). Each writes a sealed and an hmac-only vault holding (a) a drawer with U+323B0, (b) a plain
+  drawer, (c) a mined file whose stem holds U+323B0, and a pushed mirror marker. Premise, before the
+  open: (a)'s stored vector differs from a fresh embed by the `v4` build on the images' vault and
+  equals it on the binaries', or the stand-ins did not reproduce the two populations. Opened writable
+  by the `v4` build: one `migrate/embedding-space` record naming `v4`; (a)'s stored vector equals a
+  fresh embed on both; (b)'s decrypted vector is unchanged (premise); `fts_key_version` moved and an
+  hmac-only query holding U+A7CE's case form and a common word returns both drawers; a mirror search
+  refuses `IndexStale` until re-push; a lexical query for (a)'s ideograph finds it on both
+  populations' vaults; re-mining (c) adds no drawers on the binaries' vault and adds the file's chunks
+  on the images' (the stated room cost, measured). Then the 1.6.1 build opens the walked vault and
+  refuses `EmbedderMismatch` with exit 1, appending no drawer, embedding or audit record. Counterfactual:
+  without the `(v3, v4)` row the open refuses `EmbedderMismatch` instead of walking.
+- **P-U7, the maintainer's go (a long run).** The walk at about 10⁵ drawers, sealed and hmac-only,
+  with the PQ retrain. It sets `UPGRADING.md`'s figure and decides nothing else; 45.9 µs/drawer is the
+  old branch head's, on an unnamed corpus.
+- **P-U3 and P-U4, informational.** How many texts and stems in the corpora on hand hold a codepoint
+  new in 17, and that stored bytes, chunk boundaries and `match_key` are identical across the two
+  toolchains. A zero is a fact about those corpora, not the fleet.
+
+**Dissent.** Lens 2 holds no walk; refuted above.
+
+**Fails silently if** the `(v3, v4)` row is omitted (loud, every vault refuses) or the v1 and v2 rows
+are hand-written to `v3`; `FTS_KEY_VERSION` stays; the gate corpus lacks a codepoint new in 17; the
+pin ships in a tag without this walk; the multi-tenant server meets the walk inside each vault's first
+request with no warning in `UPGRADING.md`; or the Han-arm change ships later as a second identity.
+
+**What remains.** Which release carries it with O294 (the maintainer's); P-U1, P-L2, P-U7; the
+sentence beside O163; `CLAUDE.md` 276-288 through the maintainer's approval of the pull request.
+
+**Version class.** PATCH-class: O166 records that a `v4` "is not refused as MAJOR (it migrates)"; no
+document names a Unicode version (searched `docs/`, `website/src/`, README, `UPGRADING.md`); the
+change restores the documented promises (byte-reproducible, an upgrade chooses no new space) and
+removes reach from no released population (pending P-U1's assigned-in-16 row: a character that leaves
+Alphabetic between 16 and 17 would remove reach from the images' vaults, and is then named in
+CHANGELOG); an older binary's refusal follows the O233 precedent.
+`UPGRADING.md` owes: every hash vault walks once at its first writable open (P-U7's figure; on the
+multi-tenant server inside the first request per vault, so one writable open per vault before
+serving); prefilter vaults retrain; mirrors are refused `IndexStale` until `index push`; a binary
+before this release refuses a walked vault (`EmbedderMismatch`, exit 1), and on an hmac-only vault
+its writable open first rebuilds `drawers_fts` — upgrade every binary sharing a data directory together, no supported
+downgrade without FORCE plus `repair` on the older binary; read-only replicas warn until a writer
+opens; an older archive restores and walks at the stage, which `RestoreReport` states. `config check`
+cannot detect any of it: it opens no database, the exemption O154 argues and O163 applied. Rides
+`1.7.0`, already MINOR.
+
+#### RULED 2026-10-12 by the maintainer
+
+**The question.** P-U7 — the walk at about 10⁵ drawers, sealed and hmac-only, with the PQ retrain — a
+long run, which the ruling above left to the maintainer's go.
+
+**The maintainer's answer, as relayed to O294's build by the integrator on 2026-10-12:** the ~10⁵
+walk-cost measurements may run when the machine is otherwise idle.
+
+**Decided.** P-U7 is permitted, on its condition: it runs only while no other run, battery or unit is
+using the machine. It sets `UPGRADING.md`'s figure and decides nothing else, as the ruling says.
+
+**What remains open.** Which release carries this entry with O294's pin, the maintainer's; the build;
+P-U1 is done (O294's record: the ruling stands, and U+0295's class is the one CHANGELOG must name).
+
+### O422 — the token path, room derivation and refine's lowercasing read std's Unicode tables, so every Rust release that moves them is an identity decision
+
+**Filed 2026-10-12 by the ruling on O294 and O166.** With O294's compile-time assertion, a toolchain
+whose std moves Unicode version fails to compile until someone rules: hold the toolchain, or mint an
+identity and walk the fleet. Decoupling — the sites read a pinned Unicode-data source at a declared
+version, so the toolchain moves freely — needs a data source, which is a dependency and licence
+choice.
+
+**Relations:** sequenced after O421 — at version 17.0.0 a decoupled path must reproduce that
+identity byte for byte, so it needs no walk of its own.
+
+#### PANEL ANALYSIS 2026-10-12 — escalated to the maintainer
+
+**The question.** Which Unicode-data source, under which licence and `NOTICE` text, may the token
+path read in place of std, and when?
+
+**Why escalated.** A new dependency or generated data and its attribution are the maintainer's.
+
+**Recommended answer.** Tables GENERATED in-tree from the Unicode Character Database 17.0.0 files,
+each pinned by sha256, the O189 `textfit` precedent: no crate a `cargo update` can move, and the
+definition's provenance is the repository's. Exactness is binding, or tokens move at the same
+version: `is_alphanumeric` is Alphabetic ∪ General_Category {Nd, Nl, No} (ICU's binary `Alnum` is
+POSIX, Alphabetic ∪ Nd, and drops every No character); `is_uppercase` is the derived Uppercase
+property, not General_Category Lu; lowercase is `str::to_lowercase`'s, unconditional SpecialCasing
+plus Final_Sigma. A source gate counts every std Unicode property call in the token path and the
+derived keys against the one door, both directions: a hand list misses sites (the brief missed
+`lexical_score`'s split and two `is_numeric` guards). Timing: before the first Rust release that
+carries Unicode 18 is wanted.
+
+**Options.** The generated tables (recommended). The already-linked `icu_properties` 2.2.0 (Unicode-3.0
+licence, reached through `url` → `idna` → `idna_adapter`), plus a case-mapping source that the lock
+does not hold. `unicode-properties` 0.1.4: General_Category only, no Alphabetic, so it moves Brahmic
+vowel signs — rejected. Not decoupling: every Unicode-moving toolchain is a held toolchain or a fleet
+walk.
+
+**Separately, for the maintainer, independent of any option:** `icu_properties` and `icu_normalizer`
+(Unicode-3.0) are already compiled into the binary through `url`, while `NOTICE` (59-80) attributes
+ICU4X only for `calendrical_calculations`. Whether they owe attribution is a licence question.
+
+**Probe owed when a source is chosen: P-U6**, that source against the pin's std over every scalar
+value in P-U1's format, equal at 17.0.0.
+
+**Version class.** PATCH at version 17.0.0 if P-U6 shows equality: nothing observable moves.
+
+#### RULED 2026-10-12 by the maintainer
+
+**The question.** The panel analysis above: which Unicode-data source the token path reads in place of
+std, under which licence and `NOTICE` text — and, separately, whether `icu_properties` and
+`icu_normalizer` owe attribution.
+
+**The maintainer's answer, as relayed to O294's build by the integrator on 2026-10-12:** the token path
+reads in-tree tables generated from the Unicode Character Database 17.0.0 files, each pinned by
+sha256 (the O189 precedent), proven equal to Rust 1.98.1's std; and `icu_properties` and
+`icu_normalizer` (Unicode-3.0) get `NOTICE` attribution.
+
+**Decided.** The recommended answer: generated tables, so no crate a `cargo update` can move holds the
+definition. Exactness binds as the analysis states — `is_alphanumeric` as Alphabetic with
+General_Category Nd, Nl and No, the derived Uppercase property, `str::to_lowercase`'s SpecialCasing
+and Final_Sigma — and P-U6 is the proof: the generated tables against 1.98.1's std over every scalar
+value, in P-U1's format (O294's record), equal at 17.0.0. The attribution of the two ICU4X crates
+already compiled in through `url` is owed whether or not this entry is built.
+
+**What remains open.** The build, before the first Rust release carrying Unicode 18 is wanted, and the
+`NOTICE` line, which no unit has yet taken.
+
+### O423 — `script_of`'s Han arm stops at Extension F, so CJK Extensions G, H, I and J tokenize as one whole-run `Other` token
+
+**Filed 2026-10-12 by the ruling on O294 and O166.** `script_of` (`crates/undercroft-core/src/script.rs`
+139-180) classes Han by explicit ranges ending at `0x2A700..=0x2EBEF` and `0x2F800..=0x2FA1F`
+(144-149). Extension I (U+2EBF0–U+2EE5F), G (U+30000–U+3134F), H (U+31350–U+323AF) and J (U+323B0–
+U+3347F, Unicode 17) fall to `Script::Other`, which does not attach without a delimiter, so a run of
+them is one token (`emit`, 320-330) rather than Han unigrams and bigrams: under the default fusion a
+query for a two-character word inside a longer run finds nothing on the lexical channels, and the
+hash embedder gives such a query no trigram either. 9,753 ideographs assigned by Unicode 16
+(lens 2, from Python's `unicodedata` names) and 4,298 in J. Released in both populations, independent
+of the toolchain. Fixing it moves assigned characters' tokens, so it carries an identity question;
+O421 item 5 asks that it be ruled before that entry's unit is built, so that a fix rides the
+same walk.
+
+**Relations:** sequenced before O421 — if fixed, the fix rides that entry's identity.
+
+**For a ruling**: whether to widen the arm, and whether Extension J (Unicode 17 only) joins it. **Gate**:
+a drawer holding a two-character Extension G word inside a longer run answers a query for that word,
+and the golden digest moves.
+
+### O424 — the image that compiles every shipped Linux binary is named by a tag, not a digest
+
+**Filed 2026-10-08 by O294's build, and revised on 2026-10-12 for the pin its ruling set.** The
+Dockerfile's builder stage, `FROM rust:1.98.1-slim-bookworm`, compiles the Linux binaries inside both
+GHCR images, and CI's `lint` job runs in the same image; both name it by a tag Docker Hub can move.
+O327 pinned the former-name preflight's `python` image by digest because a replaced image ran beside
+the checkout; the image that compiles what ships is the same class with more at stake. O159 left the
+builder untouched deliberately, as "a supply-chain question with a different shape", and filed
+nothing. Read 2026-10-12 by pulling it: the tag resolves to the index
+`sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730`, so a pin moves nothing that
+is built today. The runtime stage's `debian:bookworm-slim` stays a tag by O159's ruling (its security
+updates are the point), and the compose suites' service images (Caddy, Alpine, the vector databases)
+are test infrastructure that builds nothing shipped.
+
+**Shape**: the builder and the lint container named `rust:<version>-slim-bookworm@sha256:<index
+digest>`, and the toolchain arm of the `supply chain is pinned` preflight requiring the digest beside
+the version. **Gate**: that arm refuses a Rust image without `@sha256:`; counterfactual, today's
+Dockerfile.
+
+### O425 — nothing reports that a pinned action, or the pinned toolchain, has a fix the pin does not carry
+
+**Filed 2026-10-08 by O326's build.** Since O294 and O326, every third-party action runs at a commit
+named in the workflow and every build at the version `rust-toolchain.toml` names. That is the point of
+a pin, and it has a cost nothing here states: a security release of a pinned action, or a Rust point
+release, reaches CI only when someone edits the pin, and nothing in the tree or in CI says one exists.
+GitHub's Dependabot reads workflow `uses:` lines, keeps a `# vX.Y.Z` comment beside a SHA it bumps, and
+raises alerts for actions with published advisories; whether to turn it on is a repository setting
+and a `.github/dependabot.yml`, the maintainer's, as O313's settings were. Since O294's ruling of
+2026-10-12 a Rust release whose std moves Unicode version cannot be taken by a bump at all:
+`undercroft-core`'s assertion refuses it, so a fix that ships only in such a release waits on O422 or
+on a new hash identity.
+
+**Shape**: escalated to the maintainer — Dependabot for the `github-actions` ecosystem (alerts, and
+optionally version updates opening SHA-bump pull requests that the preflight already accepts), or a
+stated decision that pins move only when a person reviews a release. The toolchain pin has no such
+feed either way; a bump is one change across the file and the image references, which the preflight
+holds. **Gate**: on enabling, a deliberately stale pin on a scratch branch draws an alert or a pull
+request; on a decision not to, the decision is recorded here with its argument.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
@@ -53616,6 +54532,8 @@ stated residual; P4 is O324's and P5 is O325's.
 entry leaves `## Unversioned` through the battery's roster" was my own wording, and wrong: a roster entry
 stays under `## Unversioned`, closed. The release-flow clauses are in `CLAUDE.md` — its opening paragraph
 and its release flow — and notes stand beside O309 and O310.
+
+**Noted 2026-10-12 by O326's build.** The ruling's "fails silently if … a mutable-tag action holding the workflow-level write token is compromised (O326)" no longer describes the tree: no workflow grants a write at the workflow level, every third-party action is pinned by commit, and a job holding a write keeps its token out of every `env:` block but its step's, out of any step that runs cargo, and out of `.git/config`. The line stays as the record of what the ruling weighed. What remains of that route is an action pinned at a compromised commit, which a pin cannot see, and a hostile build script in a job that holds the grant, which O325's separate upload jobs close.
 
 ### O340 — CLOSED 2026-10-08 by the maintainer's ruling: O234's 10% read budget is a per-unit landing gate, with the cumulative figure reported beside it in every unit's record
 

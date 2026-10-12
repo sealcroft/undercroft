@@ -15,9 +15,11 @@
 # each runner image carried — Rust 1.98.1 for every one of v1.6.1's, read from
 # the runner images their jobs logged, against the 1.90.0 every suite ran. So a
 # claim about the toolchain the battery tests was not a claim about what
-# shipped. The preflight holds the other half: the Docker images name the same
-# version, and every workflow job that runs cargo outside a container calls
-# this script before its first cargo line.
+# shipped — and 1.90's std carries Unicode 16 where the binaries' carried 17,
+# which the hash identity's tokens read (ROADMAP O421). The preflight holds the
+# other half: the Docker images name the same version, and every workflow job
+# that runs cargo outside a container calls this script before its first cargo
+# line. undercroft-core refuses to compile on a std of another Unicode version.
 #
 # The pin is read from the file rather than asked of rustup, because the file
 # is what rustup itself obeys in this checkout; the version is installed BY
@@ -34,9 +36,10 @@ if [ ! -f "$file" ]; then
 fi
 # The file is held whole: its executed lines must be exactly these three. A
 # `components` or `targets` line would make rustup fetch on every cargo call
-# inside the offline Docker images, and a channel such as `stable` or `1.90`
-# is not a pin (`1.90` is not even the image's installed name, `1.90.0`, so
-# rustup inside the image would go to the network for it — measured).
+# inside the offline Docker images, and a channel such as `stable` or `1.98`
+# is not a pin (a minor-only name is not even the image's installed one, which
+# is the full version, so rustup inside the image would go to the network for
+# it — measured with `1.90` against `1.90.0` in that image).
 body=$(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$file" || true)
 channel=$(printf '%s\n' "$body" | sed -n 's/^channel = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"$/\1/p')
 want=$(printf '[toolchain]\nchannel = "%s"\nprofile = "minimal"' "$channel")

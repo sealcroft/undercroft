@@ -1,20 +1,26 @@
-# The ONE Rust toolchain every build uses (ROADMAP O294): the version the
-# Docker images carry (`rust:<version>-slim-bookworm`, named in full in the
-# Dockerfile and in CI's lint container), so the binaries `release.yml` ships
-# are built by the compiler every suite runs. Before this file each release
-# binary was built by its runner image's own stable — 1.97.1 or 1.98.x across
-# the v1.* releases, while every suite ran 1.90.0.
+# The ONE Rust toolchain every build uses (ROADMAP O294, ruled 2026-10-12): the
+# Docker images (`rust:<version>-slim-bookworm`, named in full in the
+# Dockerfile and in CI's lint container), the release binaries, `windows-check`
+# and every cargo call in this checkout. 1.98.1 is the toolchain that built
+# every v1.5.2, v1.6.0 and v1.6.1 binary, and its std carries Unicode 17.0.0 —
+# the version the hash identity's token space is asserted at, at compile time,
+# in undercroft-core. Until this file the images were built by 1.90
+# (Unicode 16) and the release binaries by their runner's stable, so one
+# identity named two token spaces (ROADMAP O421, whose walk ships in the same
+# release as this pin — no tag carries one without the other).
 #
 # rustup obeys this file for every cargo call in the checkout; CI installs it
 # through `.github/scripts/pinned-toolchain.sh`, which is also the one reader
 # of the version below. The `supply chain is pinned` preflight in
 # tests/battery.sh holds the images and every workflow to it, so a bump is one
-# change to this file and both image references together.
+# change to this file and both image references together — and a bump whose
+# std carries another Unicode version stops at undercroft-core's assertion,
+# because that is an identity decision, not a toolchain one.
 #
 # Exactly these three lines besides comments: a `components` or `targets` line
 # would make rustup fetch on a cargo call inside the offline images, and the
 # channel is the full version because the images install it under that name
-# (`1.90` would send rustup to the network for a toolchain they already hold).
+# (`1.98` would send rustup to the network for a toolchain they already hold).
 [toolchain]
-channel = "1.90.0"
+channel = "1.98.1"
 profile = "minimal"

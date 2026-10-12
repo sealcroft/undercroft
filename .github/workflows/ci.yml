@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     # The image carries the toolchain rust-toolchain.toml pins, named in full
     # (ROADMAP O294): the checkout's toolchain file resolves to it offline.
-    container: rust:1.90.0-slim-bookworm
+    container: rust:1.98.1-slim-bookworm
     steps:
       - uses: actions/checkout@v5
       - run: rustup component add rustfmt clippy

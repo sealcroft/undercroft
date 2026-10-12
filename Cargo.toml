@@ -63,7 +63,11 @@ ml-kem = { version = "0.2", features = ["zeroize"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 hex = "0.4"
-unicode-normalization = "0.1"
+# Exact: its tables are half of the hash identity's token space, asserted at
+# compile time in undercroft-core (ROADMAP O294's ruling of 2026-10-12), so no
+# `cargo update` moves NFC under the identity unannounced. The assertion is the
+# gate; this pin is the convenience.
+unicode-normalization = "=0.1.25"
 # Calendar conversion for the calendars that are NOT a renumbered Gregorian
 # year: Hijri is lunar, Jalali turns at the equinox. Apache-2.0, maintained by
 # the Unicode Consortium under ICU4X, three dependencies, and PURE ALGORITHM —

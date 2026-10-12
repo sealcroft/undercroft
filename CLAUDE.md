@@ -3404,7 +3404,7 @@ mount it — `docker compose run --rm test` without `--build` silently
 re-runs whatever was baked into the last image, so a "green" run can be
 testing code you already changed. rustfmt cannot fix host files from those
 images either; mount the repo instead:
-`docker run --rm -v "<repo>:/src" -w /src rust:1.90.0-slim-bookworm sh -c "rustup component add rustfmt; cargo fmt --all"`
+`docker run --rm -v "<repo>:/src" -w /src rust:1.98.1-slim-bookworm sh -c "rustup component add rustfmt; cargo fmt --all"`
 
 CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
 (no `--workspace`, so the two excluded model crates are fmt'd but not clippy'd
@@ -3414,7 +3414,7 @@ does** (O84).
 **That job runs cargo DIRECTLY, not the compose service, and the two
 definitions can disagree** — a fact worth knowing before adding a check to
 either. It is not an oversight to route around: the job runs in a
-`rust:1.90.0-slim-bookworm` container with no docker, so it cannot go through
+`rust:1.98.1-slim-bookworm` container with no docker, so it cannot go through
 `tests/battery.sh` the way M13 routed the suite legs. It bit immediately —
 O84's first fix added the telemetry lint to the compose service alone, which
 would have covered every local battery and NO pull request, i.e. exactly what
@@ -3440,16 +3440,26 @@ observable.
 **One toolchain builds everything, and CI's supply chain is pinned (ROADMAP
 O294, O326, O327).** `rust-toolchain.toml` names the version the Docker images
 carry — the Dockerfile's builder and CI's lint container name it in full,
-`rust:1.90.0-slim-bookworm` — and `.github/scripts/pinned-toolchain.sh` is the
+`rust:1.98.1-slim-bookworm` — and `.github/scripts/pinned-toolchain.sh` is the
 one way CI installs it: by name, the job's target added, and a failure unless
 `rustc` in the checkout reports exactly that version. Until it existed every
 release binary was built by its runner image's own stable (1.97.1 or 1.98.x
 across the v1.* releases, two compilers inside one release from v1.2.0 to
-v1.5.1) while every suite ran 1.90.0. Every third-party action is named by its
+v1.5.1) while every suite and every image ran 1.90.0 — and **the pin's VALUE
+is an identity decision**, which the first build missed: the hash embedder's
+tokens read std's Unicode tables, 1.90's are Unicode 16 and every shipped
+binary's were 17, so one `undercroft-hash-v3` named two token spaces (O421,
+whose walk ships in the same release as this pin; no tag carries one without
+the other). `undercroft-core` therefore asserts at COMPILE time that std's and
+the locked `unicode-normalization`'s tables are both Unicode 17.0.0, so a
+toolchain whose std moves Unicode version fails every build until someone
+rules it (O422). Every third-party action is named by its
 full commit SHA with its version in a comment (GitHub-owned `actions/*` by
 version tag); every workflow reads by default and a job takes the write it
 needs, checks out with `persist-credentials: false`, and keeps the token out
-of every `env:` block but its step's. The `supply chain is pinned` preflight
+of every `env:` block but its step's — and out of any step that runs cargo.
+The binary jobs still HOLD `contents: write` while their build scripts run,
+which O325's separate upload jobs close. The `supply chain is pinned` preflight
 holds all of it, and every container the preflights launch: by digest,
 read-only, offline. **A toolchain bump is one change** to the file and both
 image references, and the preflight names whichever was missed.

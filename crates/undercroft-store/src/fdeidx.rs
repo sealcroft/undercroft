@@ -118,8 +118,10 @@ fn bytes_to_f32s(b: &[u8]) -> Option<Vec<f32>> {
         return None;
     }
     Some(
-        b.chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        b.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect(),
     )
 }

@@ -2317,6 +2317,116 @@ PATCH inside the unreleased 1.7.0: a crash no longer leaves a short key, and a k
 exits 1 where it wrote through a dangling one. `UPGRADING.md` carries the entry; `config check`
 cannot detect it.
 
+### One toolchain builds everything, at the Unicode version the hash identity was shipped with; third-party actions are pinned by commit, and a write token reaches only the step that needs it (O294, O326, O327)
+
+Three gaps of one class: something CI runs, or something that builds what ships, named by a
+reference that can move. **The toolchain (O294).** Every suite, the lint and both GHCR images were
+built in `rust:1.90-slim-bookworm`, while `release.yml`'s ten binaries were built by whatever stable
+each runner image carried and `windows-check` took `dtolnay/rust-toolchain@stable`. Read from the
+runner image every `Binaries` job logged: no v1.* binary was built by 1.90.0 — 1.97.1 built 47 of the
+130, 1.98.0 built 53 and 1.98.1 built 30, all ten of each of v1.5.2, v1.6.0 and v1.6.1. **And the two
+compilers' std carried different Unicode tables, which the hash embedder's tokens read**
+(`is_alphanumeric` in `segment`, `is_uppercase` and `to_lowercase` in `search_key`, the same in the
+room a file stem derives). Measured over all 1,112,064 scalar values: 1.97.1, 1.98.0 and 1.98.1 print
+byte-identical tables at Unicode 17.0.0; 1.90.0 prints Unicode 16.0.0 and differs on 4,702 of them —
+4,699 newly assigned in Unicode 17 (`is_alphanumeric` on 4,672, every one gaining it under 1.98.1,
+4,298 of them in CJK Extension J), and three assigned before it: U+0295 leaves Lowercase, so a capital sigma after it no
+longer lowercases to the final form (`ʕΣ` is `ʕς` under 1.90.0, `ʕσ` under 1.98.1), and U+A7D3 and
+U+A7D5 gain uppercase mappings no token path reads. So every image computed one token space and every
+prebuilt binary another under the one name `undercroft-hash-v3`: a newly assigned letter was a
+delimiter in an image's vault and a token in a binary's. **The actions (O326).** Every third-party
+action was referenced by a tag its owner can move — `docker/setup-buildx-action@v4`,
+`docker/login-action@v4`, `docker/build-push-action@v7`, `aquasecurity/trivy-action@v0.36.0`,
+`taiki-e/install-action@v2`, `peaceiris/actions-mdbook@v2`, `dtolnay/rust-toolchain@stable` — and
+`release.yml` granted `contents: write` and `packages: write` to every job at the workflow level, with
+the token in the binary jobs' job-level `env:` and persisted into `.git/config` by their checkout:
+every crate's build script ran beside a token that could replace the release's assets with no tag
+moving. `pages.yml` handed `pages: write` and `id-token: write` to the job that runs the third-party
+mdBook action, and `republish-ort-image.yml` granted `packages: write` at the workflow level. **The
+scan's image (O327).** The former-name preflight ran `python:3-slim`, unpinned, with the checkout —
+`.git/hooks` included — mounted read-write.
+
+Now `rust-toolchain.toml` pins **1.98.1**, the toolchain that built every v1.5.2, v1.6.0 and v1.6.1
+binary, and the Dockerfile's builder and CI's lint container name `rust:1.98.1-slim-bookworm` in full.
+rustup obeys the file for every cargo call in the checkout, and `.github/scripts/pinned-toolchain.sh`
+is the one way CI installs it: it reads the pin, installs it by name, adds the job's target, and fails
+unless `rustc` in the checkout reports exactly that version. `release.yml`'s two binary matrices,
+`windows-check` and `audit` call it before their first cargo line. **`undercroft-core` asserts at
+compile time** that std's `char::UNICODE_VERSION` and the locked `unicode-normalization`'s
+`UNICODE_VERSION` are both 17.0.0, so a toolchain whose std carries another Unicode version — through
+`cargo +x`, `RUSTUP_TOOLCHAIN` or a distro `cargo` — fails every build with a message naming the hash
+identity, instead of moving every vault's vectors under an unchanged name; `unicode-normalization` is
+pinned exactly, at the 0.1.25 the lock already held. Seven sites the newer clippy refuses were
+rewritten to the form its lints name, each with the same result. Every third-party action is pinned
+by its full commit SHA with the version it resolved from in a comment — `setup-buildx-action` v4.4.1,
+`login-action` v4.6.0, `build-push-action` v7.4.0, `trivy-action` v0.36.0, `install-action` v2.87.26
+(which carries cargo-audit 0.22.2 and its sha256 in its own manifest, so the SHA pins the tool too)
+and `actions-mdbook` v2.0.0 — each checked against its tag through the API. `dtolnay/rust-toolchain`
+is gone. Every workflow states `permissions: contents: read` at the top and grants a write only to the
+job that needs it: the binary jobs `contents: write`, the image jobs `packages: write`, Pages' deploy
+job `pages: write` and `id-token: write`; the binary jobs check out with `persist-credentials: false`
+and give `GH_TOKEN` to the upload step alone. The former-name scan runs `python:3.14-slim` by its
+index digest, with the checkout mounted `:ro` and `--network none`.
+
+**No release may carry this pin without the `undercroft-hash-v4` walk (ROADMAP O421).** The pin moves
+the images' token space from Unicode 16 to 17: a vault a prebuilt binary wrote is unaffected, and a
+vault an image wrote would hold Unicode-16 vectors under a name that then means 17. O421 mints `v4`
+and walks every hash vault once at its first writable open, as v1 and v2 were walked. It is its own
+unit and is not in this tree. Until it lands beside this pin, this tree must not be tagged.
+
+**One new host-side preflight holds all of it, and it runs before the first preflight that launches
+a container**, so a launch it refuses never happens: every `uses:` names a local path, a GitHub-owned
+`actions/*` action by version tag or SHA, a `docker://` image by digest, or a third-party action by a
+40-hex SHA with a `# v…` comment; every workflow states top-level permissions with nothing above read,
+a job holding a write checks out with `persist-credentials: false`, no workflow-level or job-level
+`env:` carries the token, and no step that runs cargo holds it — in any spelling an expression
+accepts, `github.token`, `github['token']` or `secrets.GITHUB_TOKEN` alike; every Rust image named in a
+Dockerfile, a compose file or a workflow — whatever registry it names, and an untagged `FROM rust`
+among them — is Docker Hub's official one tagged with exactly the pinned version, no workflow,
+Dockerfile or compose file names a toolchain any other way (`rustup run`, a `setup-rust` action or a
+`toolchain:` input included), and every job running cargo outside a container calls the script before
+its first cargo line; and every container this script launches names its image through a `*_IMG`
+variable assigned once, by digest, mounts read-only and gets no network. GitHub-owned `actions/*` stay
+on version tags, as O326 filed it; a branch there is refused.
+
+Gates: each of the preflight's six readers is driven on planted input both ways before the real files
+are believed — five refs, six grants, five images, seven toolchain mechanisms, two native cargo jobs
+and five container defects it must refuse, a clean set of each it must pass, and the pin's reader on
+copies of itself. Counterfactual: over `main`'s workflows, Dockerfile and former-name launch the
+preflight prints forty refusals across all six readers — eighteen third-party refs by tag, five
+workflow-level writes and two job-level tokens, two minor-only rust images, three toolchain mechanisms,
+four jobs running cargo without the pin and six container defects — beside the missing pin. The first
+build's reader passed four of its independent review's plants (an untagged `FROM rust`, another
+registry's Rust image, `rustup run nightly` with a `setup-rust-toolchain` action, a cargo step holding
+`github['token']`); planted in a copy of this tree they are now refused, eleven refusals across four
+readers. `undercroft-core` fails to compile under 1.90.0 with the assertion's message and compiles
+under 1.98.1; under the pin the format check, the three clippy runs, a `--locked` build that leaves
+`Cargo.lock` byte-identical, the Dockerfile's test and runtime stages, whose binary starts, and `cargo test --release` in the test stage (1,380 passed, none failed, 17 ignored) all pass. The preflight runs green under
+Debian 12's mawk 1.3.4 20200120 and gawk 5.2.1.
+
+What it cannot see, stated. A pinned action still FETCHES at run time — trivy's vulnerability
+database, cargo-audit's advisory database, the mdBook tarball (no checksum) — so the pin fixes the
+code, not its downloads. The binary jobs still HOLD `contents: write` while their build scripts run,
+and code running in a job can reach a token the job holds without its environment, so the build and
+the upload belong in separate jobs: O325's, ruled and not built. `release.yml` runs only at a tag and
+`pages.yml` on `main`, so their new shapes are first exercised there; what could be verified here is
+their YAML, every pinned SHA against its tag, the script on the pinned image, and the preflight. Every
+shipped target has compiled under 1.98.1 (it built v1.6.1's ten), but only `windows-check` compiles
+natively on a pull request. The first build of this unit pinned 1.90.0, the images' compiler, which
+would have taken lexical and vector reach to 4,672 codepoints from every prebuilt-binary vault at
+upgrade; its review stopped it, and that defect was mine. Filed: O421 (the `v4` identity and its walk),
+O422 (decoupling the token path from std's tables, which the maintainer ruled on 2026-10-12: in-tree
+tables generated from the Unicode 17.0.0 data files, pinned by sha256, proven equal to 1.98.1's std),
+O423 (`script_of`'s Han arm stops at Extension F), O424 (the builder image is named by tag, not
+digest) and O425 (nothing reports that a pinned action or the pinned toolchain has a fix the pin
+lacks, escalated).
+
+PATCH inside the unreleased 1.7.0: what ships was built by a compiler no suite ran, and one identity
+named two token spaces; the pin removes the first and, with O421's walk in the same release, the
+second. Nothing an operator runs changes until then. A native source build changes, so `UPGRADING.md`
+carries an entry: rustup now builds with 1.98.1 and fetches it on first use, and a build on a
+toolchain whose std is not Unicode 17.0.0 fails to compile; `config check` cannot see a build.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

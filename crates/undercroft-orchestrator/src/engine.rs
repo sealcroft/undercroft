@@ -218,7 +218,7 @@ pub fn vault_request(
         }
     }
     .request(method, &path)
-    .set("Authorization", &format!("Bearer {}", &*creds.bearer))
+    .set("Authorization", &format!("Bearer {}", *creds.bearer))
     .set(
         "X-Vault-Assertion",
         &mint_assertion(&creds.assertion_secret, vault),
@@ -275,7 +275,7 @@ pub fn create_vault(creds: &InstanceCreds, vault: &str, level: &str) -> Result<(
     let path = format!("{}/v1/vaults", creds.url);
     let result = agent(&creds.url)?
         .post(&path)
-        .set("Authorization", &format!("Bearer {}", &*creds.bearer))
+        .set("Authorization", &format!("Bearer {}", *creds.bearer))
         .set(
             "X-Vault-Assertion",
             &mint_assertion(&creds.assertion_secret, vault),

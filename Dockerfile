@@ -17,7 +17,7 @@
 # Rust point release cannot move it under the minor tag (ROADMAP O294; the
 # `supply chain is pinned` preflight holds the two equal). That file is not
 # copied in: this image's own toolchain is the pin.
-FROM rust:1.90.0-slim-bookworm AS builder
+FROM rust:1.98.1-slim-bookworm AS builder
 WORKDIR /src
 # curl is used by the e2e suite to exercise the HTTP REST surface, and
 # sqlite3 is how it plays the OFFLINE WRITER: ROADMAP O237's gate needs the

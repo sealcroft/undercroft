@@ -12,7 +12,9 @@
 # the Docker images carry and every suite runs — installed through
 # `.github/scripts/pinned-toolchain.sh` (ROADMAP O294). Until then each was
 # built by its runner image's own stable: Rust 1.97.1 or 1.98.x across the
-# v1.* releases, two compilers inside one release from v1.2.0 to v1.5.1.
+# v1.* releases, two compilers inside one release from v1.2.0 to v1.5.1, while
+# the images were built by 1.90 — whose std carries Unicode 16 where the
+# binaries' carried 17, so one hash identity named two token spaces (O421).
 #
 # Permissions are granted per job, at the least each needs (ROADMAP O326):
 # the workflow reads, the binary jobs write `contents` to create and upload
@@ -20,6 +22,10 @@
 # out with `persist-credentials: false` and hands `GH_TOKEN` to its upload
 # step alone: `cargo build` runs every crate's build script, and until O326 it
 # ran with a `contents: write` token in its environment and in `.git/config`.
+# What that leaves, stated: the binary jobs still HOLD the grant while their
+# build scripts run, and code running in a job can reach a token the job holds
+# without its environment (the runner process's memory), so the build and the
+# upload belong in separate jobs — O325's upload jobs, ruled and not built.
 # Third-party actions are pinned by commit, their version in a comment. The
 # `supply chain is pinned` preflight in tests/battery.sh holds all of it.
 name: release

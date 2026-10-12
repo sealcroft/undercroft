@@ -769,7 +769,10 @@ fi
 #         read from the runner images their own jobs logged — while every
 #         suite, the lint and the Linux images ran 1.90.0, and `windows-check`
 #         took `dtolnay/rust-toolchain@stable`. A claim about the compiler the
-#         battery tests was not a claim about what shipped.
+#         battery tests was not a claim about what shipped, and the two std
+#         libraries carried different Unicode tables, which the hash identity's tokens
+#         read (O421): the pin is 1.98.1 by O294's ruling of 2026-10-12, and
+#         undercroft-core asserts its Unicode version at compile time.
 #   O326  every third-party action was named by a tag its owner can move, and
 #         `release.yml` granted `contents: write` and `packages: write` to
 #         every job at the workflow level, with the token in a job-level
@@ -875,13 +878,27 @@ sc_actions() {
 # is written — a job id at 2, its keys at 4, a step's dash at 6, the step's
 # keys at 8. A file written another way reads as having no jobs, which the
 # job-count premise below refuses.
+#
+# The token is matched in every spelling an expression accepts — the property
+# and index forms, in any case (`github.token`, `github['token']`,
+# `secrets.GITHUB_TOKEN`, `secrets["github_token"]`), which the review of the
+# first build found the reader blind to — and a STEP that runs cargo may not
+# hold it either: every crate's build script runs there, which is the exposure
+# this arm exists for, one level down from the job's `env:`.
 sc_permissions() {
-  awk '
+  awk -v sq="'" '
+    BEGIN {
+      q = "[\"" sq "]"
+      tokre = "github[.]token|github[[]" q "token" q "[]]|secrets[.]github_token|secrets[[]" q "github_token" q "[]]"
+    }
     function ind(s) { return match(s, /[^ ]/) ? RSTART - 1 : -1 }
-    function tok(s) { return (s ~ /github\.token/ || s ~ /secrets\.GITHUB_TOKEN/) }
+    function tok(s) { return (tolower(s) ~ tokre) }
+    function runs_cargo(s,   t) { t = " " s " "; return (t ~ /[^A-Za-z0-9_-]cargo[^A-Za-z0-9_-]/) }
     function flush_step() {
       if (st_co && !st_persist) co_bad = co_bad st_line
-      st_co = 0; st_persist = 0; st_line = ""
+      if (st_tok && st_cargo)
+        printf "  %s:%d: a step of job %s runs cargo while it holds the token; every build script reads its environment\n", fname, st_first, job
+      st_co = 0; st_persist = 0; st_line = ""; st_tok = 0; st_cargo = 0; st_first = 0
     }
     function flush_job() {
       flush_step()
@@ -935,33 +952,59 @@ sc_permissions() {
         next
       }
       if (i == 6 && $0 ~ /^      - /) {
-        flush_step(); st_line = " " FNR
+        flush_step(); st_line = " " FNR; st_first = FNR
         if ($0 ~ /uses:[ ]*actions\/checkout@/) st_co = 1
       } else if ($0 ~ /^        uses:[ ]*actions\/checkout@/) {
         st_co = 1
       }
       if ($0 ~ /persist-credentials:[ ]*"?false"?[ ]*$/) st_persist = 1
+      if (st_first) { if (tok($0)) st_tok = 1; if (runs_cargo($0)) st_cargo = 1 }
     }
     END { flush_file(); printf "examined=%d jobs=%d\n", files, jobs }
   ' "$@"
 }
 
 # ── arm 3: the toolchain (O294) ──
-SC_RUSTIMG_RE='(^|[[:space:]"=])(docker\.io/)?(library/)?rust:([^"[:space:]@]+)'
-SC_MECH_RE='dtolnay/rust-toolchain|actions-rs/toolchain|rustup[[:space:]]+(default|override|toolchain|install|update|target|set)([[:space:]]|$)|RUSTUP_TOOLCHAIN|(cargo|rustc)[[:space:]]+\+'
+# An image is read where an image is NAMED — a Dockerfile's `FROM` (its flags
+# skipped) and an `image:` or `container:` key — and is a Rust image when the
+# last component of its repository is `rust`, whatever registry is in front of
+# it: the first build matched `rust:` after a space and so read past `FROM rust`
+# (no tag at all), `ghcr.io/rust-lang/rust:nightly` and any other registry's
+# copy (the review's plants). Such an image must be Docker Hub's official one,
+# tagged with the pinned version in full. A reference built from a variable is
+# not judged; none exists in the tree, and the residual is stated.
+SC_FROM_RE='^[[:space:]]*[Ff][Rr][Oo][Mm][[:space:]]+((--[^[:space:]]+[[:space:]]+)*)([^[:space:]]+)'
+SC_IMGKEY_RE='^[[:space:]]*(-[[:space:]]+)?(image|container):[[:space:]]*"?([^"[:space:]#]+)'
+SC_MECH_RE='uses:[[:space:]]*"?[^"[:space:]]*(rust-toolchain|setup-rust|actions-rs)|^[[:space:]]*toolchain:|rustup[[:space:]]+(default|override|toolchain|install|update|target|set|run)([[:space:]]|$)|RUSTUP_TOOLCHAIN|(cargo|rustc)[[:space:]]+\+'
 sc_images() {  # <pinned version> <file>...
-  local want=$1 f ln n tag v seen=0
+  local want=$1 f ln n ref base last name tag prefix v seen=0
   shift
   for f in "$@"; do
     n=0
     while IFS= read -r ln || [ -n "$ln" ]; do
       n=$((n + 1))
       case "${ln#"${ln%%[![:space:]]*}"}" in "#"*) continue ;; esac
-      [[ $ln =~ $SC_RUSTIMG_RE ]] || continue
+      if [[ $ln =~ $SC_FROM_RE ]]; then ref=${BASH_REMATCH[3]-}
+      elif [[ $ln =~ $SC_IMGKEY_RE ]]; then ref=${BASH_REMATCH[3]-}
+      else continue
+      fi
+      base=${ref%%@*}
+      case "$base" in *'$'*) continue ;; esac
+      last=${base##*/}; name=${last%%:*}
+      [ "$name" = rust ] || continue
       seen=$((seen + 1))
-      tag=${BASH_REMATCH[4]-}; v=${tag%%-*}
+      case "$last" in *:*) tag=${last#*:} ;; *) tag="" ;; esac
+      case "$base" in */*) prefix=${base%/*} ;; *) prefix="" ;; esac
+      case "$prefix" in
+        ""|library|docker.io/library) ;;
+        *) echo "  $f:$n: $ref is a Rust image from $prefix, not Docker Hub's official image"; continue ;;
+      esac
+      if [ -z "$tag" ]; then
+        echo "  $f:$n: $ref names no version at all; name rust:$want in full"; continue
+      fi
+      v=${tag%%-*}
       [ "$v" = "$want" ] \
-        || echo "  $f:$n: rust:$tag names $v, where rust-toolchain.toml pins $want; name the pinned version in full"
+        || echo "  $f:$n: $ref names $v, where rust-toolchain.toml pins $want; name the pinned version in full"
     done < "$f"
   done
   echo "examined=$seen"
@@ -1103,18 +1146,22 @@ printf '%s\n' 'jobs:' '  j:' '    steps:' \
 sc_tally "the actions arm on five planted refs" "$(sc_actions "$SC_TMP/wf/actions-bad.yml")" 5 5
 sc_tally "the actions arm on a clean sample" "$(sc_actions "$SC_TMP/wf/actions-good.yml")" 0 4
 
+# The token spelled every way an expression accepts it: the property form, the
+# index form in either quote and any case — and once in the env of a step that
+# runs cargo, the review's plant, which the first build passed.
 printf '%s\n' 'name: x' 'permissions:' '  contents: write' 'env:' '  T: ${{ github.token }}' \
   'jobs:' '  a:' '    permissions:' '      packages: write' '    env:' \
-  '      GH_TOKEN: ${{ github.token }}' '    steps:' '      - uses: actions/checkout@v5' \
-  '      - run: echo' > "$SC_TMP/wf/perm-bad.yml"
+  "      GH_TOKEN: \${{ SECRETS['GITHUB_TOKEN'] }}" '    steps:' '      - uses: actions/checkout@v5' \
+  '      - run: echo' '      - name: build' '        run: cargo build' '        env:' \
+  "          GH_TOKEN: \${{ github['token'] }}" > "$SC_TMP/wf/perm-bad.yml"
 printf '%s\n' 'name: y' 'jobs:' '  a:' '    steps:' '      - run: echo' > "$SC_TMP/wf/perm-none.yml"
 printf '%s\n' 'name: z' 'permissions:' '  contents: read' 'jobs:' '  a:' '    permissions:' \
   '      contents: write' '    steps:' '      - uses: actions/checkout@v5' '        with:' \
-  '          persist-credentials: false' '      - run: echo' '        env:' \
+  '          persist-credentials: false' '      - run: cargo build' '      - run: gh release upload x' '        env:' \
   '          GH_TOKEN: ${{ github.token }}' '  b:' '    steps:' \
   '      - uses: actions/checkout@v5' > "$SC_TMP/wf/perm-good.yml"
-sc_tally "the permissions arm on five planted grants" \
-  "$(sc_permissions "$SC_TMP/wf/perm-bad.yml" "$SC_TMP/wf/perm-none.yml")" 5 2
+sc_tally "the permissions arm on six planted grants" \
+  "$(sc_permissions "$SC_TMP/wf/perm-bad.yml" "$SC_TMP/wf/perm-none.yml")" 6 2
 sc_tally "the permissions arm on a clean sample" "$(sc_permissions "$SC_TMP/wf/perm-good.yml")" 0 1
 
 # The pin's one reader, on copies of itself in throwaway trees: three files it
@@ -1138,17 +1185,29 @@ if [ "$(bash "$SC_TMP/pin-good/.github/scripts/pinned-toolchain.sh" --channel 2>
   echo "FAIL  premise: the pin's reader did not read 1.2.3 from a well-formed toolchain file"
   SC_FAIL=1
 fi
-printf '%s\n' 'FROM rust:1.2-slim-bookworm AS b' 'FROM debian:bookworm-slim' > "$SC_TMP/Dockerfile.bad"
+# The review's plants among them: an untagged `FROM rust`, another registry's
+# Rust image, a `latest` behind a `--platform` flag.
+printf '%s\n' 'FROM rust:1.2-slim-bookworm AS b' 'FROM rust AS c' \
+  'FROM ghcr.io/rust-lang/rust:1.2.3 AS d' 'FROM --platform=linux/amd64 rust:latest AS e' \
+  'FROM debian:bookworm-slim' > "$SC_TMP/Dockerfile.bad"
 printf '%s\n' 'services:' '  s:' '    image: "rust:1.2.4"' > "$SC_TMP/compose-bad.yml"
-printf '%s\n' '# FROM rust:9.9.9' 'FROM rust:1.2.3-slim-bookworm AS b' > "$SC_TMP/Dockerfile.good"
-sc_tally "the image arm on two planted versions" \
-  "$(sc_images 1.2.3 "$SC_TMP/Dockerfile.bad" "$SC_TMP/compose-bad.yml")" 2 2
-sc_tally "the image arm on a clean sample" "$(sc_images 1.2.3 "$SC_TMP/Dockerfile.good")" 0 1
+printf '%s\n' '# FROM rust:9.9.9' 'FROM rust:1.2.3-slim-bookworm AS b' \
+  'FROM docker.io/library/rust:1.2.3 AS c' 'from --platform=linux/arm64 library/rust:1.2.3-slim AS d' \
+  'FROM my/rusty:0.1 AS e' 'FROM debian:bookworm-slim' > "$SC_TMP/Dockerfile.good"
+sc_tally "the image arm on five planted images" \
+  "$(sc_images 1.2.3 "$SC_TMP/Dockerfile.bad" "$SC_TMP/compose-bad.yml")" 5 5
+sc_tally "the image arm on a clean sample" "$(sc_images 1.2.3 "$SC_TMP/Dockerfile.good")" 0 3
+# And the review's toolchain plants: `rustup run`, another setup action, a
+# `toolchain:` input.
 printf '%s\n' '      - uses: dtolnay/rust-toolchain@stable' '        run: rustup default stable' \
-  '        run: cargo +nightly build' '        env:' '          RUSTUP_TOOLCHAIN: stable' > "$SC_TMP/wf/mech-bad.yml"
-printf '%s\n' '      - run: rustup component add rustfmt clippy' '      # rustup default stable' > "$SC_TMP/wf/mech-good.yml"
-sc_tally "the mechanism arm on four planted toolchains" "$(sc_mechanisms "$SC_TMP/wf/mech-bad.yml")" 4 5
-sc_tally "the mechanism arm on a clean sample" "$(sc_mechanisms "$SC_TMP/wf/mech-good.yml")" 0 2
+  '        run: cargo +nightly build' '        env:' '          RUSTUP_TOOLCHAIN: stable' \
+  '        run: rustup run nightly cargo build' \
+  "      - uses: actions-rust-lang/setup-rust-toolchain@$SC_HEX40 # v1" '        with:' \
+  '          toolchain: stable' > "$SC_TMP/wf/mech-bad.yml"
+printf '%s\n' '      - run: rustup component add rustfmt clippy' '      # rustup default stable' \
+  '      - run: cargo build --release' '        with:' '          tool: cargo-audit' > "$SC_TMP/wf/mech-good.yml"
+sc_tally "the mechanism arm on seven planted toolchains" "$(sc_mechanisms "$SC_TMP/wf/mech-bad.yml")" 7 9
+sc_tally "the mechanism arm on a clean sample" "$(sc_mechanisms "$SC_TMP/wf/mech-good.yml")" 0 5
 printf '%s\n' 'jobs:' '  a:' '    steps:' '      - run: cargo build' '  b:' '    steps:' \
   '      - run: cargo build' '      - run: bash .github/scripts/pinned-toolchain.sh' > "$SC_TMP/wf/cargo-bad.yml"
 printf '%s\n' 'jobs:' '  a:' '    steps:' '      - run: bash .github/scripts/pinned-toolchain.sh' \
