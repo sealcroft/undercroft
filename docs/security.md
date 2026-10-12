@@ -13,7 +13,12 @@ modification: every read verifies, `verify` audits everything.
   only in an installation nothing refers to yet, never under a read-only open, and a
   declaration the key files contradict is refused before anything is derived
   (ROADMAP O204). The key files are unauthenticated, so they decide nothing
-  about which key sealed a vault; the manifest MAC does.
+  about which key sealed a vault; the manifest MAC does. A command derives a
+  passphrase's key once (ROADMAP O211): the Argon2id output is held in memory,
+  never on disk, against a digest of the passphrase and the salt bytes it came
+  from, and only across the opens of a command that makes several (`vault
+  list`, `vault rotate`, a `serve-http` start); every open still classifies the
+  key files and reads the salt.
 - **Per-vault keys**: `HKDF-SHA256(master, vault_salt, "undercroft.v1/vault/<id>/<label>")`
   for enc / mac / manifest / sample / chain labels. `sample` keys the PQ
   training-sample rank and is deliberately rotation-sensitive, because

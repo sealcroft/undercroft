@@ -2152,6 +2152,65 @@ each change removes a defect and moves no documented contract — O283's refusal
 it always meant. `UPGRADING.md` widens O283's note and adds one for a hand-made `.staging` link;
 `config check` sees neither, both being states of the data directory.
 
+### A command derives a passphrase's key once, not once per open (O211)
+
+Under `UNDERCROFT_PASSPHRASE` every manager open ran Argon2id — 64 MiB, three passes — and nothing
+kept its output, so `vault list` derived the same key once for the list and once per vault it
+described, and `vault rotate` and a `serve-http` start derived it twice. Counted from outside the
+process (each Argon2id run faults its 64 MiB afresh, 16,384 pages, over a key-file baseline of
+about 480): `vault list` over four vaults ran it 5 times, `vault rotate` and a `serve-http` start 2.
+
+Now each of those derives it once. `KeyCache` in `undercroft-vault` keeps the derived key against a
+SHA-256 digest of the passphrase and the salt bytes that produced it, both compared in constant time
+over fixed lengths, so it never keeps the passphrase itself; the CLI holds one in a `static` that
+every manager open goes through — the binary has one, `manager_in`. **It keeps a key only while a
+hold is alive**: `vault list`, `vault rotate` and `serve-http`'s start take one across their opens,
+and the last hold to drop zeroizes the key — `serve-http`'s before it serves. An open with no hold
+keeps nothing, so a command that opens once (`serve-mcp`, `mine`, `refine`) holds the master key
+exactly as long as its manager does, as before. **Only the derivation is cached, never the
+decision**: each open still surveys and classifies the data directory (O204) and reads `kdf.salt`
+before the cache is asked, so a deleted salt is still refused, a planted key file still
+contradicts, a replaced salt derives again, and a wrong passphrase derives its own key and meets
+the manifest MAC as before. The held key is a `SecretKey`, never written anywhere, and `Debug`
+prints only counts; a `process::exit` inside a hold would skip its zeroizing drop, as it skips every
+destructor, and none of the three holds encloses one. The multi-tenant server's `/v1` opens already
+shared the one manager it holds, and still derive nothing per request; the control plane derives
+nothing at all. `VaultManager::open_as` keeps deriving per call for library callers.
+
+**The first build kept the key for the whole process**, released only at a command's exit, so
+`serve-mcp`, `mine` and `refine` held the master key and a copy of the passphrase in the cache for
+their whole run, where before the key went with the manager after the one open. An independent
+review found it before merge; the holds above are the fix, and the passphrase digest replaced the
+copy.
+
+Measured on the LoCoMo feed mined into four sealed vaults of a passphrase installation (680
+drawers), three rounds, before (`5f5fe2f`) → after: `vault list` 1.30–2.20 s → 0.34–0.45 s, 5
+derivations → 1; `vault rotate` 0.80–0.90 s → 0.41–0.49 s, 2 → 1; a `serve-http` start to its first
+`/healthz` 0.45–1.12 s → 0.31–0.42 s, 2 → 1; `search` (one open) 1 → 1, unchanged. Peak RSS barely
+moves — the derivations ran one at a time, so the peak was one derivation's either way (`vault list`
+74,640–75,276 KiB → 71,040 KiB) — and what goes is the 64 MiB touched again per extra open. Eight
+`/v1` requests across the four vaults derived nothing before or after (2,523–2,617 faults between
+them, 1.4–53 ms each).
+
+Gates: at the manager, nine opens (the list's, one per vault on each posture for three vaults,
+and a server start's two) run Argon2id once and a wrong passphrase still meets `ManifestTampered`; at the key,
+the held key never answers for another passphrase or salt, every open still refuses a deleted salt
+and a planted key file while a key is held, the key-file source never reaches the cache, racing
+opens on a cold cache derive once, nothing is kept outside a hold and the last hold zeroizes, and
+Argon2id has one caller; at the binary, `serve-mcp`'s open path leaves the cache empty, and a
+source gate (`src/` recursively, literal spellings) counts its one manager open through the
+process cache, no uncached open, exactly three holds and none in `serve-mcp`, and a control plane
+that opens no manager. `tests/cli.rs` and four e2e checks drive the multi-open commands and a `/v1`
+server under a passphrase. Counterfactuals on a copy of the fixed tree: the held key never answering
+fails four gates, a cache keyed on the salt alone or the passphrase alone fails the
+other-input arm, a held key answering before the survey fails the classification gate (and the
+replaced-salt arm), the binary's opener put back to `open_as` fails the source gate, keeping a
+derivation outside a hold fails the three no-hold arms, and a hold added to `serve-mcp` fails the
+source gate. Re-measured with the holds built, the counts above stand.
+
+PATCH inside the unreleased 1.7.0: a cost goes, no documented contract moves, and nothing can stop a
+deployment, so `UPGRADING.md` owes nothing.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

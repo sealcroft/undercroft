@@ -485,5 +485,6 @@ init`, which the command above runs on every start, derives the
 master key via Argon2id (64 MiB, t=3) from the passphrase and a random salt
 it persists at `/data/kdf.salt` (`0600`). No key material is written, so the
 passphrase must be supplied on every start — no TTY, no prompt, and the key
-is never emitted to logs. Provision each tenant's vaults over `/v1/vaults`
+is never emitted to logs. Each process derives it once (ROADMAP O211): the
+server at its start, however many vaults it then serves, and `init` once. Provision each tenant's vaults over `/v1/vaults`
 once the instance is up.
