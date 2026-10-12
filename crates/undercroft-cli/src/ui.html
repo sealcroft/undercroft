@@ -594,8 +594,16 @@ async function api(method, path, opts) {
   const text = await res.text();
   if (!res.ok) {
     let msg = text;
-    try { msg = JSON.parse(text).error || text; } catch (_) {}
-    throw new Error(res.status + ": " + msg);
+    let cls = null;
+    try { const j = JSON.parse(text); msg = j.error || text; cls = j.class || null; } catch (_) {}
+    // The status and the class travel on the error, not only in its text:
+    // a caller that must tell an integrity verdict from a refusal (ROADMAP
+    // O315 — a receipt the engine could not read is NOT a forged one) keys on
+    // `cls`, never on a substring of the message.
+    const err = new Error(res.status + ": " + msg);
+    err.status = res.status;
+    err.cls = cls;
+    throw err;
   }
   if (opts.raw) return text;
   try { return JSON.parse(text); } catch (_) { return text; }
@@ -1450,7 +1458,10 @@ async function loadAdmission() {
     const r = await api("GET", opsPath("admission"), { vault: v });
     const rows = (r.pending || []).map(p => {
       const sig = (p.signals || []).map(s => esc(s.code) + "@" + s.offset).join(" ");
-      return "<tr><td class='kv'>" + esc(p.id) + "<br>" + esc(p.source_file) + "#" + esc(String(p.chunk_index)) + "</td>" +
+      // A clear column that disagrees with the covered copy (ROADMAP O221):
+      // a flip a ruling would erase the only trace of. Escaped like every cell.
+      const drift = (p.mirror_drift || []).map(m => "<br><span style='color:var(--red)'>MIRROR " + esc(m) + "</span>").join("");
+      return "<tr><td class='kv'>" + esc(p.id) + "<br>" + esc(p.source_file) + "#" + esc(String(p.chunk_index)) + drift + "</td>" +
         "<td><span class='pill wing'>" + esc(p.intended_wing) + "</span>/" + esc(p.intended_room) + "</td>" +
         "<td class='kv'>" + sig + "</td><td class='kv'>" + esc(p.filed_at) + "</td>" +
         // Whether an allow would proceed (ROADMAP O224). ALLOW stays enabled:
@@ -1459,6 +1470,23 @@ async function loadAdmission() {
         "<td><button class='ctl' data-adm-allow='" + esc(p.id) + "'>✓ ALLOW</button> " +
         "<button class='ctl danger' data-adm-deny='" + esc(p.id) + "'>✕ DENY</button></td></tr>";
     });
+    // The rows the queue holds that do not verify (ROADMAP O221): named by
+    // `seq`, the id only when the server sends one (it never sends a
+    // malformed id, only its length), and NO rule buttons — no ruling door
+    // can act on them.
+    for (const u of r.unverifiable || []) {
+      const name = u.id != null ? esc(u.id) : "malformed id, " + esc(String(u.malformed_id_bytes)) + " bytes";
+      rows.push("<tr><td class='kv'>seq " + esc(String(u.seq)) + "<br>" + name + "</td>" +
+        "<td colspan=4 class='kv'><span style='color:var(--red)'>UNVERIFIABLE — " + esc(u.reason) + "</span>; " +
+        (u.fenced ? "the destruction fence holds it" : "the destruction fence does not hold it") +
+        ". To repair: re-import its genuine exported queue record with UNDERCROFT_ADMISSION=quarantine " +
+        "declared, or restore a backup older than the tampering</td><td class='kv'>no ruling</td></tr>");
+    }
+    // A 200 carrying `ok: false` is an integrity verdict, not a clean queue.
+    if (r.ok === false) {
+      rows.unshift("<tr><td colspan=6 style='color:var(--red)'>NOT CLEAN — rows below do not verify or carry " +
+        "mirror drift; run verify</td></tr>");
+    }
     // Say WHY the queue is empty: with screening off, "no pending" is a
     // configuration fact, not a clean bill of health.
     $("admRows").innerHTML = rows.join("") || "<tr><td colspan=6 class='kv'>" +
@@ -1655,7 +1683,17 @@ async function verifyAttestation() {
     }
   } catch (e) {
     out.textContent = e.message;
-    toast("ATTESTATION FAILED — this does not describe what this vault did", true);
+    // **Only the integrity class is a verdict** (ROADMAP O315). This toasted
+    // "ATTESTATION FAILED" on EVERY error — a receipt carrying a field or a
+    // version the engine does not know (400: refused unread, not checked —
+    // a newer build's, or altered), a malformed body, a
+    // rejected bearer — so the console called a genuine receipt forged
+    // exactly where the engine had stopped doing so.
+    if (e.cls === "integrity") {
+      toast("ATTESTATION FAILED — this does not describe what this vault did", true);
+    } else {
+      toast("NOT CHECKED — " + e.message, true);
+    }
   }
 }
 

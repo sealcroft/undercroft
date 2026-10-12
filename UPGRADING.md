@@ -397,9 +397,23 @@ compares, with no database opened.
 `audit` holds records"* (or *"… holds a committed height"*), or with *"a
 committed head with no committed height (`chain_meta.writes`)"*; or it answers
 `ManifestTampered` where every `audit` row is gone beside a manifest past
-genesis. A read-only open reports the first two on `unhealed` and its reads and
-`stats` refuse; before 1.7.0 a missing height served reads with `verify` OK
-while every write answered a raw 500.
+genesis and a database that is present. A read-only open reports the first two
+on `unhealed` and its reads and `stats` refuse; before 1.7.0 a missing height
+served reads with `verify` OK while every write answered a raw 500.
+
+**A deleted `vault.db` is not that state** (ROADMAP O308): beside a manifest
+past genesis it answers *"vault … has no database at …, while its authenticated
+manifest records a chain height of N"* — `DatabaseMissing`, exit 2, `/v1` 409
+with `class: "integrity"` — on BOTH postures, and no database is created. 1.6.1's
+writable open created the file and served an empty vault at the manifest's
+height, taking writes (ROADMAP O303's filing); before this release's O308 fix
+the 1.7.0 tree created the file, ran its schema batch, answered
+`ManifestTampered` and left the file behind, so every later open of either
+posture read the missing file as tampering. A zero-length `vault.db`, or
+one with only a `-wal` beside it, answers the same way now, and a non-empty
+`-wal` is named and kept (it may hold committed frames). The remedy is the
+message's: stop every process that had the vault open, then restore the
+database, or the whole vault, from a backup that verifies.
 
 **Cause:** 1.6.1 and earlier adopted a database with no committed head by
 seeding `chain_meta` from the manifest, replaying nothing, so a database rolled
@@ -423,6 +437,44 @@ older than 0.19.0 and opened by no 1.x build since has no supported path — a
 gap, stated (ROADMAP O303, its ruling of 2026-10-06). `undercroft config check`
 cannot detect it — it opens no database.
 
+### a `--read-only` open of a vault nothing has written yet exits 1, not 2 (O213)
+
+**Symptom:** on a vault `init`, `vault create` or `POST /v1/vaults` has just
+made — a manifest and no database — a `--read-only` command, `serve-mcp
+--read-only` or `serve-http --read-only` exits **1** with *"vault "default"'s
+authenticated manifest records no anchored write (the genesis chain head at height
+0), and a read-only open neither creates, seeds nor migrates a database …"*, and
+a `--read-only` server answers its `/v1` routes **409 with no `class`**. Before
+1.7.0 it exited **2** with *"has a manifest but no database"* and `/v1` answered
+409 with `class: "integrity"`. `--read-only vault list` over such an
+installation now exits 0, naming the vault on its "unavailable" line. The same
+refusal answers a vault whose first writable open stopped early enough to leave
+a database holding none of the read schema's tables, or an EMPTY audit chain
+with or without its `chain_meta` table (it answered `ReadOnlyUnmigrated`, also
+exit 1); a database holding only part of the schema with no `audit` table still
+answers *"this vault's schema predates this build"*, and so does a vault read
+with `immutable=1` — a read-only mount — beside a non-empty `-wal` it cannot
+read, with a warning saying so.
+
+**Cause:** the read-only open answered A33's integrity verdict for every absent
+database, so every fresh volume a `--read-only` server was pointed at read as
+tampering (ROADMAP O213). A manifest whose MAC-covered head is the genesis
+constant at height 0 records no anchored write, so an absent database
+contradicts nothing it claims: it is a posture refusal, like a schema this build
+would have to migrate. A manifest that records history beside no database is
+still the integrity verdict, exit 2, on both postures (the entry above).
+
+**Fix:** start the vault writable once — any write command, `undercroft
+verify`, or the server without `--read-only` — then start it read-only. **An
+alert or a retry layer keyed on exit 2 or on `class: "integrity"` stops firing
+for this state**; key it on the message, or on exit 1 together with it, if a
+fresh volume must page. The message gives the second reading on purpose: if this
+vault ever held data, do NOT open it writable — a writable open starts it empty
+— but restore it from a backup that verifies (a create-time manifest put back
+beside a deleted database reads the same, and only an external witness, ROADMAP
+O245, tells a rollback to genesis apart). `undercroft config check` cannot detect
+this state: it opens no database.
+
 ### `--read-only backup create`, `bundle keygen` and `bundle sign-keygen` exit 1 instead of writing (O212)
 
 **Symptom:** `undercroft --read-only backup create` exits 1 with *"refused under
@@ -443,8 +495,9 @@ writes. Each now refuses before it writes: nothing under `backups/`, no byte of
 the vault's database or manifest, no identity file or directory. The backup's
 read-only open still leaves the `-shm` and empty `-wal` every read-only open
 does, and on a vault `init` created that nothing has written yet that open
-refuses first, exit 2 (ROADMAP O213). `POST /v1/vaults/{id}/backups` on a
-`--read-only` server is unchanged: it was already refused with 403.
+refuses first, exit 1 — the posture refusal (ROADMAP O213; exit 2 before it).
+`POST /v1/vaults/{id}/backups` on a `--read-only` server is unchanged: it was
+already refused with 403.
 
 **Fix:** run `bundle keygen` and `bundle sign-keygen` without `--read-only`. For
 an evidence copy during an incident, copy the vault's directory with `cp -a`,
@@ -657,6 +710,163 @@ write may already have been loaded by another start: keep it. A long `--out`
 name: choose a shorter one. `undercroft config check` cannot detect any of
 this: a keygen's path is a flag on one command, the check reads which key files
 exist, never their length, and a link error happens only when a key is written.
+
+### the admission queue is decided by each row's HMAC-covered wing, and `admission list` reports a row it cannot verify instead of failing (O221)
+
+**Symptom:** four observables move, all on a vault whose admission queue an
+offline writer has touched — none on an intact one.
+- `GET /v1/vaults/{id}/admission` answers **200** with the readable rows and
+  `"ok": false` where one row whose tag fails used to make the whole route a
+  **409** `class: "integrity"`; the reply gains `unverifiable` and `ok` beside
+  `pending` and `screening`, and each pending row gains `mirror_drift`. The
+  orchestrator's `ops … admission` still exits 2 (it reads `ok: false` on a
+  200 as an integrity verdict). `undercroft admission list` prints the
+  readable rows, then each `UNVERIFIABLE` one, and exits **2** — as before
+  over an unverifiable row, and now also when a listed row carries mirror
+  drift.
+- A pending row whose clear `wing` column was flipped offline to an ordinary
+  wing is now LISTED, with its drift, and `drawer delete`, `delete_by_source`
+  (CLI, MCP, `/v1`), `forget` and `forget --backend` refuse it (exit 1, 400
+  over `/v1`) naming `admission allow`/`deny`; `dedup --apply` skips it and
+  still collapses the rest of its group; a `/v1` save with
+  `dedup_threshold` (the tenant plane's `/t/drawers` included) no longer
+  refreshes it, and files an ordinary drawer instead.
+- An ordinary drawer whose clear `wing` column was flipped offline INTO
+  `quarantine-pending` is no longer listed (its `destination … applied` line
+  was false), and `drawer delete` and a retention sweep now destroy it — the
+  sweep reporting its mirror drift with `ok: false` — where they refused or
+  withheld it. A queue row that does not verify is refused by every fence as
+  an integrity verdict (exit 2, 409) naming its remedies.
+- `admission list` costs one pass over every drawer — the tag checked over
+  the stored bytes, nothing decrypted — where it was an indexed lookup of the
+  queue. Measured as a whole command on 10,884 sealed drawers: 56–86 ms, where
+  the lookup it replaces took 18–26 ms; on 100,049, about 0.7 s against 0.15 s
+  (measured on a contended machine). It grows with the vault, not with the queue.
+- MCP's `undercroft_history` (the agent scope) now hides a drawer's records
+  when EITHER copy of its wing names the queue — a pending row whose clear
+  column was flipped away included — and OMITS the records of a drawer whose
+  row does not verify (its tag, its covered meta or a column's storage type),
+  where it showed both. The operator scope (CLI `history`, `/v1 …/history`)
+  is unchanged.
+- `dedup`'s `duplicate_groups` (CLI, MCP, `/v1`) counts the groups left with
+  two or more members once review evidence is dropped from them, where it
+  counted every fingerprint group the clear-column scan found — on an intact
+  vault the two are the same number.
+- A drawer an offline writer RETYPED (a covered column stored with another
+  storage type) is reported by `admission list` as `column-retyped` when
+  either copy places it in the queue, is refused by every fence there, and is
+  deleted like any unreadable row outside it; `verify` and a retention sweep
+  still fail on it with a conversion error, as before (ROADMAP O427).
+
+**Cause:** ROADMAP O221. One function decided "pending" for every
+destruction fence by the clear `wing` column, so one offline flip of that
+column let `drawer delete`, `forget` (with a third-party-verifiable receipt),
+`dedup --apply` and a dedup save destroy or overwrite review evidence — each
+also erasing the drift that was its only trace — while the list, which
+enumerated the same column, failed on one unverifiable row and listed a
+forward-flipped ordinary row an `allow` then refused. Now ONE predicate reads
+the covered wing wherever the row verifies and the clear column only where it
+does not, every destruction and write fence asks it, the read fences refuse
+when EITHER copy names the queue, and the list enumerates by the same rule.
+
+**Fix:** none for an intact vault. A script that read a `/v1` 409 as "the
+queue is broken" must read `ok` on the 200. A row the list reports as
+`UNVERIFIABLE` can be neither allowed nor denied: re-import its genuine
+exported queue record with `UNDERCROFT_ADMISSION=quarantine` declared, which
+repairs it through the screen, or `backup restore` an archive older than the
+tampering; `undercroft verify` names every such row. Schedule `admission list`
+like any whole-vault read on a very large vault. `undercroft config check`
+cannot see any of this: it concerns rows, not a declaration — `admission
+list` and `verify` are the detectors.
+
+### `verify-forgetting` answers a receipt carrying a field or a version it does not know with exit 1, "NOT checked" (O315)
+
+**Symptom:** `undercroft verify-forgetting <receipt>` exits **1** with *"invalid operation: the attestation
+carries 1 field(s) this build does not know ("…"), so the document was NOT checked: a newer build of
+Undercroft may have minted it, or it was altered. Neither valid nor forged …"*, or *"the attestation
+declares version N, which this build does not know …"*. `POST /v1/vaults/{id}/verify-forgetting` answers
+**400** with that message and no `class`, the orchestrator's `ops/verify-forgetting` relays the 400 and
+its CLI alias exits 1, MCP's `undercroft_check_erasure_receipt` answers an error, and the admin console
+says "NOT CHECKED". Before 1.7.0 the same documents answered differently: a SIGNED receipt carrying a
+field this build does not know — alone or beside a version above 2 — exited **2** with `ATTESTATION
+FAILED: signature: …` (409 + `class: "integrity"` on `/v1`); a receipt with a key added beside its
+signature, or an unsigned one with an extra key, exited **0** `ATTESTATION VERIFIED`, the key ignored;
+and a FORGED receipt whose `version` was also edited exited 2 and now exits 1 — see the cost below. A
+version above 2 alone, genuinely signed, exited 1 before as it does now.
+
+**Cause:** the signature was checked before the version, over a type that dropped every key it did not
+declare, so a genuine receipt from a newer build read as forged (ROADMAP O315). An age fence now reads the
+version and every key first and refuses what it does not know unread — NOT CHECKED, never forged and never
+verified, and without claiming who minted it. A document a release of Undercroft minted carries only keys
+every build from 1.7.0 knows, so nothing you were issued is refused by this.
+
+**Fix:** check such a receipt with the build that minted it or a later one. Do not add keys to a receipt —
+a ticket number or a note belongs beside the document, not inside it; a receipt carrying one is now
+refused unread rather than verified around it. **A compliance script must not read exit 1 here as
+"valid", and must not merely retry it**: it is "not checked", and that has a cost — a forger who adds a
+key no build will ever declare, or a version none will ever mint, gets this exit 1 from every build,
+present and future, where the same forgery without it is exit 2. Treat a "NOT checked" answer that
+persists on the newest build as a document to investigate. Whether it deserves an exit class of its own is
+filed for the maintainer (ROADMAP O429). `undercroft config check` cannot detect this: it is a document, not a
+declaration.
+
+**Which release the fence starts in, the fact a future upgrade needs.** 1.7.0 is the first release that
+answers a newer build's receipt as not checked. A receipt carrying a field signed by a release after
+1.7.0 is refused that way by every build from 1.7.0 up to that release, and read as **forged**, exit 2,
+by 1.6.1 and older; and every build before 1.1.0 already reads 1.1.0's signed `mirror` note that way.
+
+
+### a native source build uses Rust 1.98.1, fetches it the first time, and does not compile on a standard library of another Unicode version (O294)
+
+**Symptom:** `cargo build --release` in a checkout, on a host whose rustup does
+not hold 1.98.1, first prints `info: syncing channel updates for
+'1.98.1-<host>'` and installs it; with no network it fails with a download
+error from `static.rust-lang.org` instead of building. And a build that does
+not go through the file — `cargo +<toolchain>`, `RUSTUP_TOOLCHAIN`, a
+distribution's own `cargo` — on a toolchain whose standard library carries
+another Unicode version than 17.0.0 (Rust 1.90.0 carries 16.0.0) stops in
+`undercroft-core` with `error[E0080]: evaluation panicked: the hash embedder's
+token space (HASH_EMBEDDER) is defined over Unicode 17.0.0, and this
+toolchain's std or the locked unicode-normalization carries another version:
+…`. Before 1.7.0 the same commands built with whatever toolchain they found.
+
+**Cause:** `rust-toolchain.toml` now pins the toolchain every build uses —
+1.98.1, which built every v1.5.2, v1.6.0 and v1.6.1 binary — and rustup obeys
+it for every cargo call in the checkout (ROADMAP O294). The hash embedder's
+tokens read the standard library's Unicode tables, so a build on another
+Unicode version computes a different vector space under the same embedder
+name; `undercroft-core` refuses it at compile time rather than let it move
+every vault's vectors with nothing said. Until this release the Docker images
+were built by 1.90 (Unicode 16) and the prebuilt binaries by 1.97.1 to 1.98.1
+(Unicode 17).
+
+**Fix:** install it once while online, `rustup toolchain install 1.98.1`. A
+`cargo` that is not rustup's proxy ignores the file; build with rustup's.
+Building on another Unicode version is not supported — moving the tables is
+an identity decision (ROADMAP O421, O422), not a toolchain choice. The fetch
+does not touch the prebuilt binaries, the GHCR images or a `docker build`,
+which carry the pin. What the pin moves in the images' vector space — a vault
+an image wrote was tokenized under Unicode 16 — is healed by ROADMAP O421's
+walk, which ships in the same release as this pin, with its own entry in this
+file.
+
+**An engine built from `main` before ROADMAP O421 lands is the exception, and
+the shipped compose recipes build one.** The team server
+(`deploy/docker-compose.server.yml`) and the observability stack
+(`deploy/observability/docker-compose.observability.yml`) BUILD the engine
+from the checkout. Rebuilt from a `main` that carries this pin and not yet
+O421's walk, either runs a Unicode-17 engine over a vault a 1.90 image wrote,
+under the unchanged embedder name `undercroft-hash-v3`, and nothing says so:
+the vault's stored vectors, and on an hmac-only vault its search index, keep
+the old tables while its queries use the new. **Fix:** build those recipes
+from a release tag, not from `main`, until the release that carries O421; a
+vault already served by such a build is healed by O421's walk when that
+release opens it, which also rebuilds the search index. Its vectors can be
+re-embedded sooner with `UNDERCROFT_FORCE_EMBEDDER=1` and `undercroft
+repair`; the search index waits for that release.
+
+`undercroft config check` cannot detect any of this: a build is not a
+declaration.
 
 ## 1.6.1 (released 2026-09-22)
 
@@ -1119,7 +1329,9 @@ reported this as `possible tampering` and wrote a `kdf.salt` beside
 - An uncommented `UNDERCROFT_PASSPHRASE=` with no value now refuses to start,
   naming the variable. Comment the line out instead.
 - A `--read-only` server needs one writable start first. On a fresh volume it
-  refuses with `vault "default" has a manifest but no database`.
+  refuses, exit 1, with `vault "default"'s authenticated manifest records no
+  anchored write` (it was exit 2, `has a manifest but no database`, until 1.7.0:
+  ROADMAP O213).
 
 `config check` detects the empty passphrase, a cleartext Qdrant URL and an
 unreadable `UNDERCROFT_INDEX_CA` when it runs with the engine's environment:

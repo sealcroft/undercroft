@@ -2166,6 +2166,10 @@ fn integrity_verdict(e: &anyhow::Error) -> bool {
                     // retrying only re-detects it (R4/A33). Its neighbour
                     // `ReadOnlyUnmigrated` is deliberately NOT here: the
                     // vault is intact, the posture is simply wrong for it.
+                    // Nor is `ReadOnlyNoAnchoredWrite` (ROADMAP O213): a
+                    // manifest that records no anchored write describes no
+                    // database content, so an absent file contradicts
+                    // nothing it claims — the A33 line, distinguished.
                     | S::DatabaseMissing { .. }
                     // Two databases under one manifest (ROADMAP O7): the
                     // same self-contradiction, one file too many rather
@@ -3116,6 +3120,14 @@ fn run(cli: Cli) -> Result<()> {
                     outln!("ATTESTATION FAILED: {why}");
                     std::process::exit(EXIT_INTEGRITY.into());
                 }
+                // Exit 1 — including the age fence's refusal of a document
+                // carrying a field or a version this build does not know
+                // (ROADMAP O315): NOT CHECKED, neither valid nor forged, and it
+                // must never print the line above. Its stated cost: a forger
+                // who adds such a key gets this exit 1 from every build, the
+                // class the paragraph above says a script retries and ignores;
+                // whether "not checked" needs its own exit class is
+                // O429, the maintainer's.
                 Err(other) => return Err(other.into()),
             };
             // Attestation fields come from a caller-supplied JSON file;
@@ -3278,11 +3290,13 @@ fn run(cli: Cli) -> Result<()> {
             let mut store = open_store(&cli, vault)?;
             match action {
                 AdmissionAction::List => {
-                    let pending = store.admission_pending()?;
-                    if pending.is_empty() {
+                    let queue = store.admission_pending()?;
+                    // "Nothing awaits review." only when NOTHING does: never
+                    // beside a row the list could not verify (ROADMAP O221).
+                    if queue.pending.is_empty() && queue.unverifiable.is_empty() {
                         outln!("Nothing awaits review.");
                     }
-                    for p in pending {
+                    for p in &queue.pending {
                         let codes: Vec<&str> = p.signals.iter().map(|s| s.code.as_str()).collect();
                         // The destination state goes LAST, so the id stays the
                         // first field scripts read (ROADMAP O224): it says,
@@ -3299,6 +3313,47 @@ fn run(cli: Cli) -> Result<()> {
                             p.destination_id,
                             p.destination.as_str()
                         );
+                        // A clear column that disagrees with the covered copy —
+                        // a flip a ruling would erase the only trace of.
+                        for m in &p.mirror_drift {
+                            outln!("      MIRROR: {m}");
+                        }
+                    }
+                    // The rows the queue holds that do not verify (ROADMAP
+                    // O221): named by `seq`, the id only when it has a derived
+                    // id's shape, a closed-vocabulary reason, and whether the
+                    // destruction fence holds the row — none of its own claims.
+                    for u in &queue.unverifiable {
+                        let name = match (&u.id, u.malformed_id_bytes) {
+                            (Some(id), _) => id.clone(),
+                            (None, bytes) => format!("malformed id, {} bytes", bytes.unwrap_or(0)),
+                        };
+                        outln!(
+                            "  UNVERIFIABLE: seq {} ({name}) — {}; {}",
+                            u.seq,
+                            u.reason.as_str(),
+                            if u.fenced {
+                                "the destruction fence holds it"
+                            } else {
+                                "the destruction fence does not hold it"
+                            }
+                        );
+                    }
+                    if !queue.unverifiable.is_empty() {
+                        outln!(
+                            "No ruling door can act on an UNVERIFIABLE row. To repair one: {}.",
+                            undercroft_store::admission::UNVERIFIABLE_REMEDIES
+                        );
+                    }
+                    // The integrity verdict exits 2 AFTER the readable rows
+                    // are out, as a sweep's does: one row the list cannot
+                    // verify must not deny review of the rest.
+                    if !queue.ok {
+                        outln!(
+                            "ADMISSION QUEUE NOT CLEAN — rows above do not verify or carry \
+                             mirror drift. Run `undercroft verify`."
+                        );
+                        std::process::exit(EXIT_INTEGRITY.into());
                     }
                 }
                 AdmissionAction::Allow { id } => {
@@ -5693,6 +5748,9 @@ mod tests {
             anyhow::Error::from(S::DatabaseMissing {
                 id: "acme".into(),
                 path: "/vaults/acme/vault.db".into(),
+                writes: 3,
+                wal: None,
+                staged: false,
             }),
             // Its O7 sibling: one database too many rather than one too few.
             anyhow::Error::from(S::DatabaseAmbiguous {
@@ -5714,6 +5772,11 @@ mod tests {
             anyhow::Error::from(S::ReadOnlyUnmigrated {
                 missing: "kg_triples.terms".into(),
             }),
+            // ROADMAP O213: a read-only open of a vault whose manifest records
+            // no anchored write — what `init` leaves. It was A33's verdict,
+            // exit 2, on every fresh volume; a writable open starts it, so it
+            // is a posture refusal, `ReadOnlyUnmigrated`'s class.
+            anyhow::Error::from(S::ReadOnlyNoAnchoredWrite { id: "acme".into() }),
             // ROADMAP O238, and the same reading one variant over: a vault
             // written by a NEWER build is intact and this binary is too old
             // for it. Age is a posture, not a tamper verdict — exit 1, and a

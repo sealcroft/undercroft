@@ -54,6 +54,13 @@ pub enum Opener {
     /// `init_chain`: the adoption found the chain seeded by another open; the
     /// open's second judgement has not run (ROADMAP O303).
     Readopting,
+    /// `reconcile_rotation`: the write lock is taken; nothing is judged yet —
+    /// the witness that a refusal came from the LOCK PATH (ROADMAP O322).
+    RotationLock,
+    /// `init_chain`: the schema batch and the initialisers ran; the chain is
+    /// not yet judged — the witness that a refusal came from the `init_chain`
+    /// site (ROADMAP O322).
+    InitChain,
 }
 
 /// Run whatever hook a test set for the vault directory `dir`. A no-op

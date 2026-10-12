@@ -85,7 +85,7 @@ pub fn maxsim(query: &[f32], doc: &[f32], dim: usize) -> f32 {
 /// smaller on disk; [`dequantize_tokens`] restores f32 for scoring. Format:
 /// `[version:1][dim:u32][rows:u32]` then per row `scale:f32le` + `dim` i8s.
 pub fn quantize_tokens(matrix: &[f32], dim: usize) -> Vec<u8> {
-    let rows = if dim == 0 { 0 } else { matrix.len() / dim };
+    let rows = matrix.len().checked_div(dim).unwrap_or(0);
     let mut out = Vec::with_capacity(9 + rows * (4 + dim));
     out.push(1u8);
     out.extend((dim as u32).to_le_bytes());

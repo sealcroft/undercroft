@@ -407,7 +407,7 @@ fn export_carries_reserved_wing(body: &[u8]) -> bool {
 
 /// `drawers/{id}` — the one data-plane shape that DEREFERENCES to a wing
 /// without naming one, which is why the name fence alone cannot cover it.
-/// MCP closes the same indirection by probing `is_quarantine_pending` on
+/// MCP closes the same indirection by probing `is_quarantine_pending_for_read` on
 /// every id-shaped argument; this crate has no store, so the probe is a
 /// `/v1` read.
 fn single_drawer_route(subpath: &str) -> bool {

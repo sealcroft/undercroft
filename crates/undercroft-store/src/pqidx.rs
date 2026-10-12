@@ -554,7 +554,7 @@ impl VaultStore {
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()?;
-            let mut pageno = match last {
+            let first_page = match last {
                 Some((no, blob)) => {
                     let plain = self
                         .vault
@@ -575,7 +575,7 @@ impl VaultStore {
                 }
                 None => 0,
             };
-            for chunk in rows.chunks(PQ_PAGE_CAP) {
+            for (pageno, chunk) in (first_page..).zip(rows.chunks(PQ_PAGE_CAP)) {
                 let blob = self.vault.index_at_rest(
                     &format!("pqpage/{list}/{pageno}"),
                     &Self::pq_page_pack(chunk),
@@ -584,7 +584,6 @@ impl VaultStore {
                     "INSERT OR REPLACE INTO pq_page (list, pageno, blob) VALUES (?1, ?2, ?3)",
                     params![list, pageno, blob],
                 )?;
-                pageno += 1;
             }
         }
         let rowcount = self.pq_count_get("rowcount")?;

@@ -4012,7 +4012,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**450** of the **465** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**462** of the **477** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4323,6 +4323,8 @@ The carrier is settled by the reference-holder and mixed-version evidence, the d
   - the mixed-version note.
 - `config check` owes nothing, by O154's argued exemption.
 - M3 stays the MAJOR shape.
+
+**Noted 2026-10-12 by O294's build, beside item 3's scope (O294's ruling of that date, its sentence owed here).** "So is `hash`, whose identity is its code's" was false of the released state: hash's identity was its code times the compiler's `char` tables times the locked normalization crate, and the GHCR images (Rust 1.90, Unicode 16) and the prebuilt binaries (1.97.1 to 1.98.1, Unicode 17) computed two spaces under one name (O421). It is true again from O294's build on, whose compile-time assertion in `undercroft-core` fixes both tables at Unicode 17.0.0. This entry's carrier does not transfer to that case — for hash an older image computes a different space — which is why O421 mints `v4` instead (its ruling).
 
 #### PANEL RECORD 2026-10-08 — a probe decides first
 
@@ -5613,6 +5615,8 @@ process). Windows (P5). The busy tail (O258). One writable open in about 40
 beside two writers failed `constraint failed` in the gate's second round, from
 a statement not yet identified — recorded in O253, whose unit owns concurrent
 opens.
+
+**Noted 2026-10-12 by O294's build (its ruling's item 5).** "`std::fs::File::lock` compiles on the pinned toolchain (1.90)" was a statement about the images' compiler; no shipped binary was built by 1.90. Under the pin every build uses from O294 on, 1.98.1, the workspace compiles, `File::lock`'s public function and Windows body are identical to 1.90.0's, and its unix body is the same `flock(LOCK_EX)` on Linux and Apple, now behind `cfg_select!`.
 
 ### O257 — CLOSED 2026-09-24: a key rotation holds the vault alone and refuses beside any other holder, and a handle whose keys are not the vault's commits nothing
 
@@ -10761,6 +10765,8 @@ a symbolic link are O293's.
 
 **Item 3a's `deferral_in_force` clause, REVISED 2026-09-29 by O290's ruling** (recorded beside it). An absent `vault.json` on the read-only open's check answers `CorruptManifest` (no event, never a reopen), no longer `Io`: the item itself rules absent "integrity … on EVERY handle", its carve-out cited O288 item 2's read-failure principle while this entry reclassified absent as no read failure, and measured, one state answered exit 1 and a `/v1` 500 on the deferred read-only window where the non-deferred windows answer exit 2 and 409 integrity. An unreadable file stays `Io`.
 
+**Noted 2026-10-12 by O294's build (its ruling's item 5).** The records above that read Rust 1.90's Windows `rename` and `decode_error_kind` described the images' compiler, not what shipped, as this entry's own review said. Desk-read in 1.98.1's `rust-src`, the pin every build uses from O294 on: `rename` is the same code (one `// SAFETY:` comment moved two lines), and `decode_error_kind`, moved to `std/src/sys/io/error/windows.rs`, maps `ERROR_ACCESS_DENIED` to `PermissionDenied` and a sharing violation and delete-pending to no specific kind, as 1.90.0's did. Both readings now describe what ships.
+
 
 ### O277 — CLOSED 2026-09-28: a `vault.json` that is missing, or is not a manifest file, is the integrity verdict on every live handle, never a fall-back to `VERIFY OK`
 
@@ -11689,6 +11695,11 @@ And the ruling's residuals: O285, lock-less filesystems, Windows (O275), erasure
 **Versioning**: PATCH inside the unreleased `1.7.0`, one `UPGRADING.md` entry. Figures: `test`
 1244 run / 17 ignored, `e2e` 750, `orchestrator-e2e` 185; the landing tiles 1244 and 1185.
 
+**Noted 2026-10-12 by O308's build.** `recorded_embedder` now asks O308's absent-database door first,
+whose first arm is this entry's "the vault's directory is gone": asked after a delete it answers the
+reopen class itself, where it answered `Ok(None)` and left the class to the open that followed. The
+pinned arm in `o291_an_open_racing_a_delete_answers_the_reopen_class` moved with it.
+
 ### O296 — CLOSED 2026-09-29: a writable open judges the audit chain before it removes `vault.json.next`, writes `vault.json` or seeds a keycheck, and a database whose chain does not reach the manifest it would answer to is refused with nothing written
 
 **Filed 2026-09-29 by O290's ruling (its security lens, confirmed by the refuter); measured by the
@@ -12611,6 +12622,19 @@ CHANGELOG); P-CONVERT (a rolled-back copy with `chain_meta` and the version-2 co
 **Filed under `## Open`**: O322 (the head-less refusal's unconditional "Nothing was written.") and O323
 (unmeasured: a genesis manifest put back beside an emptied `audit` table may be adopted as a fresh
 vault's EMPTY chain).
+
+**Noted 2026-10-12 by O213's build** (its ruling of 2026-10-08, item 3, which this entry's note bound
+the empty chain to): the read-only open answers the EMPTY chain `ReadOnlyNoAnchoredWrite` beside a
+manifest that records no anchored write, and `ManifestTampered` beside one that records something —
+it was `ReadOnlyUnmigrated`. Its absent-table twin answers the same — this entry's "one state, one
+class", kept (the unit's first build split them; its review refused that). On a read-only handle that
+cannot see a hot `-wal` (`immutable=1`), the history arms answer `ReadOnlyUnmigrated` as before; this
+entry's own `Erased` and `Orphaned` arms share that hole and stand, named in O431. The pinned
+read-only class moved in `headless_tests::o303_only_the_empty_chain_is_adopted`
+and in the CLI's `o303_open_store_as_read_only_declines_the_empty_chain` and
+`o303_surfaces_answer_an_erased_trail_and_the_empty_chain`. A deleted `vault.db` beside a manifest
+past genesis is no longer this entry's `Erased` state on the writable posture: O308's door refuses it
+as `DatabaseMissing` before anything is created.
 
 ### O304 — CLOSED 2026-10-05: a writable open asks the manifest rule again before it writes a staged rotation's manifest, and an edit landing in the forced replay before the write is answered as the rule answers it at the licence — refused with the files kept, the write withheld for the staged manifest put in place, a manifest at another head reopened and judged
 
@@ -14746,6 +14770,8 @@ payload digest catches that, at import.
 All seven were mine to catch; the review found them. The prose figure in O47's record moves to
 `363 of the 378` with O333.
 
+**Noted 2026-10-12 by O294's build (its ruling's item 5).** "The tree's pinned 1.90" and P4's reading of rustc 1.90's Windows error mapping described the images' compiler. Under the pin every build uses from O294 on, 1.98.1, `decode_error_kind` still maps both `ERROR_BROKEN_PIPE` and `ERROR_NO_DATA` to `BrokenPipe` (desk-read in its `rust-src`, the function moved to `std/src/sys/io/error/windows.rs`), and one new arm reaches the kind the latch keys on: `WSAESHUTDOWN`, a socket written after its write end shut, is `BrokenPipe` too. And P8 is now probed on the pin: 1.98.1 refuses `-Zon-broken-pipe` as 1.90 did (``the option `Z` is only accepted on the nightly compiler``).
+
 ### O328 — CLOSED 2026-10-08: no diagnostic can kill a server or lose a verdict — the default build's diagnostics, an FDE warning and the search trace write a best-effort line, and a server whose stderr reader is gone keeps serving
 
 **Filed 2026-10-06 by O287's ruling; unmeasured.** The default build's `_diag` is a bare `eprintln!`
@@ -14980,6 +15006,8 @@ changes: the script fails with an empty `GH_TOKEN` or an empty override, inside 
 workflow that runs it without a token, and with an expired `GH_TOKEN` exported (401 where it used to
 pass unauthenticated) — and `gh` already prefers an exported `GH_TOKEN` to its stored login, so one
 exported for this read is also what `--update`'s write uses.
+
+**Corrected 2026-10-12, beside the record above and not in place, as read off CI by the integrator.** Gate (2)'s observable on CI read `release read: HTTP 200, with GH_TOKEN; rate limit 5000 (core)` — 5000, not the "1,000 an hour per repository" the record says the job's `GITHUB_TOKEN` gets (GitHub's documented figure, which the record had not measured), and not the stub's `limit 1000`, which was the stub's own figure. The gate's intent holds, and it is what the line measures: the token reaches the read, which a `rate limit 60` would have denied. The limit a hosted job's token is given is GitHub's to set, read off a run, never asserted here.
 
 ### O199 — CLOSED 2026-10-08: the observability engine runs `undercroft init && exec …`, so a failed init stops it with init's own error
 
@@ -16321,6 +16349,2128 @@ filed it, and the witness gate counts three `Ruled`; the review's own
 (`unwrap_or(false)` at the door) — the failed-fence test stays GREEN, the
 in-lock fence refusing it with nothing deleted, which is what the witness is
 for.
+
+### O221 — CLOSED 2026-10-12: parts (a) and (b) — `admission list` reports a row it cannot verify beside the readable queue and never fails on one, and ONE predicate (the covered wing where the row verifies, the clear column where it does not) decides every destruction and write fence; part (c), the maintainer's D4, is filed as O426
+
+**Filed 2026-09-18 by O216's ruling panel; measured by its probes P2 and P3 on
+the `4ff51ab` binary.**
+- **A pending row whose tag fails** makes `admission list` fail for the WHOLE
+  queue, because `admission_pending` propagates `get`'s error
+  (`crates/undercroft-store/src/admission.rs`). `allow` and `deny` fail on
+  `Integrity` through `quarantined`, `drawer delete` refuses it on the clear
+  column, and, by reading, `repair` aborts on it
+  (`crates/undercroft-store/src/manage.rs:1600-1603`). The one remedy measured
+  is re-importing the genuine queue record with the screen on, which
+  converges onto the row through the diversion. With the screen off there is
+  none.
+- **An ordinary row whose clear `wing` was flipped offline to the reserved
+  wing** is listed with no destination, `allow` answers "not in the quarantine
+  wing", and `drawer delete` refuses it with advice to use `allow`/`deny`,
+  neither of which can act on it. `drawer update` is the one exit, and nothing
+  says so. An import of the IDENTICAL record over it is O215's no-op, because
+  the covered copy matches, so the flip stays; only a changed record heals it
+  (pinned as a cost in `the_covered_wing_decides_what_an_import_may_not_replace`).
+
+**Shape.** `admission list` should report an unverifiable row rather than fail
+on it; the delete fence's advice should match what the ruling doors can do;
+and whether an operator may deny a pending row that fails verification is a
+question of what destroying unverifiable evidence means.
+
+Related, and in prose since O220 closed: O220's slot rule treats a pending row that cannot be read as replaceable, which is what keeps the one remedy measured here working.
+
+**Gate**: with one pending row's tag zeroed, `admission list` lists the others
+and reports that row; the delete refusal on a row flipped to the reserved wing
+names the exit that works. **Counterfactual**: today's whole-queue failure,
+and advice no door can follow.
+
+**Added 2026-09-19 by O206's ruling, in prose because O206 is done.**
+- **The reverse flip destroys review evidence (P4, measured on `129c789`).**
+  A pending row whose clear `wing` was flipped offline from the reserved wing
+  to `notes` is destroyed by an operator's `drawer delete` — exit 0, the row
+  gone, a plain `del/` tombstone — where the unflipped row is refused. The
+  destruction fence (`is_quarantine_pending`) reads the clear column, so the
+  flip lifts it. MCP is not affected: its by-id fence is `_for_read`, which
+  refuses when either copy names the queue.
+- **O206's retention sweep meets the forward flip.** A drawer whose covered
+  scope is a policy's and whose clear `wing` names the queue is withheld by
+  the sweep, through the fence's own function, with `drawer update` as the
+  exit the reason names — because handed to `forget_with_proof` the fence
+  would refuse the whole sweep. O206's panel judged that changing the fence to
+  read the covered copy where the row is readable (the shape of O216's verdict
+  2) is this entry's decision, not O206's; if this entry rules it, the sweep's
+  withheld arm and its advice follow.
+
+**Relations:** shares a question with O148 — this entry's screen-off remedy exists once that entry's hold lands, and this entry owns its wording.
+
+#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
+
+**The question.** This subsection rules parts (a) and (b); part (c) is escalated in the next subsection.
+- **(a)** What `admission list` does with a queue row it cannot verify.
+- **(b)** Which copy the destruction fence `is_quarantine_pending` reads — and so what the list enumerates, what the refusals advise, and what the read fences built on that function do.
+
+**Prior rulings found and their disposition.** No `#### RULED` subsection exists in this entry. The `rul(ed|ing)` search covered O206, O216, O220, O224, O231, O259 and O267.
+- **The fence's own rationale** (`manage.rs:1253-1258`), clause by clause:
+  - "the fence and the queue can never disagree": FOLLOWED, and kept by construction (ruling item 4).
+  - "reading the HMAC-covered `meta.wing` instead would make an unreadable row undeletable … a stuck vault": FOLLOWED on the unreadable arm, where the clear column still decides. Recorded here: it never held for a tag-failing PENDING row, which the clear column refuses. That row is part (c).
+  - "a flipped column is already an integrity failure `verify` reports": REFUTED, recorded beside it. O206's P4 destroyed a reverse-flipped pending row at exit 0 before anyone ran `verify`. Each door that destroys or overwrites such a row also erases the `mirror_drift` that was its only trace, because the walk reads rows that still exist (`lib.rs:10642-10655`); it leaves a keyed tombstone, a receipt or an ordinary row. An offline `DELETE` of the same row would instead be caught by `verify`'s orphan-label leg.
+- **O216 verdict 2** (the covered copy decides; the clear column only where the read fails) and **its lost options** ("either copy" for destruction; "the clear column alone"): FOLLOWED, now applied to the fence O216 left alone. `import_verdict` (`lib.rs:8243-8276`) already implements it inline.
+- **O206 on the fence** — "revising it is O221's", its lost option "breaks the fence's stated invariant", and O221's prose that the sweep's withheld arm follows: FOLLOWED. The invariant is kept by moving the list with the fence.
+- **O206 ruling 2** ("an unverifiable row is reported from anywhere and destroyed nowhere"): FOLLOWED at its scope, the sweep. For the list, its reason — a report scoped by either copy alone reinstates the escape — is followed by scoping the report to the union of both copies' claims (item 7), not to the whole vault.
+- **O206 ruling 3** (the sweep asks "the fence itself, never a copy") and **its split ruling** (destroy a covered member whose mirror disagrees, and report the drift): FOLLOWED.
+- **O206 ruling 4** (`ok` false while drift is reported): FOLLOWED for the list (item 4).
+- **O206's lost option (d)** (`json_extract` candidates beside the mirror, "a second parser deciding scope"): FOLLOWED. Nothing here lets that parser decide.
+- **O224 item 9** ("an unreadable destination … never fails the list"): FOLLOWED, extended to the row itself.
+- **`is_quarantine_pending_for_read`'s own doc** (either copy refuses a READ; on a read, unverifiable means refuse): FOLLOWED, and extended to the agent-scope history fence.
+- **A28** and **the 2026-09-08 versioning ruling**: FOLLOWED.
+
+**Read before ruling.**
+- **(a) One unverifiable row fails every reader of the queue.**
+  - `admission_pending` enumerates the clear column (`admission.rs:1224`) and `get`s each row with `?` (`:1229`). One tag-failing or meta-unparseable row therefore fails the whole queue on every surface (O216's P3). The export stops on the same row (`export_each`, `lib.rs:11070-11104`).
+  - `drawers.id` is an unconstrained `TEXT NOT NULL UNIQUE` (`lib.rs:5190-5201`), and `StoreError::Integrity` renders it through `Display` (`lib.rs:1926`). An id an offline writer planted reaches stderr and the `/v1` body verbatim, terminal escapes included.
+- **(b) The fence has eight production callers, not the brief's six:**
+  - `delete_drawer_ruled` (`manage.rs:1009`);
+  - `delete_by_source` (`:1227`, through `unwrap_or(false)`);
+  - `_for_read`'s clear leg (`:1289`), which MCP's by-id fence (`mcp.rs:164`) and `/v1`'s (`tenant.rs:1252`) ride;
+  - the agent-scope history fence (`manage.rs:2509`);
+  - `forget --backend`'s pre-flight (`forget.rs:364`);
+  - `attest_in` (`forget.rs:463`), which `forget`, the sweep and `deny` reach;
+  - `import_verdict`'s unreadable arm (`lib.rs:8250`);
+  - the sweep's withheld arm (`retention.rs:470`).
+- **Two more doors exclude the queue by the clear column without calling the fence:**
+  - `dedup_groups` (`manage.rs:1680`), which deletes drop members through `delete_drawer` (`:1795`); MCP's `undercroft_dedup` reaches it;
+  - the dedup refresh's scan (`lib.rs:8042-8051`), which writes `{id: match_id, meta: incoming}` through `Screen::Apply` (`:8085`) after a verified `get` of the match (`:8080-8084`).
+
+  Nothing in `write_drawer_stmts` asks whether a non-diverted write lands on a covered-pending row: its guards cover writing INTO the reserved wing (`:7495`) and diverted writes (`:7513`).
+- **The reverse flip launders the destruction of review evidence.** A pending row whose clear wing was set offline to an ordinary wing is destroyed or overwritten by the vault's own doors:
+  - `drawer delete` (O206's P4, measured);
+  - `forget`, with a third-party-verifiable receipt: `attest_in` verifies the row (the tag covers `meta_json`, not the column) and then asks the clear-column fence;
+  - `dedup --apply`;
+  - a `/v1` save with `dedup_threshold`, which answers `deduped`.
+
+  The history fence also shows the agent the labels of its own diverted write.
+- **The forward flip is advised toward doors that refuse it.** An ordinary row whose clear wing was set to the reserved one is listed with a "would proceed" state while `allow` refuses it (`quarantined`, `admission.rs:1451`):
+  - `destination <X> applied` when X re-derives (`aimed_filing` takes the covered wing, `:246-257`, then `:919`);
+  - `unrecorded-absent` when it does not, because its `queued_against` was stripped (`lib.rs:7596-7598`);
+  - and its intended fields print blank (`admission.rs:1244-1245`).
+- **The cost.** O206's covered walk measured about 1.8 µs a drawer, 0.21 s for a dry sweep over 102,000 sealed drawers; O224 measured today's list at 4–9 ms over 23 rows. The console reloads the list after every ruling (`ui.html:1442`, `:1485`), on `/v1`'s one request loop.
+
+**The ruling, part (b): F2, with the list moved to the same rule.**
+1. **One predicate** answers a row's standing — `Pending`, `PendingUnverifiable` or `NotPending`.
+   - It reads the COVERED `meta.wing` wherever the row's tag verifies and its meta parses, and the clear column only where it does not.
+   - It reads through `covered_one` (`lib.rs:10661`, no decrypt) on the caller's own connection — inside the destruction lock where the caller holds one. `attest_in` uses the meta of the drawer it has already verified.
+   - Any other error propagates.
+   - The current function name is retired, so no caller changes meaning silently.
+2. **Destruction and write fences use it**:
+   - `delete_drawer_ruled`;
+   - `delete_by_source`, whose `unwrap_or(false)` becomes `?` in this unit (O259's shape, made worse once the fence reads a row; O259 keeps its one-lock half);
+   - `forget --backend`'s pre-flight;
+   - `attest_in`;
+   - `import_verdict`, which calls it in place of its inline copy;
+   - the sweep (item 6).
+
+   The two doors that bypass the fence today follow it, through lookups they already make:
+   - **the dedup refresh** never refreshes a match whose covered wing is reserved. Such a match counts as none, and the save files as an ordinary insert;
+   - **`dedup_groups`** drops from a group any member, survivor included, whose covered wing is reserved, read from the `get`s it already makes. Without this, moving the fence would make one reverse-flipped duplicate fail a whole `dedup --apply` midway — O206's hostage shape.
+3. **Read fences decide by EITHER copy**, as `_for_read` does: `_for_read` itself and the agent-scope history fence.
+   - Each is rewritten over an explicit clear-column probe, so moving the destruction predicate cannot relax it.
+   - A28 lets a mirror NARROW a read and forbids it to lift an exclusion, and either-copy only narrows.
+   - On a row that does not verify, the history fence omits that row's records. That is the list analogue of `_for_read`'s "unverifiable means refuse": it depends on nothing the writer chose, and it fails no history call.
+4. **The list enumerates by the same rule**, through `walk_covered`, and takes exactly the rows item 1 calls `Pending`.
+   - Those rows are read for content and destination as today, and each carries its own mirror drift (the walk's strings), so a reviewer sees a reverse flip before a ruling erases its only trace. Drift on a listed row makes `ok` false (O206 ruling 4).
+   - A forward-flipped ordinary row is not listed, and the false `applied` goes with it.
+   - `CoveredRow::TagFailed` and `MetaUnparseable` gain the clear wing, the `seq` and the row's own `meta_json` wing claim, which the walk's statement already selects.
+   - The build may nominate candidates instead — `wing = ? OR json_extract(meta_json, '$.wing') = ?`, optionally behind an expression index — only if the cost probe finds the walk too slow, and the predicate still decides each nominee. That is not O206's lost option (d): there the parser decided scope, here it only proposes, and for a verified row both parsers read the same tag-covered serde output. An expression index is a schema migration with a `READ_SCHEMA` row.
+5. **Refusals name the door that works**, from the typed answer.
+   - `Pending` → `admission allow`/`deny`, which now always act on it.
+   - `PendingUnverifiable` → `Integrity`, naming item 8's remedies and whatever part (c) returns.
+   - A forward-flipped ordinary row is no longer fenced, so `drawer delete` deletes it.
+6. **The sweep keeps asking the fence** (O206 ruling 3).
+   - For a member the walk decided, the answer is now `NotPending`, so a forward-flipped member is destroyed and its drift reported — O206's own "destroy" split. O206's test asserting "withheld" for that member is inverted.
+   - The arm stays, with its reason rewritten for the one case that can still reach it: a member re-diverted between the sweep's decision and its lock. `Settle::AsDecided` asks the fence inside the lock (`retention.rs:443-470`), and by reading the case is reachable — an ordinary row sitting at another filing's queue id (O220 item 1(ii) names such residue), which that filing's flagged write replaces. Without the arm, `attest_in`'s fence would refuse the whole sweep. A test reaches it through that route.
+
+**The ruling, part (a): report the row, never fail the list.**
+
+7. **The unverifiable report.** `admission_pending` returns the readable rows and, beside them, `unverifiable`.
+   - **Its scope** is every row that either copy places in the queue and that does not verify. The two copies are the clear `wing` column and the row's own `meta_json` wing claim, read through `claimed_site` (`lib.rs:2190`). "Does not verify" means: the tag fails, the covered meta does not parse, the content does not decrypt, or (O197) the target field is malformed.
+   - **Each entry carries** the `seq`; the id only when `is_drawer_id` holds, and otherwise "malformed id, N bytes"; a reason from a closed vocabulary; and whether the destruction fence holds the row (its clear column names the queue).
+   - **None of the row's own claims travel** — no intended wing, room, signals or filing. Once the tag fails, those are the writer's strings.
+   - `ok` is false while the report is non-empty.
+   - The return type changes and is `#[must_use]`, so the compiler enumerates every caller and no convenience wrapper can drop the report.
+   - `record_read` counts only the readable rows.
+8. **Every surface.**
+   - **CLI**: prints the pending rows, then the unverifiable ones, and exits 2 when `ok` is false. It never prints "Nothing awaits review." (`main.rs:3155`) beside a non-empty report. It names the remedies: re-import the genuine exported queue record with `UNDERCROFT_ADMISSION=quarantine` declared (O216 verdict 3), or `backup restore` an archive older than the tampering.
+   - **`/v1`**: 200, with additive `unverifiable` and `ok` keys beside `pending` and `screening`; the body is already an object (`tenant.rs:2086-2089`).
+   - **Ops plane**: no code change. `is_integrity_verdict` reads `ok: false` on a body under 400 (`orchestrator/src/main.rs:229-237`), so it exits 2.
+   - **Console**: renders the report and the drift through its escaping helper, with no rule buttons on an unverifiable row, and shows NOT CLEAN on `ok: false`.
+   - **`HAND_PROJECTED`**: rows for the new struct, and for `PendingAdmission`'s drift field, on the CLI and on `ui.html`.
+
+**Options that lost.**
+- **Part (b):**
+  - **F1** (the clear column, with corrected advice): keeps the laundering lever on the four doors above, and the history leak.
+  - **F2′** (move the fence only, list on the clear index): the fence refuses a row the list does not show, on exactly the row the flip hid. The "never disagree" invariant would be refuted rather than kept, to save the walk.
+  - **F3** (either copy, for destruction): O216's lost option. It refuses a row its tag proves ordinary, with advice no door can follow.
+  - **Re-pointing `_for_read` silently at the new rule**: relaxes a read fence nobody ruled on.
+  - **A covered-copy boundary in `write_drawer_stmts` for every ordinary write**: O216 rejected a verified read on every overwrite as a cost every re-mine pays. Item 2 closes the two doors that reach a covered-pending row through lookups they already make.
+- **Part (a):**
+  - **Keep failing**: one offline byte denies review of the whole queue.
+  - **A state on the row carrying its own claims**: unverified strings beside verified ones on a reviewer's surface.
+  - **The id shown verbatim**: the id is the writer's on exactly these rows.
+  - **A vault-wide report** (a run-1 lens): turns the list into a second `verify`, and exits 2 on any vault with an unrelated tampered row.
+  - **A report scoped to the clear column alone** (run 1's refuter, a run-2 lens): hides a tag-broken row whose clear column was moved away while its `meta_json` still claims the queue.
+
+**Where the two runs disagreed, and what settled it.**
+- **The history fence.** Run 1 moved it onto the destruction predicate; run 2 put it on the read rule. **Settled for run 2**: it is a READ fence, `_for_read`'s own doc rules either copy for reads, and A28 lets a mirror narrow a read. Tightened here on the unverifiable arm: both runs read the clear column there, and this record omits the row's records instead, on `_for_read`'s rule, because a failing row's clear column is the writer's.
+- **The report's scope.** Run 1 scoped it to the fence's unreadable arm (clear column reserved); run 2 to either copy's claim, with a marker saying whether the fence holds the row. **Settled for run 2**, by O206 ruling 2's reason: a report scoped by one copy reinstates the escape. Run 1's "double flip" residual holds only for a row whose BOTH copies were rewritten.
+- **The report's rendering.** Run 2 showed the id; run 1 rendered by `seq`, with the id only when `is_drawer_id` holds. **Settled for run 1**, by reading `lib.rs:5190-5201` and `:1926`.
+- **The dedup doors.** Run 1 brought both into this unit; run 2 filed the refresh as a new entry and did not see `dedup_groups`. **Settled for run 1**:
+  - `dedup_groups` must move with the fence, or the fence move creates a hostage (reading of `manage.rs:1680-1797`);
+  - the refresh is the same laundering lever, closed through a lookup it already makes, and leaving it out would let this unit claim to close reverse-flip laundering with one door open.
+
+  Run 2's other route, the id framing, remains a new entry.
+- **The sweep's withheld arm.** Run 1 removed it as unreachable; run 2 kept the call (O206 ruling 3). **Settled for run 2**: by reading, the arm is reachable through residue at a queue id (item 6). Run 1's concern is kept: the stale test is inverted, and a new test reaches the arm.
+- **How the list enumerates.** Run 1: the walk, with an expression index in reserve. Run 2: the walk or nomination, at the build's choice. **Settled**: the walk; nomination is the lever only if the cost probe requires it (item 4).
+- **`ok` on drift.** Neither run said so; tightened here on O206 ruling 4's precedent.
+
+**Claims refuted, the brief's included.**
+- **The brief**:
+  - it named six fence callers; there are eight. It missed `forget --backend`, the history fence, and that `_for_read` is built on the fence;
+  - it missed both dedup doors;
+  - "what it can name of an unverifiable row without trusting it is the id": the id column is unconstrained and the writer's.
+- **A run-1 lens**: "the exit code was already 2, so no `UPGRADING.md` entry". The CLI's exit stays 2, but `/v1` moves from 409 to 200 with `ok: false`, and O206 recorded exactly that move for the sweep.
+- **Run 1's refuter**: the sweep's arm "can no longer fire". It can, through residue at a queue id.
+- **Run 1's refuter**: the history fence "moves with item 1 because the helper it calls moves". That is a mechanical reason for a doctrinal question, and the doctrine says it is a read.
+
+**Probes owed by the build**, run by the integrator:
+- **P2a.** One pending row's tag zeroed. The other rows are listed; the row is reported by `seq` and id; CLI exit 2; `/v1` 200 with `ok: false`; ops plane exit 2; the console shows it.
+- **P2a′.** A row inserted offline into the reserved clear wing under a non-hex id carrying an ANSI escape. It is rendered by `seq`, and no control byte reaches stderr, the `/v1` body or the console.
+- **P2a″.** A tag-broken row whose clear wing is `notes` and whose `meta_json` still claims the queue: reported, marked as not held by the fence.
+- **P2b.** A forward flip: not listed, no `applied`, deletable, and swept with its drift reported.
+- **P2c and P4, inverted.** A reverse flip is listed with its drift, `ok` false. `drawer delete`, `delete_by_source`, `forget` and `forget --backend` each refuse it, naming `allow`/`deny`.
+- **P3a.** A reverse flip, then `forget <id>`. Today: a receipt and exit 0. After: refused.
+- **P3b.** A reverse flip, then a `/v1` save with `dedup_threshold` of similar clean text into the flip's wing and room. Today the pending row becomes an ordinary row and `verify` reads green. After: an ordinary insert, with the pending row intact.
+- **P3c.** A reverse flip on a pending text that duplicates a live drawer, then MCP `undercroft_dedup` with `apply`. Today: destroyed. After: excluded, and the rest of the group collapsed.
+- **The history fence, before and after.** A reverse-flipped row's records are hidden; a forward-flipped row's records are hidden; an unverifiable row's records are omitted. **The `_for_read` arm**: MCP's fence and `GET …/drawers/{id}` answer exactly as before.
+- **The sweep arm.** A member that is residue at another filing's `Q0`, re-diverted between the decision and the lock through a retention pause point: withheld, not a failed sweep. O206's forward-flip test, inverted: destroyed, with the drift reported.
+- **P-cost.** `admission list` wall time and peak RSS at 10⁵ sealed drawers, the walk against nomination. 10⁶ is a long run and needs the maintainer's go.
+
+**Fails silently if:**
+- `_for_read` or the history fence changes through a shared helper;
+- `unwrap_or(false)` survives on the new predicate;
+- the list stays on the clear index while the fence moves;
+- `import_verdict` keeps its inline copy;
+- the sweep's old forward-flip test still asserts "withheld";
+- the dedup refresh or `dedup_groups` keeps its clear-column decision;
+- the report renders an unconstrained id raw;
+- any renderer prints "Nothing awaits review." beside a non-empty report;
+- the console reads a 200 as clean without reading `ok`.
+
+**Dissent.** A run-1 lens for a vault-wide report; run 1's refuter and a run-2 lens for a clear-column scope; run 1's refuter for the history fence on the destruction predicate and for removing the sweep's arm; run 2's refuter for leaving the dedup refresh to a new entry. All overruled above.
+
+**What remains.**
+- **The double flip.** A row whose tag is broken AND whose clear column and `meta_json` were both moved away is outside the fence and the report. That is O216's stated residual: it needs an offline writer, who could delete the row outright. `verify`'s `bad_records` names it, and `backup create` and every rotation refuse while it exists.
+- **Three new entries are owed**, listed at the end of this record: the id-framing route into the queue id space; `check_duplicate`'s clear-column oracle; and `StoreError::Integrity`'s raw rendering of an unconstrained id.
+- **Part (c)** is escalated in the next subsection. O231 is untouched.
+
+**Version: PATCH.** Part (a) is reporting surface for a silent defect; part (b) is a fence that keeps its documented promise (`docs/AGENTS.md`: pending review evidence is refused "on every surface"). **`UPGRADING.md` is owed**, for:
+- `/v1 GET …/admission` answering 200 with `ok: false` and the readable rows, where one unverifiable row made it 409; the CLI also exits 2 on drift on a listed row;
+- `drawer delete`, `delete_by_source`, `forget` and `forget --backend` refusing a reverse-flipped pending row; `dedup --apply` skipping it; a `/v1` dedup save no longer refreshing it;
+- a forward-flipped ordinary row no longer being listed, and now being deletable and swept;
+- the list's cost moving from an indexed lookup to one pass over the corpus.
+
+`config check` cannot see data; `admission list` and `verify` are the detectors.
+
+#### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
+
+**The question (O221(c)).** A pending row whose tag fails can be neither allowed, denied, deleted nor forgotten:
+- `quarantined` and `attest_in` `get` it first (`admission.rs:1447-1450`, `forget.rs:455-459`);
+- `drawer delete` refuses it on the clear column, and still will under part (b)'s unreadable arm.
+
+May an operator destroy it, and with what record and what receipt?
+
+**Why it is the maintainer's.** Every shape that destroys the row either changes a documented reply or adds a verb or a flag. `docs/AGENTS.md`'s `POST …/admission` row says a deny "destroys through the attested-forgetting path and the response carries the receipt" (`tenant.rs:2113-2121`). Either way the choice decides what destroying unverifiable evidence means, which borders O228 (escalated) and O267's erasure ruling. A panel does not decide what a surface offers. Both runs escalated it, and both recommend the same shape.
+
+**Read for the analysis** (both runs, re-read here).
+- **The brief's "stuck until… nothing" is partly wrong.**
+  - O220's slot rule lands any diversion of a filing on its `Q0` when `Q0` cannot be read (`admission.rs:815-818`). So any flagged record of that filing, imported with the screen on, overwrites a tag-failing `Q0` row, and `deny` then destroys it with a receipt — for the substituted text, never the evidence. The trail does not record the act for what it was.
+  - A tag-failing version-slot row is reached only by its own text. While `Q0` is free, its genuine re-import lands on `Q0` and leaves the broken `Qv` in place (`:798-819`). With its text unknown, a `Qv` row has no exit at all.
+- **The measured remedy has two costs.**
+  - O216 verdict 3's re-import needs an export taken BEFORE the tampering, because `export_each` stops on the row (`lib.rs:11070-11104`).
+  - Since O224 it also downgraded the repaired row's record to `unrecorded` (P2d: `lib.rs:8529`, `admission.rs:834-836`). O227's ruling item 1 repairs that where the destination is unchanged.
+- **While the row exists, the vault cannot be backed up or rotated.** `verify` fails, so `backup create` refuses (`backup.rs:175-178`); every rotation refuses (`lib.rs:3379-3401`); `repair` aborts (`manage.rs:1824-1826`). Blocking rotation is the sharpest cost, because rotation is the response to a suspected key compromise. An agent can create the pending row over MCP by submitting flagged text; breaking its tag needs an offline writer.
+- **An unverifiable ORDINARY row is destroyable today**, unattested, through `drawer delete`: `delete_drawer_ruled` reads no content, and `destroy_in` writes a keyed `del/` tombstone (`manage.rs:1105-1112`).
+
+**Decided by both panels in the meantime: D1, plus part (a)'s report.** No ruling door destroys such a row. The list reports it and names the remedies: re-import its genuine exported queue record with `UNDERCROFT_ADMISSION=quarantine` declared, or `backup restore` an archive older than the tampering.
+
+**Options and their costs.**
+- **D1 alone.** The vault stays unable to `backup create` or rotate, and a `Qv` row of unknown text has no exit. The only exit for a `Q0` row substitutes text under a ruling. This is the "stuck vault" the fence's own rationale says it exists to prevent, and it never prevented it for this row.
+- **D2, plain `deny` destroys it unattested** (a ruling record plus `destroy_in`'s keyed tombstone, through `delete_drawer_ruled(Ruled)`, the body the allow already uses). It adds no path. But it changes the documented reply ("the response carries the receipt") on one arm without the operator asking, and a script reading a receipt-less 200 can take it for an attested erasure.
+- **D3, an attestation that marks its content unverified** (or carries a fingerprint over unverified bytes): REJECTED on evidence, three ways.
+  - A receipt that cannot verify must never be minted (`attest_in`'s own rule, `forget.rs:507-526`).
+  - O267's `#### RULED 2026-10-06` item 4 forbids any signed extension to the attestation before O315's age fence, because `verify_forget_attestation` checks the signature before the version and drops unknown fields.
+  - Unsigned, an older verifier drops the marker and reads the document as an ordinary receipt.
+- **D4, an explicitly declared act**: a flag on `deny`, or a verb of its own.
+- **A fence change letting `drawer delete` destroy it**: reuses an existing door, but the trail cannot tell it from housekeeping (`PendingEvidence::Protect`'s reason, `manage.rs:108-111`).
+
+**Recommended answer: D4's shape.** The maintainer picks the spelling. The act is explicit, on one named row, and inside one destruction lock it:
+1. re-classifies the row through part (b)'s predicate and refuses unless the row fails verification now AND the destruction fence holds it — so it can never bypass attestation on a readable row;
+2. appends a ruling whose keyed canonical carries a distinct verdict word (for example `denied-unverified`), so "denied" never means two acts and never reads as housekeeping;
+3. destroys through `destroy_in` and its keyed tombstone;
+4. mints no attestation and no fingerprint, and says so on the CLI, `/v1`, the ops plane and the console;
+5. is unreachable from the sweep, bulk deletes and `forget`, and never allows: releasing unverified bytes into the vault is refused on every arm.
+
+**The split, recorded.** One lens (run 2's software engineering lens) preferred D2 with the same distinct verdict word, because it adds no path. Both refuters and every other lens that stated a preference chose the explicit form, because a script that runs `deny` expects a receipt.
+
+**Claims refuted.**
+- **The brief** did not cite O267 item 4 (a run-1 lens found it), and its "stuck until… nothing" missed the `Q0` substitution route and the `Qv` dead end.
+- **A run-1 lens and a run-2 lens**: "the remedy's downgrade is the correct consequence". That holds across vaults, not within one: see O227 item 1.
+
+**Probes owed, whichever is chosen.**
+- **P-L2b.** Two flagged texts for one filing (`Q0`, then `Qv`); export; rule on `Q0`; zero `Qv`'s tag; re-import the genuine `Qv` record with the screen on. Expected by reading: the text lands on `Q0`, `Qv` still fails, and the list still reports it.
+- **P4x.** A crafted flagged record of the same filing replaces a broken `Q0`, and `deny` then succeeds with a receipt for the crafted text.
+- **P2d**, and its inversion under O227 item 1.
+
+**Fails silently if:** a receipt is minted over bytes nothing verified; a destruction carries no ruling record; or the act is reachable from a sweep or a bulk delete.
+
+**Version class.**
+- **D1**: PATCH — nothing beyond part (a).
+- **D4**: MINOR, a new opt-in capability. No `UPGRADING.md` entry, because nothing that runs today stops.
+- **D2**: changes a documented reply on one arm, which is why it is recommended against.
+- **D3**: rejected.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question (O221(c)).** May an operator destroy a pending row whose tag fails — a row that can be neither
+allowed, denied, deleted nor forgotten — and with what record and what receipt?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: D4's shape.** The act is explicit, on one named row, and inside one destruction lock it has the five
+properties the recommendation lists, verbatim:
+1. re-classifies the row through part (b)'s predicate and refuses unless the row fails verification now AND the
+   destruction fence holds it — so it can never bypass attestation on a readable row;
+2. appends a ruling whose keyed canonical carries a distinct verdict word (for example `denied-unverified`), so
+   "denied" never means two acts and never reads as housekeeping;
+3. destroys through `destroy_in` and its keyed tombstone;
+4. mints no attestation and no fingerprint, and says so on the CLI, `/v1`, the ops plane and the console;
+5. is unreachable from the sweep, bulk deletes and `forget`, and never allows: releasing unverified bytes into
+   the vault is refused on every arm.
+
+D2 (one lens's preference) and D3 (rejected on evidence) are not taken. Until D4 is built, D1 and part (a)'s
+report stand, as both panels decided. The probes are owed: P-L2b, P4x, and P2d with its inversion under O227
+item 1.
+
+**Version.** "**D4**: MINOR, a new opt-in capability. No `UPGRADING.md` entry, because nothing that runs today
+stops."
+
+**What remains open: the spelling.** The recommendation says "The maintainer picks the spelling" — a flag on
+`deny` or a verb of its own, and the verdict word, `denied-unverified` being the analysis's example only — and
+the answer approved the shape without naming one. It is still the maintainer's; the building unit asks it with
+its pull request.
+
+#### BUILT 2026-10-12 — parts (a) and (b), exactly as ruled; part (c) filed as O426
+
+**The predicate (ruling items 1–2).** `VaultStore::queue_standing(conn, id)` in
+`crates/undercroft-store/src/admission.rs` answers `QueueStanding::{Pending, PendingUnverifiable,
+NotPending}`: the covered `meta.wing` wherever the row's tag verifies and its meta parses
+(`QueueStanding::of_covered`), the clear column only where it does not (`of_row` over
+`CoveredRow::TagFailed`/`MetaUnparseable`), read through `covered_one` on the caller's connection,
+every other error propagated. `is_quarantine_pending` is gone. Its callers: `delete_drawer_ruled`
+(inside the destruction lock), `delete_by_source` (a `?` where `unwrap_or(false)` was — O259 keeps its
+one-lock half), the import door's unreadable arm (`import_verdict` asks it in place of its inline copy,
+and its readable arm decides by `of_covered`), and the sweep's withheld arm. `forget --backend`'s
+pre-flight and `attest_in` decide by `of_covered` on the meta they have just verified. The dedup
+refresh (`save_with_dedup_vec`) counts a match whose covered wing is reserved as none and files an
+ordinary insert; `dedup_groups` drops such a member, survivor included, from the verified reads it
+already made — and `DedupReport.duplicate_groups` now counts the groups left with two or more members.
+A refusal names the door that works from the typed answer: `Pending` → `admission allow`/`deny`;
+`PendingUnverifiable` → `StoreError::IntegrityFinding` naming `UNVERIFIABLE_REMEDIES`, with a
+malformed id rendered by its length (`shown_id`). The predicate is its own function so O259's
+`Fenced` witness can be built on it.
+
+**The read fences (item 3).** `is_quarantine_pending_for_read` keeps its contract over its own
+explicit probe, `clear_wing_names_queue`, then the verified `get`. The agent-scope `history` fence
+hides a record when the clear column names the queue (the same probe) OR the covered wing does, and
+omits the records of a row that does not verify.
+
+**The list (items 4, 7, 8).** `admission_pending` returns `AdmissionQueue { pending, unverifiable,
+ok }` (`#[must_use]`, no convenience wrapper): one `walk_covered` pass, listing exactly the `Pending`
+rows, each read for content and destination as before and carrying `PendingAdmission.mirror_drift`
+(the walk's strings); `unverifiable` holds `UnverifiableQueueRow { seq, id, malformed_id_bytes,
+reason, fenced }` for every row either copy places in the queue that does not verify — the clear
+column or the row's own `meta_json` claim (`claimed_site`), which `CoveredRow::TagFailed` and
+`MetaUnparseable` now carry with the `seq` and the clear wing — and for a `Pending` row whose content
+does not decrypt (`content-undecryptable`). `ok` is false while either is non-empty; `record_read`
+counts the readable rows. The CLI prints the rows, the drift, the unverifiable rows and the remedies,
+never "Nothing awaits review." beside a report, and exits 2; `/v1` answers 200 with additive
+`unverifiable` and `ok`; the ops plane is unchanged and exits 2 on `ok: false`; the console renders
+both through `esc`, with no rule buttons on an unverifiable row, and shows NOT CLEAN.
+`HAND_PROJECTED` gains `AdmissionQueue` × {CLI, `/v1`, console} and `UnverifiableQueueRow` × {CLI,
+console}; `PendingAdmission`'s two rows now see `mirror_drift`. Nomination was not needed (cost
+below).
+
+**The sweep's arm (item 6), and a claim of the ruling this build refutes by measurement.** The arm
+stays, asking the predicate on the lock's connection, its reason rewritten. But the residue route the
+ruling names does not reach it: `Settle::Recheck` re-classifies each member through `classify` before
+the fence is asked, and a member re-diverted between the decision and the lock has a covered wing no
+policy covers, so it is dropped as out of scope; `AsDecided` and the dry run decide and fence in one
+state. `o221_a_member_re_diverted_inside_a_sweep_window_is_not_destroyed` drives exactly that route —
+an ordinary row imported at filing F's `Q0`, swept, and F's flagged write landing on it through the
+`Decided { attempt: 0 }` pause point — and measures: not destroyed, not withheld, the sweep `ok`, the
+row pending afterwards. So the arm is a backstop by reading, not a door; the probe's "withheld" is not
+reachable on this route, and O334's sentence that the residue route reaches the arm is corrected
+beside it. O206's forward-flip test is inverted
+(`a_member_flipped_into_the_review_queue_is_destroyed_and_its_drift_reported`).
+
+**Gates and evidence.** `crates/undercroft-store/src/queue_standing_tests.rs`, eleven O221 tests:
+P2a (`o221_one_unverifiable_row_is_reported_beside_the_readable_queue`), P2a′
+(`…_a_planted_malformed_id_is_named_by_seq_and_length_only` — no control byte in the report or the
+refusal), P2a″ (`…_a_broken_row_claiming_the_queue_only_in_its_meta_is_reported_unfenced`),
+`…_a_pending_row_whose_content_does_not_decrypt_is_reported`, P2b
+(`…_a_forward_flip_is_not_listed_and_is_deletable`), P2c/P4/P3a
+(`…_a_reverse_flip_is_listed_with_its_drift_and_every_destruction_refuses_it` — `drawer delete`,
+`delete_by_source`, `forget`, `forget --backend` with a counting mirror that deletes nothing, then a
+`deny` whose receipt verifies), P3b (`…_a_dedup_save_never_refreshes_a_reverse_flipped_pending_row`,
+with an ordinary-match premise), P3c (`…_dedup_excludes_a_reverse_flipped_pending_duplicate_and_collapses_the_rest`),
+the history fence before/after with `_for_read` unchanged, the sweep route above (which pins a
+behaviour the old logic shares, so it is not RED before the fix), and — after the review below — a
+retyped row outside the queue failing no door, one inside it reported and held, `delete_by_source`
+deleting an unreadable member the fence does not hold, and an undecryptable pending row refused with
+the remedies. `tenant.rs`:
+`o221_the_admission_list_reports_unverifiable_rows_at_200_with_ok_false` (P2a and P2a′ on `/v1`,
+the reverse flip refused by `DELETE …/drawers/{id}`). `tests/cli.rs`:
+`o221_admission_list_reports_unverifiable_rows_and_the_fence_reads_the_covered_wing` (exit 2, no
+control byte on stdout or stderr, `drawer delete` and `forget` refusing the reverse flip, the forward
+flip deleted). The console, served by the release binary over a tampered queue and looked at: NOT
+CLEAN, the drift under its row, the two unverifiable rows by `seq` (one as `malformed id, 9 bytes`)
+with no rule buttons, and no control byte in the served body. Counterfactuals, each applied by a script that asserts its anchors, forces a recompile
+and restores byte for byte: the predicate on the clear column fails six of these and the inverted
+sweep test; the list failing on one row, the dedup refresh, `dedup_groups`, the history fence, the
+`unwrap_or(false)` and `attest_in`'s check, reverted together, fail nine — each for its own reason
+(the dedup arm destroyed both live duplicates in the pending row's favour; `forget` minted a receipt).
+
+**A real corpus, through the release binary.** The LoCoMo feed mined into 32 wings of a sealed vault
+(2,720 drawers) and four flagged saves, then the offline writer with `sqlite3`: a clean queue lists
+four rows at exit 0; one tag zeroed, it lists three, reports `seq 2721` as `tag-fails` with the fence
+holding it and the remedies, and exits 2; `drawer delete` and `forget` of a reverse-flipped row exit 1
+naming `allow`/`deny`, the row still there; a forward-flipped mined drawer is not listed and
+`drawer delete` removes it at exit 0. The new e2e checks — six for O221 (a fixture and five arms) and
+one for O226 — pass against this release binary; against the `5108dfa` binary (built from the base
+tree, probed for the absence of the new text) O221's five arms and O226's one fail, the fixture
+passing. **Cost, best of seven `admission list` runs, whole process**,
+measured on 10,884 sealed drawers (128 wings) with nothing else running: 56–86 ms on this build
+against 18–26 ms on `5108dfa`'s indexed lookup — about 3.5–5.5 µs a drawer for the walk; on 2,720
+drawers, 37–54 ms. At 10⁵ (100,049 sealed drawers, 1,177 wings — the ruling's P-cost, measured while
+other containers were running, so contended): 694–714 ms best of seven against 135–175 ms, about
+5.5 µs a drawer for the walk. The walk was kept (item 4); nomination was not needed to stay under a
+second.
+
+**After an independent review of this build, the same day — all mine.** The covered walk read a
+column of the wrong storage type as an error, and the predicate and the list propagated it, so ONE
+offline retyping of any drawer (`content` as TEXT, `meta_json` as a BLOB, on a row not even in the
+queue) failed `admission list`, the agent-scope `history` and `drawer delete` of that row with a raw
+conversion error, where `5108dfa` answered all three — against part (a)'s "never fails on one row",
+item 3's "fails no history call" and the FOLLOWED "an unreadable row stays deletable". Such a row is
+now `CoveredRow::Undecodable`, a row that does not verify: reported as `column-retyped`, omitted from
+the agent history, decided by the fence's unreadable arm; `verify` and the sweep still raise the
+conversion error (O427, filed). A pending row whose content does not decrypt is refused with
+the remedies and the filed act, not with `allow`/`deny`, which both refuse it; the sweep's withheld
+reason depends on the row; `delete_by_source`'s first test, which asserted a refusal over a retyped
+ordinary member, is inverted. Merged over trains 1 and 2: `VaultStore::fence`, which mints O259's
+`Fenced` witness, asks `queue_standing` and answers through `queue_refusal`, so the witness and the
+predicate are one door.
+
+**What remains.** Part (c), D4, is O426. A retyped column in `verify` and the sweep is
+O427. The double flip stays O216's stated residual.
+O334, O335 and O336 are this ruling's three filed entries and are untouched; the fences' own
+refusals render a malformed id by its length, which O336's gate will find already true at these
+sites.
+
+### O226 — CLOSED 2026-10-12: a convergence onto a pending row carries the row's whole covered declaration — only its signals grow — at the door, in the batch's taken map and at the backstop
+
+**Filed 2026-09-18 by O220's refuter, established by reading.** O220's ruled
+design converges a diversion whose text equals the pending row's, and the
+write replaces the row's metadata wholesale: `kind`, `supersedes`, the agent
+claims, `content_date`, `occurrences`. `admission_allow` restores those
+fields, and `PendingAdmission` shows none of them, so what a reviewer allows
+can carry a declaration the screen never saw beside the text it did.
+
+**Why it is a ruling.** Equality deliberately excludes metadata, because
+`filed_at`, `added_by` and the signals legitimately differ on every re-mine
+and restore. Which covered fields are part of "what the screen saw" is the
+question — and the answer decides whether a convergence may write them.
+
+**Gate**: a convergence that changes only `kind` or `supersedes` leaves the
+pending row's covered declaration as the reviewer will allow it, as ruled.
+**Counterfactual**: today, the incoming declaration replaces it.
+
+O224's ruling fixes this entry's answer for one field: a convergence never
+rewrites `queued_against`, the record of what the destination held, because
+that record is what an allow requires to hold and restoring the vault's own
+backup converges every pending row. Whatever is ruled here for the other
+covered fields must not loosen that.
+
+**Relations:** shares a question with O148 — this entry's convergences are reached with the screen off once that entry's hold lands.
+
+#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
+
+**The question.** A diversion whose text equals a pending row's text converges, and its write replaces the row's metadata wholesale (`lib.rs:7647-7653`); only `queued_against` is carried (O224 item 3). The allow restores every covered field it does not clear (`admission.rs:1317-1326`). Which covered fields may a convergence rewrite, and does the list have to show the declaration the allow will restore?
+
+**Prior rulings found and their disposition.** No `#### RULED` subsection exists in this entry.
+- **O220 item 2** (equality is verbatim content; metadata is excluded): FOLLOWED. It rules what is EQUAL, not what is written, and slot choice is untouched (O197's ruling adds the target to identity, beside that item).
+- **O220's "equal text converges and writes, as today"** and **O215** (re-mining is never a no-op): "writes" is FOLLOWED — the convergence still writes and appends its chain record. "As today" is REVISED beside it, on the evidence below, for what the write carries.
+- **O224 item 3** (a convergence copies the stored record verbatim, a stored none included) and **its lost "re-basing" option**: FOLLOWED and generalized. Nothing here loosens it, because `queued_against` is part of what is carried.
+- **`update_drawer`'s "the reviewer must rule on exactly what the screen saw"** (O216) and **O224's converse**: FOLLOWED, extended from the text to the whole row.
+- **O31** (the screen is the only author of screen fields): FOLLOWED. It is why the signals are the one exception (item 1).
+- **O224's residual** (a metadata-only move of the destination is replaced by the allow): untouched.
+
+**Read before ruling.**
+- **What a convergence writes today.** The door clones the incoming candidate and changes only the wing, room, signals, id and `queued_against` (`admission.rs:1134-1140`, `:761-769`). `write_drawer_stmts` replaces `meta_json` wholesale. The batch carry (`lib.rs:7840-7866`) and the backstop `queue_row_raced` (`:7421-7432`) handle `queued_against` alone.
+- **What the allow restores, and what the reviewer sees.** The allow restores verbatim `kind`, `supersedes` (receipted at write time, `lib.rs:7565-7581`), the `agent`/`channel`/`session` claims, `content_date`, `hall`, `occurrences`, `filed_at`, `added_by`, the line span, `normalize_version` and `id_recipe`. `filed_at` is the retention clock, and any past value passes (`admission.rs:472-491`). The list shows none of these except `filed_at` and the signals (`:51-78`).
+- **What the screen reads**: content, wing, room and the writer identity (`admission.rs:1063-1126`). It never reads `kind`, `supersedes`, `content_date` or the claims.
+- **Legitimate convergences differ only in `filed_at`, `added_by` and the signals:**
+  - API saves never converge, because each takes a unique append index;
+  - an unchanged re-mine carries a new `filed_at`;
+  - a self-restore stamps `added_by` as `import` (`lib.rs:8569-8576`) and carries the payload's `filed_at`;
+  - two identical flagged updates keep the stored meta and re-stamp `added_by` (`manage.rs:1335-1336`).
+- **Signals legitimately vary between equal-text submissions.** The rate signal is a function of the window (`admission.rs:1067-1072`, `:1171-1203`) and the tier-2 advisor is a model call (`:1114-1125`). A later screen can therefore carry fewer, or more, signals than the first.
+- **What a hostile converger can do today.** A converger is anyone holding the text and the filing; the filing is recoverable offline (O220), and a tenant reaches the convergence through `/t/import`. Today such a converger can:
+  - back-date `filed_at`, so the allowed drawer is swept at once;
+  - move `content_date` into a date window;
+  - attach a `supersedes` link, receipted at release, or a `kind` the reviewer never saw.
+- **No false alarm.** An identical rewrite raises no version-replay finding: `replay_finding` returns none when the newest record's tag equals the row's (`replay.rs:176-179`).
+
+**The ruling: C1. A pending row's covered declaration changes only by a ruling, as its text already does.**
+1. **What a convergence writes.** It still WRITES (O215, O220), so the chain records every re-submission. What it writes is the stored row's whole covered meta, verbatim, with one exception: `admission_signals` becomes the stored signals followed by any the current screen raised that are not already there, deduplicated by (code, offset), stored order first.
+   - The signals are the screen's own output (O31).
+   - The allow clears them (`admission.rs:1322`), so they cannot widen what is released.
+   - A re-submission's own signal (a rate anomaly, an advisor verdict) is evidence the reviewer should keep.
+2. **Carried by default.** The function clones the stored meta and replaces only the signals. It does not enumerate fields, so a `DrawerMeta` field added later is carried — fail-closed — with no second inventory to keep in step. A gate drives a convergence whose incoming meta differs from the stored row's in every serialized key (iterated from the serialized form, so a new field is covered without editing the test) and requires the stored covered meta back, byte for byte, apart from the signal union.
+3. **One function, three call sites, at `Q0` and at `Qv` alike:**
+   - **the door**: `read_queue_row` returns the stored meta, read in the same `get` that judged `SameText`, and `Slot` carries it;
+   - **the batch `taken` map**: it holds the occupant's meta, not the text-and-record pair;
+   - **`queue_row_raced`**: a row counts as raced unless its text and every carried field equal the candidate's and its stored signals are a subset of the candidate's. A retry converges and carries.
+4. **The target.** With O197's ruling, a convergence requires the same filing, text and target, so carrying the stored target is a no-op. `queued_against` is carried as O224 item 3 ruled.
+5. **The doc.** `PendingAdmission.filed_at`'s doc (`admission.rs:60-63`) is corrected: it is the filing time the FIRST submission carried — for an update the drawer's original time, for a re-mine when its `Drawer` was built, for an import the payload's value.
+
+**Costs, stated.**
+- A re-mine no longer moves a pending row's `filed_at`. An allowed drawer's retention clock therefore starts at the first submission, the earlier of the two and so the stricter.
+- A self-restore no longer moves `added_by` on queue rows. O223 keeps the question for ordinary rows.
+- A corrected declaration takes effect at the first re-mine after the ruling.
+- A bursty self-restore under a declared rate screen adds its rate signal to the rows it converges on, as the wholesale write records it today.
+
+**Options that lost.**
+- **C2, carry a named subset** (a run-2 lens): sound for the declaration, but it lets a convergence move `filed_at` — a crafted one backward, after review — which is the one covered field the reviewer is shown. A subset list also defaults a new field to "rewritable", the fail-open direction.
+- **C3, a slot per declaration**: revises O220 item 2 with no legitimate producer, and puts two rows with one text before a reviewer; the siblings both reach `applied` (`admission.rs:919`), so the later allow rewrites the declaration anyway.
+- **C4, refuse a differing declaration**: breaks "never rejected and never silently dropped", whose cost O220 measured on re-mines and restores (P-tail, P-restore).
+- **C5, the status quo plus showing the declaration**: the list is stale by allow time (O224's r3), and binding the declaration into the allow is O225's question, the maintainer's.
+- **Signals from the incoming write alone** (a run-1 lens): drops evidence a reviewer may already have seen.
+- **The stored signals verbatim** (run 2): see the split below.
+- **A `DrawerMeta` destructure with no `..`** (run 1's mechanism): see the split below.
+
+**Where the two runs disagreed, and what settled it.**
+- **The signals.** Run 1 took the union; run 2 kept the stored signals verbatim. **Settled for run 1.** O220 item 2's own words ("the signals vary") and the screen's code (the rate window, the advisor call) show that a later submission can raise a signal the first did not. Under verbatim that signal is written nowhere durable: the converging write's chain record holds only the row's tag. Run 2's reason — staleness cannot widen what is released — is true, and it answers release, not the loss of review evidence. The union only grows, so it never removes what a reviewer saw.
+- **The mechanism.** Run 1 destructured `DrawerMeta` with no `..`, so a new field would not compile until ruled; run 2 carried by default. **Settled for run 2's mechanism.** Carrying by default is already fail-closed for a new field, and a destructure is a second inventory every future field must touch for no change in outcome. The serialized-key gate (item 2) is what sees a new field.
+- **Agreed by both runs, and kept**: C1, `filed_at` and `added_by` carried, three call sites, and the doc correction.
+
+**Claims refuted.**
+- **The brief**: its list of who converges is right, but it omitted that a later screen can carry different signals from the first.
+- **A run-2 lens**: C2 "costs the legitimate convergences nothing". It keeps today's moving `filed_at`, the one covered field the reviewer is shown, and with it the back-dating lever.
+
+**Probes owed by the build**, run by the integrator:
+- **P5, inverted.** Two converging imports that differ only in `kind`, `supersedes`, a past `filed_at` and `agent`. After an allow, the drawer carries the FIRST declaration, and the chain holds one write record per submission. Counterfactual: today it carries the second.
+- **A back-dated `filed_at` convergence**, then an allow, then a retention sweep. Today the drawer is destroyed; after, it is kept.
+- **An in-batch convergence** (one CLI chunk) that differs only in `kind`.
+- **A raced convergence** carrying a different stored meta: refused by the backstop, and converging on retry.
+- **A convergence whose screen raises a rate signal the first lacked**: the row's signals become the union.
+- **O224's self-restore gate** still passes, and an unchanged re-mine of a flagged file leaves the covered meta byte-identical apart from the signal union.
+
+**Fails silently if:**
+- the carry runs at the door but not in the `taken` map or the backstop;
+- it applies at `Q0` and not at `Qv`;
+- the merge enumerates fields, so a new one takes the incoming value;
+- O224's self-restore gate changes;
+- `filed_at`'s doc keeps the old rule.
+
+**Dissent.** A run-2 lens for C2; run 2's refuter and two run-2 lenses for verbatim signals. Overruled above.
+
+**What remains.**
+- **The list shows little of what an allow restores.** Beyond `filed_at`, the list shows nothing of the restored declaration. That gap exists on every pending row, not only on convergence, and binding the declaration into the allow is O225's question (decided with O229), the maintainer's.
+- **O223's neighbourhood narrows** for queue rows, without ruling O223.
+
+**Version: PATCH.** No surface field is added; one reporting field's documented meaning is corrected. **`UPGRADING.md` is not owed**: nothing that runs today stops. CHANGELOG states that a convergence keeps the pending row's declaration.
+
+#### BUILT 2026-10-12 — C1, exactly as ruled
+
+**One function, three call sites (items 1–3).** `admission::converged_meta(stored, raised)` clones the
+stored row's covered meta and replaces one field: `admission_signals` becomes the stored signals
+followed by any `raised` not already there, deduplicated by code and offset. It enumerates no field,
+so a field added to `DrawerMeta` later is carried. The door: `read_queue_row` returns the stored meta
+from the same `get` that judged `SameText`, `Slot::converged` carries it, and `screen_and_divert`
+writes `converged_meta(stored, the screen's signals)` — at `Q0` and at a version slot alike, its
+`queued_against` (O224 item 3) carried with everything else. The batch's `taken` map holds each
+occupant's meta and a later row converging on it takes `converged_meta` of it. The backstop
+`queue_row_raced` refuses unless `admission::carries(stored, candidate)` holds: every covered field
+but the signals equal in the stored form (`DrawerMeta::at_rest`, which `Drawer::meta_at_rest` now
+calls, so there is one), every stored signal among the candidate's. `PendingAdmission.filed_at`'s doc
+says the FIRST submission's time (item 5). O197's target, when it lands, joins the
+`SameText` comparison beside this; nothing here blocks it.
+
+**Gates and evidence.** In `queue_standing_tests.rs`, six O226 tests:
+`o226_a_convergence_carries_the_stored_declaration_byte_for_byte` (the item-2 gate: a fully populated
+stored row, an incoming meta asserted to differ in every serialized key but the filing's and the
+screen's — read from the serialized form, so a key both sides serialize alike fails the premise —
+and a declared rate screen raising a signal the first submission lacked; the raw `meta_json` after is
+the stored bytes with the union, one chain record per submission, and a third identical submission
+moves nothing), P5 inverted on both import functions
+(`o226_an_allow_restores_the_first_declaration_after_converging_imports`), the back-dated
+convergence (`o226_a_back_dated_convergence_cannot_age_an_allowed_drawer`), the in-batch convergence,
+a convergence at a version slot, and the backstop (a `kind` change and a dropped signal refused, an
+added signal accepted). Reverting the door, the taken map and the backstop together failed all five
+that existed then (the version-slot test was added after); each alone fails its own: the door four,
+the version-slot test among them, the taken map the in-batch test (the backstop refuses the batch as
+raced), the backstop its own. O224's self-restore gate and its convergence tests pass unchanged.
+
+**A real corpus.** On the same 2,720-drawer vault, a flagged file mined into wing `w9` and mined
+again a second later converges: the row's `meta_json` is byte-identical across the re-mine (its
+`filed_at` the first mine's) and its record id holds two chain records, one per submission. The e2e
+check of the same, run against the release binary, passes; against `5108dfa`'s binary it fails, the
+re-mine having moved the row's `filed_at`.
+
+### O315 — CLOSED 2026-10-12: a receipt or a witness carrying a version or a field this build does not know is NOT CHECKED, never forged and never verified — an age fence reads both before the vault, the signature or a tag
+
+**Filed 2026-10-06 by O267's ruling (its refuter; the order read again by the integrator).**
+`verify_forget_attestation` checks the Ed25519 signature over `att.canonical()`
+(`crates/undercroft-store/src/forget.rs` 650-656) before it matches the version (684-693), and the
+attestation type drops unknown fields (no `deny_unknown_fields`, 179). A receipt minted by a build that
+signs one more field is recomputed shorter by an older build, fails the signature, and is reported
+`ATTESTATION FAILED`, exit 2 — the tamper verdict — which the comment at 681-683 ("a document a newer
+build minted is not a forgery") says must not happen, and which a version bump does not prevent. It has
+happened once: the `mirror` extension (256-258) shipped in `30c560f`, first tagged `v1.1.0`, with no
+version change, so every pre-1.1.0 verifier reads a genuine mirror-bearing signed receipt as forged.
+
+**Shape**: an age fence on the O241 ruling 4 and O238 precedent — an unknown version, or a field this
+build does not know, refused as "a newer build minted it" (exit 1) BEFORE the signature is checked —
+landing in a release before any further canonical extension; O316's signed archive note waits for it.
+**Gate**: a signed receipt carrying an extra canonical field is refused with exit 1 by the fenced build,
+and the same document without the field verifies; counterfactual, today's order answers exit 2 (O267's
+P-Q1d).
+
+#### BUILT 2026-10-12, as ruled (O267 ruling 4) — with the renderer the entry did not name, the witness's half of the sibling sweep, and one defect of this unit's own found by its independent review
+
+**What landed.** `crates/undercroft-store/src/forget.rs`: `ForgetAttestation`, `ForgottenDrawer` and
+`AttestedRecord` capture every key they do not declare (`#[serde(flatten)] unknown: UnknownFields`) instead
+of dropping it — empty on every receipt a release minted, and serialised to nothing, so no minted byte
+moves. `ForgetAttestation::age_fence` is the first statement of `verify_forget_attestation`, ahead of the
+vault check, the signature and every tag: a `version` above `ATTESTATION_VERSION` (2), or any key the types
+do not declare — at the top, in a drawer or in a record, named by path, three at most, each cut to 64
+characters and printed through `Debug` — is refused as **NOT CHECKED**. The refusal claims nothing about the
+document, because nothing in it was read: "a newer build of Undercroft may have minted it, or it was
+altered", never "a newer build minted it" alone (`not_checked_version`, `not_checked_keys`, the one wording).
+Version 0 is refused in the same class without the "newer build" half. The class is `StoreError::Invalid`,
+the one the old version arm answered: exit 1, `/v1` 400 with no class and so through the orchestrator's
+ops relay (whose CLI exits 1), an error on MCP. **The renderer the entry did not name**: `ui.html`'s receipt
+checker toasted "ATTESTATION FAILED" on EVERY error, a refused receipt, a malformed body and a refused
+bearer included; it says so now only on `class: "integrity"` and "NOT CHECKED" otherwise, `api()` carrying
+the status and the class on what it throws.
+
+**The witness, the sibling sweep's half that was free only now.** `ChainWitness` read its `version` before
+its signature already, but dropped an undeclared key, so a later build's signed field without a version
+bump answered `Attestation` (exit 2, 409 + `integrity`) and a key added beside a genuine signature was
+checked around (`Extends`). It captures the same `UnknownFields`, and `witness_check` refuses an unknown
+key — and an unknown version, reworded through the same helper — before the vault, the signature or a row.
+The witness first ships in 1.7.0, so this moved no released contract. The export bundle's manifest, the
+released half, is O428.
+
+**Why the order is sound, and its cost, stated exactly.** O238's argument for the manifest: `version` and
+the key set are read before verification, which can buy a refusal and never an acceptance. The cost: a
+forger who adds a key no build will ever declare, or a version none will ever mint, gets exit 1 "not
+checked" from EVERY build, present and future — never exit 2 — and exit 1 is the class a compliance script
+may retry and then ignore, the shape the CLI's `verify-forgetting` arm records exit 2 being introduced to
+close. This record's first version said the forger got "not checked" only "where an up-to-date build
+answers exit 2", which is false: no build ever answers it otherwise. Whether "not checked" deserves its own
+exit class is a documented exit contract, filed for the maintainer as O429.
+
+**A defect of this unit's own, found by its independent review.** Its first build's e2e and real-corpus
+"newer build" documents were a `sed` over a SIGNED receipt's `version`: the version is the canonical's first
+field, so that document was a FORGERY, `5108dfa` answered it exit 2 / 409 — correctly — and the checks called
+that correct verdict the defect. A version bump alone, genuinely re-signed, was already exit 1 / 400 there
+(the store test's arm 4 said so), and two test docstrings said otherwise. Rebuilt: the newer build's
+documents are now RE-SIGNED — in Rust with `sign_detached`, in the shell suites with openssl over a
+canonical rebuilt from the document's JSON and proved against the binary's own signature first — and the
+`sed` forgery is kept, labelled as what it is: the stated cost, exit 1 where the same forgery without it is
+exit 2.
+
+**No genuine document is fenced.** Read at all 13 release tags `v1.0.0`..`v1.6.1` and all 22 revisions of
+`forget.rs`: the receipt types never lost a field, and `mirror` (1.1.0) is the only one ever added.
+`every_key_a_released_build_minted_is_known_and_no_minted_byte_moves` pins the receipt's key sets as
+literals and its minted JSON byte for byte; the witness test pins the emitted key set.
+
+**Tests, each RED on the unfixed code.** Store: `a_document_a_newer_build_minted_is_refused_as_age_before_the_signature`
+(a signed top-level, record and drawer field; a signed field with a bump, and a bump alone — not the
+defect; an unsigned extra key; a key added beside a genuine signature; version 0; the cost — a forgery
+adding a key, a forgery bumping the version, a document naming another vault with an unknown key; four
+forgeries with every key known still `Attestation`; hostile keys escaped and cut), the key-set test, and
+`a_witness_carrying_a_key_this_build_does_not_know_is_not_checked`. CLI `tests/cli.rs`
+`verify_forgetting_answers_a_newer_builds_receipt_with_exit_1_never_2` and
+`witness_check_answers_a_key_it_does_not_know_with_exit_1_never_2`; `/v1`
+`verify_forgetting_answers_a_newer_builds_receipt_as_the_callers_400` (with the witness route); MCP
+`a_receipt_a_newer_build_minted_is_refused_as_age_over_mcp`; console
+`the_console_calls_only_an_integrity_verdict_a_failed_attestation`. Counterfactuals, each applied by a script
+that asserted its anchor, forced a recompile and restored with `cmp`: the fence after the signature, the keys
+not captured, the witness's key arm removed and the old console catch → both store tests and all five
+CLI-side tests RED, with `Attestation("signature: …")`, 409 + `integrity` and exit 2 where the defect reads
+them; no `flatten` → the byte pin RED; raw keys in the message → the hostile-key arm RED. e2e gained 27 checks and
+e2e-orchestrator 12, run ad hoc against both release binaries: on `5108dfa`'s, 13 and 5 fail exactly as the
+defect reads (the re-signed field exit 2 and 409 + `integrity`, the annotated receipt and witness exit 0 and
+200, the cost arms 2 and 409, the ops CLI exit 0 and 2).
+
+**Real corpus.** The LoCoMo feed mined into four wings (340 drawers) and one signed `forget` of 40. CLI on
+this build: genuine 0; a re-signed extra field 1; the field with a bump 1; a key added beside the signature
+1; forged 2; a forgery with a bumped version 1 (the cost); truncated 1. On `5108dfa`'s: 0, 2, 2, 0 VERIFIED,
+2, 2, 1. `/v1` on this build 200, 400, 400, 400, 409 + `integrity`, 400, 400; on `5108dfa`'s 200, 409, 409,
+200, 409, 409, 400. `verify` OK after.
+
+**What it does not do, stated.** It fixes no older build: 1.6.1 and earlier still read a newer build's
+signed field as forged, and every build before 1.1.0 reads 1.1.0's `mirror` that way — `UPGRADING.md`
+records 1.7.0 as the first release that answers it as not checked. O316's unsigned archive note must not
+ride as a top-level key of `POST …/forget`'s reply, which IS the attestation, or this build's own verifier
+refuses the reply it minted — noted there.
+
+**Version.** PATCH inside 1.7.0: the defect was a genuine document read as forged, which the comment beside
+the code already said must not happen, and an undeclared key that was ignored was never documented as
+accepted. Three observables move, all in `UPGRADING.md`: a receipt carrying a field a newer build signed
+exits 1 (400) where it exited 2 (409 + `integrity`); a receipt carrying a key added beside its signature
+exits 1 (400) where it verified; and a forgery that also carries an unknown key or version exits 1 (400)
+where it exited 2 — the cost.
+
+### O308 — CLOSED 2026-10-12: no open creates a database beside a manifest that records history — one absent-database door, asked before every opener and on the connect's one CREATE grant, answers A33's verdict on both postures with nothing created
+
+**Filed 2026-09-30 by O303's independent review (its F1); established by reading.** `connect_writable`
+opens with `SQLITE_OPEN_CREATE` whenever the layout is `DbLayout::Absent`, and the schema batch commits
+`meta`, `drawers`, `audit` and their indexes; the rotation reconcile's lock path (the marker is absent)
+then judges the empty trail `Headless::Erased` and refuses `ManifestTampered` (O303). So the refusal
+leaves an empty database behind, and every later open on either posture answers `ManifestTampered` where
+the read-only open answered A33's `DatabaseMissing` before it — an incident read as tampering rather
+than as a missing file. On `main` `5fc6171` the same writable open seeded `chain_meta` from the manifest
+and served an empty vault at the manifest's height, taking writes; O303 closed that, and this is what
+it leaves. The deleted file is the most ordinary producer of O303's erased trail.
+
+**Shape, for a ruling**: the writable posture refuses an absent database beside a manifest whose head is
+past genesis or whose height is above 0, before it connects, as A33's `DatabaseMissing` (an integrity
+verdict), after O291's `vault_gone` check; a manifest at genesis and height 0 is a fresh vault's first
+open and keeps creating. O213 asks the read-only half of the same question for a manifest at genesis.
+
+**Gate**: a vault with records whose `vault.db` is deleted — a writable open refuses and no `vault.db`
+exists afterwards; a read-only open still answers `DatabaseMissing`; a fresh vault's first open still
+creates it; a delete racing the open still answers the reopen class.
+
+**Relations:** shares a diff surface with O213 — both are answered through the absent-database predicate and door this entry's ruling defines.
+
+**Relations:** sequenced after O302 — both decide what the writable open answers on the line that creates a missing database, and that entry's predicate runs before this refusal.
+
+#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
+
+**The question.** What the writable posture does with a vault directory that holds no database beside a
+manifest past genesis or above height 0. Today `connect_writable` opens with `SQLITE_OPEN_CREATE` whenever
+`DbLayout::Absent` (store `lib.rs` 4980-4982), the schema batch commits in autocommit (5185-5230), and
+only then does the rotation reconcile's lock path, taken because the new file has no keycheck marker
+(4346-4349), judge `Headless::Erased` (4681-4687) and refuse `ManifestTampered` (2677-2679). The created
+file outlives the refusal, so every later open on both postures answers tampering where the read-only open
+answered A33's `DatabaseMissing`. Ruled with O213, O270 and O292, because all four ask what a door may do
+with a vault directory missing half its pair.
+
+**Prior rulings found, and their disposition.** A case-insensitive `rul(ed|ing)` search of this entry finds
+its filing line only; searched also in A33/R4, O279, O280, O291, O296, O303, O254, O257, O91, O213 and
+O302.
+- **A33/R4** ("'Empty' is not 'absent'; this is an integrity verdict and exits 2"): FOLLOWED. A manifest
+  that records history beside no database answers `DatabaseMissing` on both postures.
+- **O279/O280** (no open by path carries CREATE unless the directory holds no database; the layout is read
+  ONCE and its path is the one opened): FOLLOWED, and narrowed by the manifest.
+- **O303, 2026-09-30** (only the empty chain is adopted; a genesis head beside a nonzero height is
+  `ManifestTampered`; "fails silently if `CREATE TABLE` stays before the judgement"): FOLLOWED one level up.
+- **O296** (a refusal writes nothing): FOLLOWED.
+- **O291 item 11** (a vault whose directory is gone answers the reopen class first): FOLLOWED, its order
+  kept.
+- **O254's P1** (no byte comparison of `vault.json` on the writable posture, because a busy writer
+  anchors): FOLLOWED — item 2's comparison is asked only where no database exists to anchor from.
+- **O257** (an unlock deletes no `vault.json.next`; a file this build cannot authenticate is inert, vault
+  `lib.rs` 2779-2786): FOLLOWED, and it settles a split between the runs (below).
+- **O91** (a posture is a property of the path): FOLLOWED — it is why `recorded_embedder` is one of the
+  places the door is asked.
+- **O302** (open): touched, not ruled; its absent-database race is met by item 2.
+
+**Decided shape.**
+1. **One predicate, in `undercroft-vault`, over the manifest's two MAC-covered fields** (`writes`,
+   `chain_head_hex`):
+   - *Fresh*: the head is `Vault::chain_genesis_hex()` AND the height is 0 AND no authenticated staged
+     manifest is attached (`Vault::has_pending()`). An unauthenticated `vault.json.next` decides nothing
+     (O257).
+   - *Mixed*: a genesis head with a height above 0, or a non-genesis head with height 0. No build writes
+     either; only a key holder can.
+   - *History*: anything else, an attached authenticated `.next` included.
+
+   It replaces the restore stage's `vault.writes() > 0` (`restore.rs` 257), `adopt_empty_chain`'s
+   `manifest.writes() == 0` (store `lib.rs` 6546, which keeps its strict `verified_manifest()` read under
+   the lock, 6538), and `check_chain_read_only`'s `Headless::Empty` arm, which today reads neither field
+   (5775-5779). `judge_headless` keeps its anchor comparison: it classifies rows against an anchor, a
+   different question. A source gate pins that no other `writes() == 0` / `writes() > 0` spelling remains
+   in the store crate's production code.
+2. **The evidence is the unlock's verified values, bound to the directory.** Where the door finds no
+   content, it compares the digest of `vault.json`'s current bytes with the unlock's `manifest_seen`
+   (vault `lib.rs` 1153, set at 2771 from the very buffer whose MAC was verified, 2744-2771). Equal: the
+   unlock's values ARE a strict read of those bytes. Different: `StaleUnlock`, the reopen class. Missing
+   or not a manifest file: the manifest rule's own answer (`absent()`, 2364-2384; integrity, no tamper
+   event). A handle minted by `create` (`manifest_seen` is `None`) skips the comparison. Never asked
+   outside the no-content arm (O254's P1).
+3. **"No content"** is decided by a stat that follows a link, as `DbLayout` and SQLite do (O279's gate G8
+   opens a linked database), with every error but not-found propagated, never `Path::exists`: no main
+   file at either name, or the one main file a regular file of length 0. Not inside `DbLayout::of`: O291's
+   delete holds the zero-length file it made through that function.
+4. **The door, in order**: (a) the vault directory gone → `vault_db::deleted`, the reopen class (O291);
+   (b) item 2's binding; (c) a NON-EMPTY `-wal` of either name beside no content → `DatabaseMissing`
+   naming the `-wal`, saying it may hold committed frames and must not be deleted, with nothing opened;
+   an empty `-wal` or a `-shm` is scaffolding and is ignored; (d) *History* → `DatabaseMissing`, nothing
+   created, its text naming `vault.json.next` with O296's "do NOT delete it" where one is attached;
+   (e) *Mixed* → `ManifestTampered` on both postures, as `adopt_empty_chain` already answers it
+   (6551-6553); (f) *Fresh* → the writable posture proceeds, the read-only posture answers O213's variant.
+5. **Where it is asked**: in `recorded_embedder` (7037-7081), which answers `None` without opening
+   whenever there is no content, so it never opens a zero-length file; at the head of `open_inner`,
+   before `migrate_db_filename` (5173); at the head of `open_inner_read_only`, replacing 5444-5458; and
+   again on `connect_writable`'s single layout read (4964-4982), where `SQLITE_OPEN_CREATE` is granted
+   only on the door's *Fresh*-and-no-content answer at that same observation. One production CREATE grant
+   in the store crate, pinned by a source gate.
+6. **`DatabaseMissing` becomes posture-neutral**: it drops "or open the vault with a writable process if
+   you intended to start an empty one" (2053-2054), which after this ruling is false on both postures; it
+   names the recorded height (MAC-covered evidence) and says no open creates a database; its remedy is to
+   stop every process that had the vault open, then restore the database, or the vault, from a backup
+   (O270's procedure); it never advises deleting a file. Its doc comment stops saying "a read-only open
+   found".
+7. **`UPGRADING.md`**: the O303 entry ("where every `audit` row is gone beside a manifest past genesis") is
+   amended in place if this lands before `1.7.0` is tagged: a deleted `vault.db` beside a manifest past
+   genesis answers `DatabaseMissing` and leaves no database; `ManifestTampered` stays for an emptied
+   `audit` beside a database that is present. Landing after the tag, it is an entry of its own.
+
+**Where the two runs disagreed, and what settled it.**
+- *Placement.* Run 1 placed the decision on `connect_writable`'s one layout read alone; run 2 at four
+  sites. Settled by reading: `recorded_embedder` opens any present main file read-only before either open
+  (CLI `open_store_as`; `/v1`'s factory, `tenant.rs` 3405), and `migrate_db_filename` opens a legacy file
+  before the connect, so run 1's single site comes after two openers. Run 1's objection to a pre-check
+  alone — a `vault.db` deleted between that check and 4965 is still created — is met by keeping the
+  connect's read as the one CREATE grant. The union stands.
+- *The evidence read.* Run 1 asked a strict `verified_manifest()` re-read; run 2 the unlock's values bound
+  by item 2. Settled for run 2's shape, with both runs' stated reasons corrected. Run 2's "a fresh
+  `verified_manifest()` read has a fall-back of its own" is false: its doc and body say "with NO
+  fall-back" (vault `lib.rs` 2386-2418); its staged branch serves only a handle whose keys came from
+  `.next`. Run 1's strict read fails on the race run 2 named: after a delete and a `create` of the same id
+  between the unlock and the check (O302), the new `vault.json` fails the old handle's MAC, and
+  `verified_manifest`'s refusal raises the manifest tamper event (`refusal`, 2344-2352) — a page for a
+  race. The binding answers it with the reopen class, and when the bytes are unchanged it reads exactly
+  what a strict read would.
+- *The zero-length file.* Run 1 held it for probes; run 2 settled it by reading SQLite. Settled by
+  reading the pinned source: `pagerOpenWalIfPresent` (`sqlite3.c` 60436-60464) DELETES the `-wal` of any
+  database whose main file has 0 pages (60452-60453), whenever a connection takes its shared lock
+  (`pagerSharedLock`, 62516), with no read-only guard; and `journal_mode=WAL` on a rollback-mode file
+  calls `sqlite3BtreeSetVersion(2)` through a rollback-journal transaction (101043-101049), writing page
+  1, so no WAL database SQLite made has a 0-byte main file. The arm's safety does not even rest on that:
+  a 0-byte main file with no `-wal` holds no committed byte anywhere, and with a non-empty `-wal` the door
+  refuses having opened nothing. The probes become build gates.
+- *`vault.json.next`.* Run 2 refused any `.next` beside no content in the integrity class; run 1 counted
+  only an authenticated one. Settled for run 1 by O257's recorded doctrine ("A file this build cannot
+  authenticate is inert", vault `lib.rs` 2779-2786) and by `integrity_verdict`'s, which gives no integrity
+  verdict where nothing was verified (O204). An authenticated `.next` makes the manifest *History*.
+- *A Mixed manifest.* Run 1 folded it into "records something" (`DatabaseMissing`); run 2 answered
+  `ManifestTampered`. Settled for run 2: one state answers one class at every arm, and
+  `adopt_empty_chain` already answers it so.
+- *A link.* Run 2 decided presence by `symlink_metadata`, which reads a dangling link at `vault.db` as
+  content, so beside a *History* manifest the connect would still see `DbLayout::Absent` and CREATE
+  through the link — defeating this entry. Item 3 follows the link; what a link at a database name should
+  answer is a new entry (below).
+
+**Options that lost, with their cost.**
+- (ii) Keep `ManifestTampered`, judged before the connect: a second head-less judge that runs with no
+  database (`judge_headless` and `chain::regime` both query `audit`), against O296's one judgement, and it
+  names a missing file as tampering.
+- (iii) Today's order: the open manufactures the evidence its own verdict then reads, for every later
+  open, and on a lone `-wal` the connect's first statement destroys it (P-WAL).
+- Either single placement: each leaves an opener ahead of it (above).
+- A strict re-read: a tamper page for a race (above).
+- Refusing any `.next` by presence: an integrity verdict on an unauthenticated file, against O257.
+- Deferring the zero-length arm: the pinned source settles it, and the arm is safe without it.
+
+**Claims refuted, the brief's first.** The brief's P-ZERO premise ("SQLite reads a 0-byte file as an
+empty database, so the schema batch would still run") is right and incomplete: the first lock deletes any
+`-wal` beside it. The brief's "the panel should say which is the evidence" is answered by item 2. Run 1's
+lens claim that `PRAGMA page_count` after O279's proof would count committed `-wal` frames, and the lenses'
+"a zero-length main file beside a `-wal` may be a live database", fall to the same reading. Run 2's
+`verified_manifest` fall-back and run 1's strict read: above. Run 2's "read-only connections included" is
+CONFIRMED by the pinned source.
+
+**Probes owed (the integrator's; build gates, none decides the shape).** Each gate asserts the variant AND
+that no `vault.db`, `-wal` or `-shm` exists afterwards AND `vault.json`'s SHA-256 unchanged, because
+today's class is integrity too.
+- P-ZERO: a vault with records; `vault.db` truncated to 0 bytes, `-wal`/`-shm` removed; a writable open on
+  `781b5b9` (expected: the schema batch, then `ManifestTampered`, the file holding the schema) and on the
+  build (`DatabaseMissing`, the file still 0 bytes).
+- P-ZERO-WAL: a 0-byte `vault.db` beside a non-empty `vault.db-wal` and a manifest that records writes;
+  `--read-only stats` on `781b5b9` (expected: the `-wal` gone, through `recorded_embedder`) and on the
+  build (refused, the `-wal`'s SHA-256 unchanged).
+- P-WAL: `vault.db` removed, `vault.db-wal` kept; a writable open on `781b5b9` (expected: CREATE, the
+  `-wal` deleted) and on the build (refused, the `-wal` unchanged).
+- P-O302-ABSENT: pause at `Opener::WritableLayout`; delete the vault; `vault create` the same id; release.
+  Both postures answer the reopen class; the retry creates (writable) or answers O213's variant
+  (read-only); no tamper event is counted.
+- P-LINK (for the new entry): a dangling link at `vault.db` beside a *Fresh* manifest; a writable open on
+  `781b5b9`. Is the link's target created outside the vault directory?
+
+**Dissent.** None on refusing before the CREATE or on the class.
+
+**Fails silently if** `recorded_embedder` or `migrate_db_filename` opens a no-content file before the door;
+the zero-length test lands in `DbLayout::of`; the CREATE grant reads a different observation from the
+door's; item 2 is asked on the writable posture outside the absent arm; the predicate reads one field, or
+reads `.next`'s presence rather than its MAC; a gate asserts the class alone; there is no arm deleting only
+`vault.db*` during the `WritableLayout` pause; the A33 unit test's premise "the writable open is allowed to
+create it" and `o303_only_the_empty_chain_is_adopted` stop running on a *Fresh* vault;
+`o291_open_store_as_meets_a_delete_in_its_window_as_no_such_vault` stops answering the reopen class
+because (d) is asked before (a).
+
+**What remains.**
+- What a link at a database name answers on the open path — followed (as O279's G8 opens a linked
+  database, and as a dangling one beside a *Fresh* manifest is created through today) or refused (as O283
+  and O291 refuse links on restore and delete) — is a new entry, measured by P-LINK, its ruling the
+  maintainer's ratification of O283's extension.
+- A process still holding the deleted database's unlinked inode can anchor by path between the unlock and
+  item 2: the reopen retries once, then says so (exit 1). O268 item 8's residual.
+- A NON-EMPTY schema-less main file (one page, no tables) beside a *History* manifest still gets the
+  writable open's schema batch before `ManifestTampered`. Stated with its argument: the verdict is the
+  same on both postures before and after the batch (O213's item 6), no build writes that file, and
+  judging it first is O322's option (b), which lost there.
+- O302's other arms (a present database; the `immutable=1` escalation) stay O302's.
+- Relations owed, each with its reciprocal in the same commit: O213 and O302.
+
+**Versioning.** PATCH. The class does not move (exit 2, `/v1` 409 with `class: "integrity"`); the variant
+and text change and nothing is created. `UPGRADING.md` is amended per item 7.
+
+#### BUILT 2026-10-12, to the ruling — with the probes run as build gates, their "before" arm by counterfactual, and P-LINK measured
+
+**Built.** `crates/undercroft-store/src/absent.rs` is the door: `survey` stats both main names with
+`fs::metadata` (a link followed, every error but not-found propagated) and reads "no content" as no
+main file or the one main file a regular file of length 0 — not inside `DbLayout::of` (item 3); a
+non-empty `-wal` of either name is read only beside no content, and a `-wal` that is not a regular
+file is named too. `door` answers in item 4's order: `vault_db::deleted`; the binding,
+`Vault::unlock_still_binds` (item 2: the digest of `vault.json` now against `manifest_seen`, a
+`create`-minted handle skipping it; missing or not a manifest file is `absent(error, false)` — the
+door runs before any adoption, so no staged copy is intact — and an unreadable file its I/O error);
+`DatabaseMissing` naming a non-empty `-wal`; `DatabaseMissing` for *History*; `ManifestTampered` for
+*Mixed*; `Door::Fresh`. Asked in `recorded_embedder` (*Fresh* answers `None` without opening; the
+refusals propagate), at the head of `open_inner` before `migrate_db_filename`, at the head of
+`open_inner_read_only` in place of the `database_exists` branch, and on `connect_writable`'s one
+layout read, which grants `SQLITE_OPEN_CREATE` only on `Door::Fresh(Absent)` (item 5). The predicate
+is `undercroft_vault::ManifestHistory::of(head, writes, staged_attached)` with
+`Vault::manifest_history()` over the unlock's values (item 1); it replaces `restore.rs`'s
+`writes() > 0` (a *Mixed* stage now says so in its own integrity text) and `adopt_empty_chain`'s
+`writes() == 0` (its strict `verified_manifest()` read kept). `DatabaseMissing` gained `writes`,
+`wal` and `staged`, and its text is posture-neutral (item 6). `UPGRADING.md`'s O303 entry is amended
+in place (item 7). The vault crate's manifest-read gate counts `unlock_still_binds` as a guarded-read
+caller and a reader that raises no tamper event.
+
+**Gates.** `absent_tests.rs`: `o308_a_deleted_database_beside_a_recorded_history_creates_nothing`,
+`o308_a_zero_length_database_is_no_content` (P-ZERO), `o308_a_non_empty_wal_beside_no_content_is_named_and_kept`
+(P-WAL and P-ZERO-WAL, three shapes, a fresh and a recorded manifest each, the `-wal` byte-identical),
+`o308_a_mixed_manifest_beside_no_content_is_tampering_on_both_postures`,
+`o308_a_staging_file_decides_by_its_mac_never_by_its_presence`,
+`o308_a_database_deleted_in_the_connects_window_creates_nothing` (the arm deleting only `vault.db*`
+during the `WritableLayout` pause, witnessed), `o308_a_vault_replaced_beneath_the_open_is_the_reopen_class`
+(P-O302-ABSENT on both postures, plus a delete not followed by a `create`: O291's answer first),
+`o308_a_dangling_link_at_the_database_name`, and the source gate
+`o308_one_create_grant_one_predicate_and_the_door_first` (one `SQLITE_OPEN_CREATE`, in
+`connect_writable`, after the door; no `writes() == 0`, `> 0` or `!= 0`; the door's four sites, each
+before its first opener). Every arm runs `recorded_embedder` then the open, both postures, at both
+security levels, and asserts the vault directory's names and bytes across the refusal. The A33 unit
+test's premise and `o303_only_the_empty_chain_is_adopted` still run on a fresh vault, and
+`o291_open_store_as_meets_a_delete_in_its_window_as_no_such_vault` still answers the reopen class.
+
+**Measured.** Probes on 781b5b9 were NOT rebuilt; their "before" arm is a counterfactual that reverts
+the door to the pre-O308 decision (any present file is content, an absent layout CREATEs, the
+read-only open answers `DatabaseMissing`): twelve tests red — the writable open created `vault.db`
+and answered `ManifestTampered`, and a vault replaced beneath the open answered `ManifestTampered`,
+the tamper page item 2 exists to avoid. Each choice the ruling made was counterfactualled too: a
+strict MAC re-read for the binding (the replaced vault pages), `.next`'s presence for the predicate
+(a torn `.next` beside a fresh vault reads as history), `writes` alone (a *Mixed* manifest reads as
+history or fresh). Real corpus: 340 LoCoMo drawers in four wings, at both levels — a deleted, a
+zero-length and a `-wal`-only database each exit 2 on both postures, the directory and `vault.json`'s
+SHA-256 unchanged and the `-wal` kept byte for byte; `verify` OK once the database is put back.
+**P-LINK**, on the build: a dangling link at `vault.db` beside a *Fresh* manifest makes the writable
+open create the link's target outside the vault directory (126,976 bytes after one `stats`, a
+`remember` then writing there) — the same as before this build, since a dangling link reads as
+absent either way. Beside a *History* manifest the followed stat reads it as no content and refuses
+with nothing created (pinned). Filed as **O430**.
+
+**After the independent review (2026-10-12).** The CREATE gate counted the `SQLITE_OPEN_CREATE` token
+alone, while `Connection::open` (rusqlite's default flags) and `OpenFlags::default()` carry CREATE too:
+it now counts all three spellings, each proved on planted text, against a two-row allowlist — the vault
+grant in `connect_writable`, and `backup.rs`'s `Connection::open` of the archive's own stage under
+`backups/.staging`, never a vault directory. A planted `Connection::open` in another function fails it.
+The two doc comments that still described the pre-O308 flow (`open_read_only`'s, `recorded_embedder`'s)
+are corrected. The O322 literal gate met three literals `main` brought in at the merge
+(`admission.rs`'s `allow_in`, `keys.rs`'s `already_exists` and `corrupt_key_file_message`), each read
+and true where raised, and classifies them.
+
+**What remains.** O302's predicate goes between the door's (a) and (b) when it is built (its item
+5); until then the binding answers its absent-database race with the reopen class, and an absent
+`vault.json` at that arm is the manifest rule's integrity answer where O302 rules the reopen class.
+The non-empty schema-less file beside a *History* manifest, the inode holder, and the residuals the
+ruling lists stand as written.
+
+### O213 — CLOSED 2026-10-12: a vault nothing has written, opened read-only, is a posture refusal — `ReadOnlyNoAnchoredWrite`, exit 1, a class-less 409 — wherever the read-only open can see nothing was migrated
+
+**Filed 2026-09-17 by O204's ruling; measured by its probe P13.** `init`
+writes a manifest and no database; the database appears at the first writable
+store open. A read-only open of that vault refuses `DatabaseMissing` (A33),
+which the CLI reports as exit 2, the tamper verdict — while the vault's own
+authenticated manifest records zero writes, so nothing is missing that was
+ever written. The team-server recipe's `--read-only` first start meets it,
+and `UPGRADING.md` tells operators to start writable once.
+
+**Shape, for a ruling**: when the manifest verifies and records no writes,
+a read-only open either serves the vault as empty or refuses as a posture
+error (exit 1, "start it writable once"); a manifest that records writes and
+has no database stays exit 2. The manifest's `writes` is covered by its MAC,
+so reading it is evidence, not inference.
+
+**Gate**: P13 (`init`, then `--read-only search x`) exits 0 or 1 as ruled;
+the same after one `remember` with the database removed still exits 2.
+
+**Noted 2026-09-30 by O303's ruling.** A fresh vault's EMPTY chain — a database whose first
+writable open stopped between creating `chain_meta` and seeding it — now answers the read-only
+posture `ReadOnlyUnmigrated` (exit 1), the class its absent-table twin answers. It is the same
+question one step later: whatever this entry rules for a vault with no writes, that state follows.
+
+**Relations:** shares a diff surface with O308 — both are answered through the absent-database predicate and door that entry's ruling defines.
+
+**Relations:** shares a question with O323 — the state that entry measures reads as the empty chain here and gets this entry's refusal text.
+
+**Relations:** shares a diff surface with O302 — that entry's read-only retry lands on this entry's fresh-vault state and answers whatever this entry rules.
+
+#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
+
+**The question.** A vault that `init`, `vault create` or `POST /v1/vaults` just made has a MAC-verified
+manifest at genesis and height 0 and no database. Opened read-only, `open_inner_read_only` asks only
+`vault.database_exists()` (store `lib.rs` 5444-5458) and answers `DatabaseMissing`: exit 2, `/v1` 409 with
+`class: "integrity"`. Keep it, refuse as a posture error (exit 1), or serve the vault as empty? The empty
+chain, one step later, follows (O303's note in this entry).
+
+**Prior rulings found, and their disposition.** This entry holds no ruling; its `rul(ed|ing)` hits are its
+filing line and O303's note. Searched also in A33/R4, O204, O268, O291, O303, O308 and O323.
+- **A33/R4**: FOLLOWED for every manifest that records anything; DISTINGUISHED, not refuted, for one that
+  records nothing — a *Fresh* manifest describes no database content, so an absent file contradicts
+  nothing it claims. O204 drew the same line ("A33 … is distinguished, not refuted: here nothing has been
+  authenticated") and O268 item 5 already applies it at the restore stage (`restore.rs` 253-266).
+- **O204** (moving exit 2 to exit 1 is PATCH with an `UPGRADING.md` entry): FOLLOWED.
+- **O303, 2026-09-30, item 5, its note and its dissent** ("one state, one class"; the empty chain is not
+  served): FOLLOWED. It rules out serving, binds the empty chain to this ruling, and licenses the variant
+  moving with it ("follows whatever O213 rules").
+- **R4** (a read-only role cannot fabricate a database): FOLLOWED.
+- **O291 item 11** ("A33 is untouched") describes the delete race and rules nothing here.
+
+**Decided shape.**
+1. **Option (b), through O308's door** (its ruling of this date, items 1-5): a *Fresh* manifest beside no
+   database content, with no non-empty `-wal` and no authenticated staged manifest, answers a posture
+   refusal on the read-only posture — exit 1, `/v1` 409 with no `class` — and creates nothing.
+2. **A new `StoreError` variant**, whose name and text state only evidence: the authenticated manifest
+   records no anchored write; a read-only open neither creates, seeds nor migrates a database; a writable
+   open starts a vault in this state; and, as O204 requires of every refusal, the second reading — if this
+   vault ever held data, do not open it writable: its database or its trail and a later manifest are
+   missing; restore it. A name that asserts history (`NeverOpened…`) is refused: P-LAG (a vault written
+   with every anchor failing) contradicts it.
+3. **One never-anchored vault answers one variant wherever the read-only open can see nothing was
+   migrated**: no content (O308 item 4(f)); a database holding none of `READ_SCHEMA`'s tables beside a
+   *Fresh* manifest (`check_read_schema`, 5652-5684, asks the predicate first); and the empty chain
+   (`check_chain_read_only`'s `Headless::Empty` arm moves from `ReadOnlyUnmigrated` to this variant). A
+   database holding PART of a schema keeps `ReadOnlyUnmigrated`, whose remedy — open it once writable — is
+   right both for a first open interrupted mid-batch and for an older build.
+4. **A *Mixed* manifest answers `ManifestTampered` on the read-only posture**, at the no-content arm (O308
+   item 4(e)) and beside an empty chain, as the writable `adopt_empty_chain` does (6551-6553).
+5. **A database with no `audit` table beside a *History* or *Mixed* manifest is judged on the read-only
+   posture as the erased trail it is**: `refuse_headless_without_table` no longer returns early for a
+   missing `audit` table (5738) when the predicate says the manifest records something, and answers
+   `ManifestTampered` from the predicate (it must not call `judge_headless`, which queries `audit`), as the
+   writable open answers the same file after its schema batch. Beside a *Fresh* manifest it falls through
+   to item 3.
+6. **The variant is registered on every surface**: an arm in `store_err`'s 409 list with no class (its
+   `_ => 500` catch-all, `tenant.rs` 3941, is what a forgotten arm becomes — O238's founding defect one
+   variant later); a `false` row in `the_cli_exit_2_set_and_v1s_integrity_class_are_one_set`; absent from
+   `integrity_verdict`'s set; the MCP mapping checked.
+7. **The two A33 store tests are split**: `a_read_only_open_of_an_absent_database_refuses_instead_of_faking_one`
+   and `reading_the_recorded_embedder_never_creates_the_database` each keep a written-then-deleted arm
+   (`DatabaseMissing`, no file created) and gain a fresh arm (this variant, no file created).
+
+**Where the two runs disagreed, and what settled it.**
+- *The carrier.* Run 1 reused `ReadOnlyUnmigrated` with a reworded text; run 2 minted a variant. Settled
+  for a variant on run 2's evidence: `ReadOnlyUnmigrated`'s text (2092-2096) is about schema age, and the
+  fresh case's required caution ("if this vault ever held data, do not open it writable; restore") is
+  false for an old-schema vault whose database is present, so one fixed text cannot be true of both. Run
+  1's objection — a schema-less file already answers `ReadOnlyUnmigrated` through `check_read_schema`
+  (5512-5513 run before `check_chain_read_only`), so one never-anchored vault would carry two variants —
+  is verified by reading and met by item 3.
+- *The evidence read.* Run 1's strict re-read against run 2's binding: settled in O308's record.
+- *Items 4 and 5.* Run 1's item 6 (a schema-less database beside a recording manifest: exit 1 read-only,
+  exit 2 writable) is verified by reading — `refuse_headless_without_table` returns `Ok` when `audit` is
+  absent (5738) and the schema check answers `ReadOnlyUnmigrated` — and run 2 did not address it; it is
+  adopted. The *Mixed* asymmetry (exit 1 read-only, `ManifestTampered` writable, because `judge_headless`
+  reads only the anchor, 4681-4687) was found by both.
+
+**Options that lost, with their cost.**
+- (a) Keep exit 2: a tamper verdict on every genuine fresh volume and on every `--read-only vault list`
+  over a fresh installation, which the recipe's comment (`deploy/docker-compose.server.yml` 137-139) and
+  `docs/remote-server.md` already describe as a posture refusal; and one never-anchored vault answering
+  two classes by how far its first writable open got.
+- (c) Serve as empty: a second open path whose `verify`, `stats`, label guard and chain arithmetic answer
+  for a file that does not exist; O303 settled serving for the twin state; and a refusal heals where a
+  served empty vault would not — `store_for` caches only a successful open (`tenant.rs` 3360-3420), so the
+  next request after a writer creates the database succeeds. Not escalated: refusing offers nothing new.
+- Reusing `ReadOnlyUnmigrated`: above.
+
+**Claims refuted, the brief's first.** The brief's CLI line numbers do not match `781b5b9` (its content is
+right). The brief omits O323 (the same discriminator, a genesis manifest put back beside an emptied
+`audit`), the *Mixed* asymmetry and the schema-less posture split. Its question whether serving is "what
+a surface offers" is answered: refusing is not. Both runs' proposed wordings infer history ("no writable
+process has opened it"), which P-LAG contradicts. The runs' "the read-only change grants nothing the
+writable posture does not" is true of capability and incomplete as a record: the A2 erase-and-put-back
+answers exit 1 after this ruling where it answered exit 2 — with no loss of detection, since today's exit
+2 fires on every fresh vault and so never told the attack from `init`.
+
+**Probes owed.**
+- P13 on the build: `init`, then `--read-only search x` and `--read-only stats` exit 1; `--read-only vault
+  list` exits 0 naming the vault unavailable; `serve-http --read-only` answers `GET
+  /v1/vaults/default/stats` 409 with no `class`; no `vault.db*` created by any of them. Then one
+  `remember` with `vault.db*` removed: exit 2, `DatabaseMissing`, nothing created.
+- P-FIRST (premise): `init`, one write-free writable command, then `vault.json`'s `writes` and head, at
+  both security levels — that a completed first writable open leaves the manifest past genesis.
+- P-A2-GEN and P-LAG characterise the residual only; neither decides the ruling.
+
+**Dissent.** Run 1 (its refuter and engineering lens) held `ReadOnlyUnmigrated`; settled by the evidence
+above, its objection adopted as item 3.
+
+**Fails silently if** the variant lacks a `store_err` arm or an identity-test row; a gate asserts exit 1
+alone — a fabricated database answers `ReadOnlyUnmigrated`, also exit 1, so the gate asserts the variant
+and that no `vault.db` exists (as `tests/e2e.sh` already does for A33); the A33 fixtures stay on fresh
+vaults only; the predicate reads `writes` alone; the empty chain stays on `ReadOnlyUnmigrated`; item 5
+calls `judge_headless` on a database with no `audit`; the check is proved through `open_read_only` alone
+rather than `open_store_as` and `store_for` (O91).
+
+**What remains.**
+- The A2-class put-back (a create-time manifest beside a deleted database) reads *Fresh* on both postures;
+  the writable posture already adopts it today, and only O245's witness sees a rollback to genesis.
+- P-LAG (every anchor failed, the first open's chain-v2 anchor included) reads *Fresh* too.
+- O323's state (a genesis manifest beside an emptied `audit` with drawers kept) reads as the empty chain
+  and gets this variant's text; its measurement stays O323's.
+- `config check` cannot see this state (it opens no database); `UPGRADING.md` says so.
+- Relations owed, each with its reciprocal in the same commit: O308 and O323.
+
+**Versioning.** PATCH, on O204's precedent: exit 2 becomes exit 1 for a state the documentation already
+describes as a posture refusal. `UPGRADING.md` owes an entry: a fresh `--read-only` start exits 1 (409 with
+no class) where it exited 2, an alert keyed on the integrity class stops firing for it, `--read-only vault
+list` over a fresh installation exits 0, and the O212 entry's sentence on this state changes with it. The
+recipe's comment, `docs/remote-server.md`'s "Start the server writable once first" and `UPGRADING.md`'s "A
+`--read-only` server needs one writable start first" move with it.
+
+#### BUILT 2026-10-12, to the ruling — the empty chain's absent-table twin kept on `ReadOnlyUnmigrated` by item 3's "part of a schema", and one e2e fixture found measuring a fresh vault
+
+**Built.** `StoreError::ReadOnlyNoAnchoredWrite { id }`, its text stating only evidence and the
+second reading (item 2). Answered by the absent-database door's `Fresh` arm on the read-only posture
+(item 1, through O308's door), by `check_read_schema` when NONE of the read schema's tables exists
+and the strict manifest read is *Fresh* (item 3), and by `check_chain_read_only`'s `Headless::Empty`
+arm — and its unreachable `Unseeded` arm — through one helper, which answers `ManifestTampered`
+beside a *Mixed* or *History* manifest (item 4). `refuse_headless_without_table` no longer returns
+early on a missing `audit` table: beside a manifest that records something it answers
+`ManifestTampered` from the predicate, calling no `judge_headless` (item 5). Registered (item 6):
+`store_err` answers 409 with no class (its status pinned beside the identity test, since a class
+comparison passes over a catch-all 500), a `false` row in
+`the_cli_exit_2_set_and_v1s_integrity_class_are_one_set` and in
+`the_integrity_verdict_set_is_pinned_on_this_surface`, absent from `integrity_verdict` with its
+reason; MCP never sees it, because `serve-mcp --read-only` refuses at start (exit 1). The two A33
+store tests are split (item 7): each keeps a written-then-deleted arm (`DatabaseMissing`, nothing
+created) and gains a fresh arm (this variant, nothing created).
+
+**The EMPTY chain and its absent-table twin answer one variant** — O303's "one state, one class",
+which item 3 moves to this variant for the empty chain and does not split: `refuse_headless_without_table`
+answers a judged `Headless::Empty` (the `audit` table empty, no `chain_meta` table, the anchor at
+genesis) through the same helper as `check_chain_read_only`. The first build of this unit kept the twin
+on `ReadOnlyUnmigrated` on its own reading of item 3's "part of a schema" — two variants for one state,
+which the unit's independent review refused; corrected the same day. A database holding part of the
+schema and no `audit` table keeps `ReadOnlyUnmigrated`. O303's pinned read-only class is moved in
+`headless_tests::o303_only_the_empty_chain_is_adopted` (both table arms) and the CLI's
+`o303_open_store_as_read_only_declines_the_empty_chain` and
+`o303_surfaces_answer_an_erased_trail_and_the_empty_chain`, recorded beside O303.
+
+**Gates.** `absent_tests.rs`: `o213_one_never_anchored_vault_answers_one_variant` (no database, a
+zero-length one, a one-page database with no table, an empty chain with and without its table; part of a schema stays
+`ReadOnlyUnmigrated`) and `o213_a_schema_less_database_beside_a_recording_manifest_is_tampering_on_both`
+(items 4 and 5). `tests/cli.rs`: `o213_o308_a_fresh_vault_and_a_deleted_database_on_every_surface` —
+P13 through the binary: `--read-only search` and `stats`, `--read-only serve-mcp`, `serve-mcp
+--read-only` and `--read-only serve-http` on a fresh `default` exit 1 naming the state; `--read-only
+vault list` exits 0 naming it unavailable; a `--read-only` server serving another vault answers the
+fresh one 409 with no `class`; no file created by any of them; P-FIRST at both security levels (a
+write-free writable command leaves the manifest past genesis); then the deleted database is exit 2
+on both postures with nothing created. `tests/e2e.sh`: eleven checks (two O308, eight O213, and the premise
+below), run ad hoc against this build's binaries, the whole script: 778 passed, 0 failed.
+
+**Measured.** Counterfactuals: the door reverted (above) turns the fresh arms red with
+`DatabaseMissing`; the empty chain reverted to `ReadOnlyUnmigrated` turns
+`o213_one_never_anchored_vault_answers_one_variant` and O303's test red; the early return restored
+turns the item-5 test red with `ReadOnlyUnmigrated` naming all nine tables, the shape the ruling's
+run 1 found. On the mined corpus a fresh sibling vault exits 1 and `--read-only vault list` exits 0.
+
+**Found, and fixed in this unit.** `tests/e2e.sh`'s O91 `/v1` arm wrote its "broken" vault with
+`UNDERCROFT_VAULT=broken`, a variable no build honours, so it wrote to `default` and measured A33's
+verdict on a FRESH vault — the ruling's "fails silently if the A33 fixtures stay on fresh vaults
+only", live; under this build it answered the posture refusal. It writes through `--vault` now, with
+a premise that the manifest records a write.
+
+**After the independent review, own defects corrected (2026-10-12).** (1) **A FALSE TAMPER VERDICT
+this unit introduced, measured by the reviewer**: item 5's arm read "no `audit` table" as the erased
+trail on a handle that cannot see the `-wal` — a young vault whose writer was killed before any
+checkpoint (a one-page main file with no table, every table in a hot `-wal`), its `-shm` gone, on a
+read-only mount, escalates to `immutable=1`, which reads no `-wal`, and `--read-only stats` and `verify`
+answered `ManifestTampered`, exit 2, where they answered `ReadOnlyUnmigrated`, exit 1. A tamper verdict
+needs evidence the handle can SEE: the read-only open now marks a handle BLIND when it escalated and a
+non-empty `-wal` (or one a stat cannot read) stands beside its file, and on a blind handle item 5's arm
+and the empty chain's history arm answer the pre-unit `ReadOnlyUnmigrated` and say why in a warning; a
+*Mixed* manifest stays `ManifestTampered`, the manifest alone being that evidence.
+`o213_a_blind_handle_never_reads_a_hot_wal_as_an_erased_trail` builds the reviewer's state (the files a
+kill leaves, the escalation forced as O279's gate forces it, its pause point witnessed): red with
+`ManifestTampered` with the guard off, green with it. Whether a better answer exists is
+**O431**'s. O303's own head-less arms (`Erased`, `Orphaned`) share the hole on a blind handle
+and were left as they stand, named there. (2) **O253's order was inverted**: the strict manifest read
+came AFTER the database reads, so a first writable open committing and anchoring between them could
+pair an empty database with a recorded manifest. The read-only open now reads the manifest first
+(`Vault::manifest_history_in_force`, the manifest rule's fifth reader, which raises nothing) and the
+arms use that read, re-reading strictly only for a miss's class; a source gate holds the order.
+(3) The split above. (4) The tests asserted end states only; every refusal arm now carries a
+reached-step witness (no pause point that holds a descriptor on the database is reached; the connect's
+window test asserts the connect's own descriptor is not), and a create-then-remove counterfactual that
+leaves every end state as the fix does fails it.
+
+**Not driven, stated.** `serve-http --read-only` opens its `/mcp` vault at start, so on a fresh
+`default` it exits 1 before serving; P13's `/v1` 409 was measured with the server serving another
+vault. The orchestrator was checked by reading only: it keys its exit codes on the engine's `class`
+marker (`is_integrity_verdict`), so `ops` over a fresh vault on a read-only engine follows to exit 1
+with no orchestrator change; `orchestrator-e2e` was not run here.
+
+### O322 — CLOSED 2026-10-12: every open-path refusal that can follow the rename or the schema batch says what it leaves as found, from one constant, and a source gate classifies every "nothing was written" literal
+
+**Filed 2026-10-06 by O303's ruling of that day.** The `Orphaned` refusal text
+(`crates/undercroft-store/src/lib.rs` 2680-2685) says "Nothing was written." unconditionally while naming
+"a source build older than 0.19.0" as a cause, and for that population `open_inner` has already run O7's
+`palace.db` to `vault.db` rename (5173) and the schema batch with the fts, kg, manage and retention
+initialisers (5185-5262) before `init_chain` refuses. O303's record admits it among what fails silently
+(its "for the source-built population 'nothing written' is not literal") with no argument for leaving the
+text as it is.
+
+**Shape**: scope the sentence to 1.x databases, or move the judgement ahead of the rename and the schema
+batch for a database with no `chain_meta` table — a ruling, since the second moves O7's order. **Gate**:
+a source-built-shaped database's refusal text and its bytes after the refusal agree.
+
+#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
+
+**The question.** `ChainJudgement::answer` maps `Headless::Orphaned` to an integrity finding ending "Nothing
+was written." (store `lib.rs` 2680-2686) while the writable open has already run O7's `palace.db` rename,
+the schema batch and, at one of its two sites, the fts, kg, manage and retention initialisers. Scope the
+sentence, move the judgement ahead of the rename and the batch, or leave it with an argument?
+
+**Prior rulings found, and their disposition.** O303, 2026-09-30, item 8 (which wrote the text) and its
+"fails silently if … for the source-built population 'nothing written' is not literal": FOLLOWED — this
+closes what it admitted. O303, 2026-10-06 (the maintainer's approval: D′ stands; no "open it once with
+1.6.1"; its residual that the remedy cannot work for a source-built database): FOLLOWED. O284 item 2 ("the
+wording says what is true"): FOLLOWED. O7 (the maintainer's naming ruling; its mechanism refuted and
+rebuilt by O279, O280 and O281): UNTOUCHED — nothing is reordered, so nothing is escalated. The
+maintainer's 1.0.0 decision: FOLLOWED.
+
+**Decided shape: (a), each text naming what it guarantees.**
+1. Every open-path refusal that can follow the rename, the schema batch or the initialisers stops saying
+   "Nothing was written" and names what its path leaves as found. The sites, the union of both runs: the
+   store's `answer()` `Orphaned` arm (2682); `foreign_race` (4461-4466); both `settle_foreign` texts
+   (4507-4514, 4517-4524); `init_chain`'s re-adoption race (6452-6456); `chain::writes`'s two texts
+   (`chain.rs` 322-337, reached through `judge_chain` at 4632); and the vault crate's `ManifestMoved`
+   (~424), `StagedLost` (2262-2269) and `absent()` (2364-2384), reached from the same lock path through
+   `license_promotion`, `anchored_head` and `promote_licensed`. `refuse_before_effect`'s "The rotation
+   reconcile wrote nothing: …" (4544-4545) already says what it guarantees and stays.
+2. One shared constant carries the guarantee every site has: the `audit` rows and `chain_meta` are as
+   found (no step before either site appends a record; `init_chain` judges before it creates
+   `chain_meta`, and `adopt_empty_chain`'s lock rolls the table back on a refusal). The lock-path sites
+   add `vault.json`, `vault.json.next` and the key-generation marker as found: nothing acts before their
+   judgement and the lock rolls the marker back. The `init_chain` sites do not claim those three, because
+   this open's own reconcile may have promoted a staged manifest or re-seeded the marker before them. No
+   text claims the `-wal` is as found: the legacy rename's TRUNCATE checkpoint runs first.
+3. The vault-crate texts are reworded so they stay true on their non-open callers too (the anchor door,
+   `verify`).
+4. The `Orphaned` remedy names both readings it gives: an edited or rolled-back vault — restore it from a
+   backup that verifies; a database a source build older than 0.19.0 wrote and no 1.x build opened — no
+   supported path (O303, 2026-10-06; `UPGRADING.md`). Text only; nothing new is served.
+5. A source gate counts every "Nothing was written" literal in the store and vault crates' production code
+   against an allowlist with reasons (O80: counted against the code), so a site neither run found — store
+   `lib.rs` 910, 931, 6008, 7545, `chain.rs` 275 among the candidates — is classified rather than missed.
+
+**Where the two runs disagreed, and what settled it.** Run 1 proposed ONE constant claimed true at every
+site; run 2 per-site subsets. Settled for per-site subsets with a shared core (item 2), by reading
+`reconcile_rotation` (4349-4446): its ACT block promotes, removes a stage and commits a marker before
+`init_chain` runs, so at the `init_chain` sites "`vault.json`, `.next` and the marker as found" is not
+guaranteed. The site lists differed: run 1 missed the vault-crate texts, run 2 missed `chain::writes`'s;
+the union stands, and item 5's gate keeps it complete.
+
+**Options that lost, with their cost.**
+- (b) Judge first: a second, schema-tolerant judge or a judgement inside `migrate_db_filename`'s exclusive
+  hold — a second implementation of O296's one judgement and a reorder of the stretch O279/O281 pin — for
+  a population 1.0.0 withdrew, and it would still leave the `init_chain` sites false.
+- (a) by plumbing what this open did (the security lenses: the rename's outcome, `schema_version` before
+  and after): true, but new plumbing that becomes its own thing to gate, threaded into typed refusals one
+  of which (`ManifestTampered`) carries no text, for what the rename's own warning already logs.
+- (c) Leave it: a false sentence in an integrity verdict, which O303 itself listed under "fails silently".
+
+**Claims refuted, the brief's first.** The brief lists `refuse_before_effect`'s staged text among the false
+ones; it is scoped and true. The brief misses the vault-crate texts, `foreign_race`, `init_chain`'s race
+and `chain::writes`. Its "on an already-migrated 1.x database these are no-ops by reading" holds only at
+1.7.0's schema. The population is wider than source builds: any refused writable open of a vault still
+named `palace.db` (1.0.0 to 1.4.x, never opened by 1.5.0 or later) runs the TRUNCATE checkpoint and the
+rename first, and `idx_audit_record_id` first ships in `v1.1.0` (`53949bd`, after the `v1.0.0` tag). The
+filing's "(5185-5262)" and O303's 2026-10-06 "(lib.rs 5173-5262)" overstate for the source-built
+population, which has no keycheck marker before `cc0e1c7` and so refuses at `reconcile_rotation` (5233),
+before the initialisers; both records are corrected beside, never in place. The memory lens's "every
+pre-judgement effect is evidence-neutral": the TRUNCATE checkpoint can discard superseded WAL frames, which
+is why no text claims the `-wal`.
+
+**Probes owed (build gates; the text is chosen by reading).** Two fixtures, each run on `781b5b9` and on the
+build, each naming its site with a pause witness: (1) the lock path — `palace.db`, the keycheck row
+deleted, `chain_meta` dropped, `idx_drawers_room` and `idx_audit_record_id` dropped, a non-empty `-wal`;
+(2) the fast path — `palace.db`, `idx_audit_record_id` dropped, the marker kept. Each records file names,
+`sqlite_schema` and every file's SHA-256, asserts the narrowed text and the absence of "Nothing was
+written", asserts what the text claims (`vault.json`'s bytes, the `audit` rows and tags, `chain_meta` and,
+at the lock path, the marker and `.next`, as found), and pins the rename and the indexes as effects the text
+does not deny. On the read-only posture both show no rename and a true text. P-1x322 (a `v1.0.0`
+release-built vault) is the cheaper real-population check; P-SRC322 only if the source-built population is
+revisited.
+
+**Dissent.** The security lenses of both runs would plumb what this open did; not adopted, for the cost
+above.
+
+**Fails silently if** the only fixture is `to_v1` plus `DROP TABLE` (marker kept, `vault.db`, both indexes
+present), which reaches the `init_chain` site and exercises none of the effects; a posture-blind rewording
+is false on the read-only posture; one site is reworded and not the others; a vault-crate text stops being
+true on the anchor or `verify`; O296's pinned `Want` fragments move without the record beside them.
+
+**What remains.** D′'s residual (O303, 2026-10-06): a source-built database is refused as integrity for
+what is really age. Unchanged; item 4 only stops the remedy pointing that reader at a backup that cannot
+help.
+
+**Versioning.** PATCH, text only. No `UPGRADING.md` entry is owed.
+
+#### BUILT 2026-10-12, to the ruling — the gate found two literals neither run listed
+
+**Built.** `CHAIN_AS_FOUND` ("The `audit` rows and `chain_meta` are as found") and
+`LOCK_PATH_AS_FOUND` (", and so are vault.json, vault.json.next and the key-generation marker") in
+the store crate (item 2). The `Orphaned` arm of `ChainJudgement::answer` carries the core only —
+the function is shared by the lock path, `init_chain` and the read-only open — and names both
+readings (item 4); `foreign_race` and both `settle_foreign` texts carry the lock-path set;
+`init_chain`'s re-adoption race and `chain::writes`'s two texts the core. The vault crate's
+`ManifestMoved` says this promote wrote nothing and both manifest files are as found; `StagedLost`
+and `absent()` say their read wrote no file (item 3). `refuse_before_effect`'s text stays (item 1).
+O296's pinned `Want` fragments do not move: none held "Nothing was written".
+
+**Gates.** `o322_every_nothing_was_written_literal_is_classified` counts the phrase, case-folded, in
+both crates' production code with each string continuation joined and comments cut, per `(file,
+fn)`, both ways, after proving its counter on planted text: nine rows, eleven literals — the backup
+door's read-only refusal, `require_head`, `retired_handle` (two), `stale_keys`, the anchor's note
+scoped to `vault.json`, the allow's destination check, `vault_db::close` ("written through it"),
+and `keys.rs`'s `source_mismatch_message` (two) and `material_missing_message`. The last two rows
+are the ones neither run listed, both true where raised. `o322_an_open_path_refusal_says_what_it_leaves_as_found`
+runs the ruling's two fixtures — the lock path (`palace.db`, the marker deleted, `chain_meta`
+dropped, `idx_drawers_room` and `idx_audit_record_id` dropped, a non-empty `-wal`) and the fast
+path (`palace.db`, `idx_audit_record_id` dropped, the marker kept) — each witnessed at its site by a
+new pause point (`Opener::RotationLock`, `Opener::InitChain`), at both levels: the text carries the
+constant and both readings and no "nothing was written"; the manifest, the staging file, the marker,
+`chain_meta`'s absence and every `audit` label and tag are as found; the rename and the recreated
+indexes are pinned as effects the text does not deny; the read-only open renames nothing and says
+the same.
+
+**Measured.** Not on 781b5b9: the text reverted to "Nothing was written" turns both tests red. P-1x322
+(a `v1.0.0` release-built vault) was not run; the fixtures are this build's own shapes.
+
+### O294 — CLOSED 2026-10-12: one toolchain builds everything — `rust-toolchain.toml` pins 1.98.1, which built every v1.5.2 to v1.6.1 binary and whose std carries Unicode 17.0.0; `undercroft-core` refuses to compile on any other Unicode version; CI installs the pin by name, and a preflight holds the images and every workflow to it
+
+**Filed 2026-09-28 by O289's ruling (its engineering lens, confirmed by the refuter).** The
+Docker images pin `rust:1.90-slim-bookworm`, so every suite, the lint and the Linux images build
+on 1.90. `release.yml`'s binary targets build with whatever stable toolchain each runner has
+installed (it only adds the target), and `windows-check` takes `dtolnay/rust-toolchain@stable` —
+so the Windows, macOS and native Linux artifacts are built by a compiler no suite ran, and a claim
+about "Rust 1.90's std" (O289's Windows reading) is not a claim about what ships.
+
+**Shape**: one pinned toolchain for every build — a `rust-toolchain.toml`, or the version named in
+both workflows — with a gate that the Dockerfile's image and the pin agree.
+
+**Gate**: a preflight comparing the Dockerfile's `rust:` tag with the workflows' toolchain, both
+directions.
+
+**Noted 2026-10-12 by this entry's build — two relations that were declared here.** "Sequenced
+before O275 — a claim about Rust's rename on Windows is a claim about the toolchain that builds the
+shipped binary, which this entry pins", and "shares a diff surface with O168 — both change
+`windows-check`'s toolchain step". This entry is closed and both partners are open, so each is a note
+on both sides rather than a `Relations:` line, which names open entries only; O275 and O168 carry the
+matching notes.
+
+**Noted 2026-10-08 by O166's ruling (its item 5).** The hash identity's token space depends on std's
+Unicode tables (`is_alphanumeric` in `segment`, `to_lowercase` in `search_key`), so two native
+release artifacts built on different stable toolchains can tokenize a newly assigned codepoint
+differently under one name. O166's golden-vector assertion runs only in the Docker toolchain and
+cannot see the native release builds until this entry pins them.
+
+**Noted 2026-10-12 by this entry's ruling (its item 6).** Before this pin the images tokenized with
+Unicode 16 and the prebuilt binaries with 17 under one identity, and O421 heals it.
+
+#### RULED 2026-10-12 by three lenses (Agentic Memory Architecture; Retrieval and text processing (Unicode segmentation, normalization stability, vector-space identity); Release engineering and supply chain (reproducible toolchains, what was shipped vs tested, UPGRADING)) and an adversarial refuter
+
+**The question.** Which toolchain do the releases, the images and the tests pin, and what does
+`UPGRADING.md` owe? The build under review (`train2-o294` at `91559e5`, carrying O326 and O327 too)
+pins `1.90.0`, the images' compiler. The question this entry did not know it carried: the hash
+identity's tokens read std's Unicode tables, so the pin's VALUE decides which released population's
+vector space and room derivation move.
+
+**Prior rulings found, and their disposition.** Searched case-insensitively for `rul(ed|ing)` in
+O294 and in every entry it names (O289, O275, O168, O166), plus O163, O189, O233 and O238.
+- O294 carries none. "Filed … by O289's ruling" and "Noted … by O166's ruling" are filings; the
+  shape ("the Dockerfile's image and the pin agree") is a hypothesis, not a ruled value.
+- **O168's ruling, items 4 and 5** (the legs check with the release's mechanism; "O294's pin must
+  cover these legs"): FOLLOWED. Any pin value satisfies them, and the build's script already does.
+- **O275's maintainer ruling** ("approve all as recommended", 2026-10-08), whose approved text runs
+  the Windows probe "on the pinned 1.90 toolchain (O294 first, or pinned in that file and stated)":
+  its INTENT is FOLLOWED and its NUMBER is REFUTED beside it. The intent is O275's own relations line,
+  "a claim about Rust's rename on Windows is a claim about the toolchain that builds the shipped
+  binary, which that entry pins". The number described the pin the panels then assumed. No Windows
+  binary was ever built by 1.90 (below), so "1.90" never described what ships. This is an
+  engineering value inside a maintainer-approved text, not a product, licence or naming choice, so
+  it is revised in the open: a sentence beside O275, and the changed number put before the
+  maintainer in the pull request that carries this pin, before O275's run is dispatched.
+- **O166's ruling, items 2, 5 and 6**: FOLLOWED, item 2 amended (O166's record of this date).
+- **O189's `textfit` version assertion** (a derived artifact pinned to one Unicode version, with a
+  check that refuses a runtime that does not match): FOLLOWED as the precedent for the assertion
+  below.
+- **O233 and O238** (an older binary refusing a vault a newer one has touched, shipped as a fix and
+  documented in `UPGRADING.md`): FOLLOWED for the identity entry this ruling files.
+
+**The evidence, re-read here.**
+- What built each release (`o294/p2-result.txt`, the runner image's documented toolchain; every
+  `release.yml` binary job ran `rustup target add` alone, lines 48 and 123): 1.97.1 built 47 of the
+  130 v1.* binaries, 1.98.0 built 53, 1.98.1 built 30 (v1.5.2, v1.6.0 and v1.6.1, ten of ten). No
+  tag carries a `rust-toolchain` file. Every tag's Dockerfile builds `FROM rust:1.90-slim-bookworm`
+  (read at `v1.0.0`, `v1.5.2`, `v1.6.1`), so every GHCR image, `docker build`, compose service and
+  suite is 1.90.
+- What the tables are. The review's `rev-o294/uni/u.rs` counted 144,434 alphanumerics under 1.90.0
+  (Unicode 16.0.0) and 149,106 under 1.97.1 and 1.98.1 (17.0.0); its output was saved nowhere. Lens
+  2 regenerated 149,106 independently from the locked `icu_properties_data` 2.2.0 Alphabetic list
+  and `unicode-properties` 0.1.4's General_Category (both Unicode 17), and found 4,672 codepoints
+  newly assigned in 17 that are Alphabetic or Numeric there, 4,298 of them CJK Extension J; 28 of the
+  newly assigned change when lowercased; no character assigned in 16 changes General_Category across
+  the letter/number line or its Changes_When_Lowercased value. That is UCD data, not std's tables,
+  and the Other_Alphabetic leg for existing characters was not compared as a set — P-U1 owes both.
+  The refuter's own read of the locked normalization tables (`refuter/ranges.out`): no character new
+  in 17 has a canonical decomposition, the one with a compatibility decomposition (U+A7F1) lies
+  outside `expand_compat`'s ranges, and the 25 new ones inside its Arabic-presentation range carry
+  none — so `search_key`'s output moves between the two tables only through case, which is what
+  `drawers_fts` stores.
+- The locked `unicode-normalization` 0.1.25 declares `UNICODE_VERSION: (u8, u8, u8) = (17, 0, 0)`
+  (`tables.rs` 18, re-exported at `lib.rs` 64); the workspace asks for `"0.1"` (`Cargo.toml` 66).
+- Every compiler-dependent site the brief listed exists as stated, and three more do:
+  `lexical_score`'s split (`crates/undercroft-store/src/lib.rs` 13000), and two `is_numeric` guards
+  in channels that admit or rank (11243, 12609). A hand list of sites is therefore incomplete, which
+  matters only to a decoupling (the escalated entry below), never to an assertion over the tables.
+- A codepoint alphanumeric under 17 and not under 16 is a delimiter under 16 (`script.rs` 259), so
+  a query made of such characters tokenizes to nothing and its drawer cannot be found on any channel.
+  Under 17 it is a token. No walk changes that: it is the table, not a stored vector.
+- `drawers_fts` is `fts5(text)` (`lib.rs` 6672, 6756), so its token boundaries are SQLite 3.46.0's
+  `unicode61`, pinned by the lock, and a codepoint absent from SQLite's table is category 0, which is
+  a token character (`sqlite3.c` 255652, 256132-256155). `fts_candidates` (`lib.rs` 10483-10520)
+  ORs Rust's query terms as phrases. So under 16 a newly assigned letter glued to other letters
+  makes Rust's term (`abc`) differ from the index's token (`abcX`): the prefilter can return a
+  non-empty set without that drawer and cut it, which is the failure `needs_full_scan`'s comment
+  names (12766-12773). Under 17 the two agree for a caseless one. The images' hmac-only vaults carry
+  that cut today (a sealed vault has no FTS); 1.90 in the binaries would carry it to theirs.
+- The build's own record: "macOS, arm64 Linux and the Windows `-ort` build first meet 1.90.0 at the
+  next release". 1.98.1 built all ten v1.6.1 assets.
+
+**Ruled.**
+1. **One pin for every build, and its std carries Unicode 17.0.0** — the toolchain that built
+   v1.5.2 to v1.6.1, `1.98.1`, unless P-U8 clears only another 17-carrying version. The build's
+   mechanism stays whole: `rust-toolchain.toml`, `.github/scripts/pinned-toolchain.sh` and the
+   `supply chain is pinned` preflight are pin-agnostic; the Dockerfile's builder and CI's lint
+   container move to the pin's full-version image together with the file, as that preflight already
+   requires. The build does not merge with `1.90.0`.
+2. **The space is asserted at COMPILE time, in `undercroft-core`**, which every binary links: an
+   unnamed `const` asserting all three components of `core::char::UNICODE_VERSION` and of
+   `unicode_normalization::UNICODE_VERSION` equal `(17, 0, 0)`, its message naming the hash identity
+   and this entry. A test-only assertion cannot see a native build; this fails the compile on every
+   path that ignores `rust-toolchain.toml` (`cargo +x`, `RUSTUP_TOOLCHAIN`, a distro `cargo`) and in
+   every `cargo check`. The workspace pins `unicode-normalization = "=0.1.25"` so no `cargo update`
+   moves NFC under the identity unannounced; the assertion is the gate, the exact pin the convenience.
+3. **What the pin moves is the identity entry's** (filed by this ruling, below): the GHCR images'
+   token space moves from Unicode 16 to 17, which is healed by a `undercroft-hash-v4` walk in the SAME
+   release. **No tag carries this pin without that walk.** Merging the pin to `main` is allowed; the
+   identity entry is placed under the release heading that carries this entry once the maintainer
+   fixes that release, and O309's tag-reading arm then refuses to mark the release released while
+   the identity entry is open. Building the two in one train is simpler and preferred.
+4. **`UPGRADING.md`.** The build's entry is rewritten for the pin it names, and gains what the
+   assertion stops: a native source build on a toolchain whose std is not Unicode 17.0.0 fails to
+   compile, with the assertion's message. Its last paragraph's "The prebuilt binaries, the GHCR
+   images and a `docker build` are unaffected" is true only of the fetch symptom and under this ruling
+   is false of the images' token space; it is scoped to the fetch and points to the identity entry's
+   own `UPGRADING.md` lines. `undercroft config check` cannot detect a build failure: a build is not
+   a declaration (the build's own sentence, kept).
+5. **Records that rest on 1.90 are scoped, not deleted.** Thirty-one `ROADMAP.md` lines name 1.90 on
+   `c578c76`. Each that states a std or cargo behaviour as a property of what ships — at least O254's
+   `File::lock` (5305), O289's Windows `rename` (10389), O287's P4 error mapping (14283), O275's
+   `FileRenameInfoEx` reading (43010, 43655), O157's cargo reach (23042) and P-SLICE (35652) — gains a
+   sentence beside it after a desk read of the pin's `rust-src`: the same, or what differs. None of
+   them ever described a shipped Windows or macOS binary; under this ruling they are verified against
+   what ships for the first time. O275's probe runs on the pin.
+6. **The "Noted 2026-10-08" paragraph gains its population sentence**: before this pin the images
+   tokenized with Unicode 16 and the prebuilt binaries with 17 under one identity, and the identity
+   entry heals it.
+
+**Decision rule, written before the probes.** If P-U1 shows 1.90.0 and the pin carry IDENTICAL
+token-path tables (the review's unsaved figures refuted), no released divergence exists, the
+identity entry is withdrawn by evidence, and the pin's value becomes an engineering choice this
+ruling does not make: it is re-asked with the release-engineering costs below (a first compile of
+four shipped builds at the tag under 1.90, an older std, against the 1.90 records' re-reading), and
+the compile-time assertion lands at whatever version that answer pins. If P-U1 shows 1.97.1,
+1.98.0 and 1.98.1 differ from each other on a token-path property, the pin is still the newest of
+them and the walk heals the third population. If P-U8 finds no `rust:<pin>-slim-bookworm` image, the
+pin is the newest 17-carrying version that has one; the builder and the runtime stage never change
+distribution apart (a newer glibc in the builder than in the runtime stage fails at start, not at
+build).
+
+**Options that lost.**
+- **T1, 1.90.0 alone (the build under review).** Every prebuilt-binary vault loses lexical and
+  vector reach to 4,672 codepoints at upgrade, and no walk restores it; the FTS cut above reaches
+  those vaults; the token path keeps reading Unicode-16 `char` tables beside Unicode-17 normalization;
+  both macOS targets, arm64 Linux and the Windows `-ort` build meet a compiler that never built them
+  first at the tag; and the shipped std goes back eight minor releases (1.90.0 is dated 2025-09-14,
+  1.98.1 2026-09-01).
+- **T1 with the token path decoupled at Unicode 17 (lens 1).** Sound, and not refuted: once a
+  decoupling lands the pin is a free engineering choice. It waits on a licence and dependency
+  decision that is the maintainer's (escalated below) and on an exactness probe, and it ships the
+  same walk. A Unicode-17 pin now does not prevent it later.
+- **T3, no pin.** The next tag is built by whatever the runner image carries, and the space moves
+  with it unannounced.
+- **Split pins.** The entry's own shape refuses them.
+
+**Claims refuted.**
+- The brief: "1.98.0, which built 47 of the 130 release binaries" — it built 53; 47 is 1.97.1.
+- The brief's T1 costs omit the live retrieval loss, and its site table omits `lexical_score`'s
+  split and both `is_numeric` guards (above).
+- The brief: a source builder outside CI "is unguarded" and O166's assertion "runs in Docker alone"
+  — true of a test, false of a `const` assertion, which no option offered.
+- The brief: under T2 "every published test count is re-measured under the new compiler" — the
+  battery compares counts on every run under any compiler; nothing here moves a count.
+- Lens 3: "under any heal, the vault-space cost of T1 and T2 is the same" — false: T1 removes reach a
+  walk cannot restore, T2 removes none.
+- Lens 3: T1 reaches tested-equals-shipped "by moving the one untested artifact" — it moves both
+  macOS targets, arm64 Linux and the Windows `-ort` build onto a compiler that never built them (its
+  own item 4, and the build's record), while 1.98.1 built every v1.6.1 asset.
+- Lens 3: the build's `UPGRADING.md` entry "contradicts itself" — its cause and fix paragraphs are
+  consistent about the fetch; the defect is its silence on the token space (lens 2's reading).
+- Lens 2: "no caseless newly assigned codepoint can make the prefilter under-return" — true once
+  the query side reads 17; under 16, today's images, one glued to a letter can.
+- Lens 2's equality |A17 ∩ assigned-in-16| = |A16| proves equal COUNTS, the inference the brief
+  warned against, and |A16| is the unsaved figure; P-U1 settles it.
+
+**Probes owed (the integrator's: a private `CARGO_TARGET_DIR` per tree and toolchain;
+`MSYS_NO_PATHCONV=1` on any ad-hoc `docker run` passing `-e`, `-v` or `-w` container paths; each
+binary proved fresh; every scratch edit chained to its run with `&&`).**
+- **P-U1, first.** One standalone program, outside the workspace so `rust-toolchain.toml` cannot
+  override it, built in `rust:1.90.0-`, `1.97.1-`, `1.98.0-` and `1.98.1-slim-bookworm`. For every
+  scalar value: `is_alphanumeric`, `is_alphabetic`, `is_numeric`, `is_uppercase`, `is_lowercase`,
+  `is_whitespace`, `is_control`, the `to_lowercase` and `to_uppercase` strings, and
+  `str::to_lowercase` of `"A" + c + "Σ"` and `c + "Σ"` (Final_Sigma reads Cased and Case_Ignorable of
+  neighbours); plus `char::UNICODE_VERSION`. Sha256 each file, diff pairwise, and classify each
+  difference as newly assigned in 17 or assigned in 16 by the host Python 3.14's `unicodedata`
+  (asserted 16.0.0, so no download). Required: per-property symmetric differences, the count of
+  assigned-in-16 changes, the Hebrew ranges, Cc and White_Space, and whether 1.97.1, 1.98.0 and
+  1.98.1 are byte-identical. Premise: 1.90.0 and 1.98.1 print different versions, or one toolchain
+  was compared with itself.
+- **P-U8, before the number is written.** `rust:<pin>-slim-bookworm` exists, and its index digest;
+  `cargo fmt --check` and the clippy runs of the `lint` service (default and both telemetry builds)
+  under it; the whole battery under the new images; `cargo build --locked` leaves `Cargo.lock`
+  byte-identical (O371); the runtime stage starts the built binary.
+- **The assertion's counterfactual.** `undercroft-core` with the assertion fails to compile under
+  1.90.0 and compiles under the pin; premise, the error text names the assertion.
+- **The desk reads of item 5**, from the pin's `rust-src`.
+- **P-U2, optional, the maintainer's permission (a download).** Each v1.* asset's embedded
+  `/rustc/<commit>/library/` paths mapped to a release, which reads ELF, Mach-O and PE alike;
+  counterfactual, the GHCR image's binary shows 1.90.0's `1159e78c4`.
+
+**Dissent.** Lens 3 holds T1 at Unicode 16; refuted above. Lens 1 holds T1 conditional on a
+decoupling at Unicode 17, with this ruling's pin as its own stated fallback; recorded, and open again
+if the escalated decoupling lands.
+
+**Fails silently if** the assertion is written as a `#[test]`, or in a crate a release target does
+not compile, or compares only the major version; the pin moves without the identity walk in the same
+release; O275's probe runs on 1.90 after the pin has moved; a 1.90 reading is left describing what
+ships; P-U1's premise arm compared one toolchain with itself; or the builder's distribution moves
+without the runtime stage's.
+
+**What remains.** P-U1 and P-U8; which release carries the pin and the walk (the maintainer's); the
+sentences beside O275 and the 1.90 records; O424 and O425 as the build filed them.
+O326 and O327 are separable from this pin and unaffected by it.
+
+**Version class.** PATCH: what ships was built by a compiler no suite ran, and one identity named two
+token spaces; the pin removes that defect, and the token-space change it makes is healed by the
+identity entry in the same release. The assertion can stop a native source build, which the
+rewritten `UPGRADING.md` entry states; `config check` cannot detect it. Rides `1.7.0`, already MINOR.
+
+#### BUILT 2026-10-12, with O326 and O327 — the ruling's pin and its compile-time assertion; the first build, at 1.90.0, was mine and was stopped by its review
+
+**The first build was wrong, and the defect was mine.** Built on 2026-10-08 on this branch
+(`91559e5`), it pinned 1.90.0, the images' compiler, reading the filed shape ("a gate that the
+Dockerfile's image and the pin agree") as the answer to which version. Its own measurement said no
+v1.* binary had ever been built by 1.90.0, and it did not ask what moving every shipped target onto
+that compiler would move. The independent review found it: the hash identity's tokens read std's
+Unicode tables, and 1.90.0's are Unicode 16.0.0 where every shipped binary's were 17.0.0, so that pin
+would have taken lexical and vector reach to 4,672 codepoints from every prebuilt-binary vault at
+upgrade, with no walk able to give it back. The ruling above settled the value; this record is the
+rebuild. The first build's record never reached `main` and is not kept.
+
+**What landed.**
+- `rust-toolchain.toml`: `channel = "1.98.1"`, `profile = "minimal"` and nothing else, because a
+  `components` or `targets` line would make rustup fetch inside the offline images; the full version,
+  because the images install the toolchain under that name. Measured in `rust:1.98.1-slim-bookworm`
+  with the checkout mounted read-only: `rustup show active-toolchain` answers
+  `1.98.1-x86_64-unknown-linux-gnu (overridden by '/src/rust-toolchain.toml')`, nothing fetched.
+- The Dockerfile's builder and CI's lint container name `rust:1.98.1-slim-bookworm` (index digest
+  `sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730`, read by pulling it). The
+  runtime stage stays `debian:bookworm-slim`, the builder's distribution, so the glibc the binary is
+  linked against is the one it starts on (the ruling's decision rule; measured below).
+- `.github/scripts/pinned-toolchain.sh` is the one installer: it holds the file whole, installs the
+  channel by name with `--profile minimal --no-self-update`, adds the job's target, and fails unless
+  `rustc` in the checkout reports exactly the pin, because a `RUSTUP_TOOLCHAIN` or a directory
+  override outranks the file. Its `--channel` mode prints the pin and touches nothing, and the
+  preflight reads the pin through it, so the file has one reader. `release.yml`'s `binaries` and
+  `binaries-ort` call it with their target in place of `rustup target add`, `windows-check` in place
+  of `dtolnay/rust-toolchain@stable`, and `audit` before `cargo audit`.
+- **The assertion** (the ruling's item 2): an unnamed `const` in `crates/undercroft-core/src/embed.rs`,
+  beside `HASH_EMBEDDER`, asserting all three components of `core::char::UNICODE_VERSION` and of
+  `unicode_normalization::UNICODE_VERSION` equal `(17, 0, 0)`, its message naming `HASH_EMBEDDER`,
+  this entry and O421. Every binary links `undercroft-core`, so the assertion stops every path that
+  ignores the file — `cargo +x`, `RUSTUP_TOOLCHAIN`, a distro `cargo` — and every `cargo check`. The
+  workspace pins `unicode-normalization = "=0.1.25"`; `Cargo.lock` already held 0.1.25.
+- **Seven sites the newer clippy refuses**, eight minor releases of lints arriving at once, each
+  rewritten to the form its lint names with the result unchanged: `manual_checked_ops` (`late.rs`,
+  `checked_div(dim).unwrap_or(0)` for the `dim == 0` guard it replaces), `useless_borrows_in_formatting`
+  twice (the orchestrator's `engine.rs`), `chunks_exact_to_as_chunks` three times (vault `lib.rs`,
+  store `fdeidx.rs` and `pq.rs`, where `as_chunks::<4>().0` drops the remainder exactly as
+  `chunks_exact(4)` did), `explicit_counter_loop` (`pqidx.rs`, the page numbers zipped rather than
+  counted) and `unnecessary_sort_by` (the bench's `vs.rs`, a stable `sort_by_key` on `Reverse`, the
+  order the stable `sort_by` gave).
+- `CONTRIBUTING.md`, `README.md` and `docs/getting-started.md` say a native build uses the pin, and
+  `CONTRIBUTING.md` that a std of another Unicode version does not compile; `UPGRADING.md`'s entry is
+  written for 1.98.1 and the assertion (the ruling's item 4).
+
+**Measured — P-U1, first.** One program outside the workspace, built by each toolchain's own `rustc`
+in `rust:1.90.0-`, `1.97.1-`, `1.98.0-` and `1.98.1-slim-bookworm` (each by its index digest) and run
+with no network, printed eleven properties of each of the 1,112,064 scalar values and
+`char::UNICODE_VERSION` — the ruling's list, `is_alphanumeric` through `str::to_lowercase` of the two
+sigma contexts. 1.97.1, 1.98.0 and 1.98.1 print byte-identical files (sha256 `e2b92bc5…`,
+Unicode 17.0.0), so the three released populations are one, 1.98.0 — which the review had not
+measured — among them. 1.90.0 prints Unicode 16.0.0 (`d1afc722…`; the premise: two versions from two
+toolchains) and differs on 4,702 scalars, 4,699 of them newly assigned in 17 (classified by the host
+Python 3.14's `unicodedata`, asserted at 16.0.0): `is_alphanumeric` on 4,672, every one newly
+assigned and every one gaining the property, none losing it, 4,298 of them in CJK Extension J (lens
+2's figures, now read from std itself), `is_alphabetic` 4,662, `is_numeric` 13,
+`is_uppercase`, `is_lowercase`, `to_lowercase` and `to_uppercase` 28 each, `str::to_lowercase` of
+`"A" + c + "Σ"` 100 and of `c + "Σ"` 55; `is_whitespace`, `is_control` and both Hebrew ranges 0.
+**Three characters assigned in 16 move.** U+0295 LATIN LETTER PHARYNGEAL VOICED FRICATIVE leaves
+Lowercase, so it is no longer Cased and, not being Case_Ignorable either, stops a following capital
+sigma reading as final: `str::to_lowercase` of `ʕΣ` is `ʕς` under 1.90.0 and `ʕσ` under 1.98.1.
+`search_key` lowercases through `str::to_lowercase`, so a word in which U+0295 precedes a capital
+sigma is the one class of characters assigned in 16 whose token moves; its `is_alphanumeric` does not,
+U+0295 being Alphabetic in both. U+A7D3 and U+A7D5 gain uppercase mappings (U+A7D2, U+A7D4), which no
+token path reads (`to_uppercase` capitalises a speaker label in `convo.rs` alone). `entity.rs`'s
+capitalised-word test reads `is_lowercase`, live and unstored, so it moves with the toolchain and
+needs no walk. By the ruling's decision rule the tables differ, the identity entry stands, and the
+pin is the newest of the three identical toolchains; CHANGELOG names U+0295's class, as O421's
+ruling asks.
+
+**And two identifiers move with U+0295 — found by the second independent review, mine to have
+missed.** The same `str::to_lowercase` feeds two id recipes: `normalize_wing_name` (`normalize.rs`
+625-635), through which `room_for_file` derives a mined drawer's room, a component of its id; and
+`refine`'s lowercased subject and predicate (`refine.rs` 244-245), from which `kg_add_grounded`
+derives the triple id. So a stem or a triple term holding `ʕΣ` derives `ʕς` on the images' builds
+and `ʕσ` on the binaries' — a different room and drawer id, a different triple id — as one holding a
+codepoint new in 17 does, and as the 28 newly cased letters do. O421's ruling item 4 treats these as a
+stated cost, never a migration, and no walk may move an id; its classes were each one character short,
+which a note beside it records. Every later move of an id input with a Unicode version is filed as
+O432, because neither O421 (the 1.90-to-1.98.1 move) nor O422 (the data source) asks whether an
+identifier may move at all.
+
+**P2, the population.** Read from the runner image each `Binaries` job logged and that image's own
+readme (the jobs ran `rustup target add` alone, which installs no toolchain): v1.0.0, v1.1.0 and
+v1.1.1 on 1.97.1, ten jobs of ten; v1.2.0 to v1.5.1 on 1.97.1 and 1.98.0 mixed inside a release (four
+and six, three and seven, four and six, four and six, one and nine, then v1.5.0 all ten on 1.98.0 and
+v1.5.1 one and nine); v1.5.2, v1.6.0 and v1.6.1 on 1.98.1, ten of ten — 47, 53 and 30 of the 130
+binaries. None was built by 1.90.0, and every GHCR image was.
+
+**P-U8.** `rust:1.98.1-slim-bookworm` exists (digest above). Under it, with the checkout mounted
+read-only: `cargo fmt --all --check` is clean; the `lint` service's three clippy runs (default, and
+the CLI's and the orchestrator's telemetry builds) are clean with `-D warnings` once the seven sites
+above were rewritten; `cargo build --locked --release` leaves `Cargo.lock` byte-identical (sha256
+`43814f1f…` before and after). The Dockerfile's test and runtime stages build from this tree under the pin (`docker build`, no
+compose; the builder reports `rustc 1.98.1 (48a229cea 2026-09-01)`), and the runtime stage starts the
+built binary on `debian:bookworm-slim`'s glibc 2.36 with no library unresolved (`undercroft
+--version`: `undercroft 1.6.1`). `cargo test --release` in that test stage — the battery `test` suite's command, run in the image by
+hand rather than through compose — passes 1,380 tests with none failed and 17 ignored, over 20 targets
+(12 binaries and 8 doc-test runs), `model_e2e` not among them, as on every unnamed invocation; the
+integrator compares the count with the published figure at the integrated tree. The whole battery under the new images is the
+integrator's: no suite runs in this unit's worktree, because parallel worktrees race on compose.
+
+**The assertion's counterfactual.** `cargo check -p undercroft-core` under 1.90.0 fails, exit 101,
+with `error[E0080]: evaluation panicked: the hash embedder's token space (HASH_EMBEDDER) is defined
+over Unicode 17.0.0, and this toolchain's std or the locked unicode-normalization carries another
+version: …` at the assertion; under 1.98.1 the same check and every build above compile. The premise
+is the message: the error names the assertion, not some other incompatibility of 1.90.
+
+**The desk reads of the ruling's item 5**, 1.90.0's `rust-src` against 1.98.1's, read and not run:
+- `std::fs::rename` on Windows (`sys/fs/windows.rs`) is the same code, one `// SAFETY:` comment
+  moved two lines. The readings O271, O275 and O289 took from 1.90's — `MoveFileExW` with
+  `MOVEFILE_REPLACE_EXISTING`, then `FileRenameInfoEx` with POSIX semantics on `ERROR_ACCESS_DENIED`,
+  the first error returned unless the second is `DIR_NOT_EMPTY` — hold of 1.98.1.
+- `decode_error_kind` on Windows moved from `sys/pal/windows/mod.rs` to `sys/io/error/windows.rs`; the
+  arms the records cite — `ERROR_ACCESS_DENIED` to `PermissionDenied`, `ERROR_BROKEN_PIPE` and
+  `ERROR_NO_DATA` to `BrokenPipe`, a sharing violation and delete-pending to no specific kind — are
+  unchanged. Three arms are new: `ERROR_TOO_MANY_OPEN_FILES` and `WSAEMFILE` to `TooManyOpenFiles`, and
+  `WSAESHUTDOWN` to `BrokenPipe`, a socket written after its write end shut. O277's, O289's and O287's
+  P4 readings hold.
+- `File::lock`: the public function and the Windows body are identical; the unix body is the same
+  `flock(LOCK_EX)` on Linux and Apple, now behind `cfg_select!`, answering `Unsupported` on targets
+  this project ships none of. O254's reading holds, and the workspace compiles under the pin.
+- **The `str` slice panic differs** (O181's P-SLICE). 1.90.0's names up to 256 bytes of the string it
+  was slicing; 1.98.1's names the byte indices, the string's length and, for an index inside a
+  character, that one character — never the string.
+- O157's reach rests on cargo behaviour the Cargo reference does not document, measured on cargo 1.90.
+Measured again on cargo 1.98.1: naming `model_e2e` without its features is still a hard error naming
+them — ``target `model_e2e` in package `undercroft-cli` requires the features: `onnx`, `ort`,
+`undercroft-embed-onnx/test-fixture` ``, exit 101 — the `dep/feature` entry read as a feature, and the
+unnamed `cargo test --release` above skips the target. The positive arm, the target built and run
+with its features, is the `ort-build` leg's and was not run here.
+- O287's P8, which said "1.98.1 was not probed": 1.98.1 refuses `-Zon-broken-pipe` as 1.90 did
+(``the option `Z` is only accepted on the nightly compiler``), so the verdict that did not rest on it
+stands.
+
+**A real corpus under the pin.** The runtime image the pin built, with no network: `init`, then the LoCoMo feed mined into three wings
+of a sealed vault — 85 drawers each, 255 in all, audit height 256 — a wing-scoped search in 97 ms on a
+host shared with other work, and `verify` OK in 25 ms. One more drawer names U+323B0, a CJK Extension J
+ideograph assigned in Unicode 17, and a search for that character alone finds it; under 1.90's tables
+the character is a delimiter and the query segments to nothing (the ruling's reading of `script.rs`,
+not run here, no build being on 1.90 now).
+
+**Gate**: the toolchain arm of the `supply chain is pinned` preflight (O326's record has the whole
+preflight) and the compile-time assertion. The arm reads an image where an image is NAMED — a
+Dockerfile's `FROM` with its flags skipped, an `image:` or `container:` key — and takes any image
+whose repository's last component is `rust` as a Rust image, whatever registry is in front of it;
+such an image must be Docker Hub's official one, tagged with the pin in full. No workflow, Dockerfile
+or compose file may name a toolchain another way (`dtolnay/rust-toolchain`, `actions-rs`, any
+`setup-rust` action, a `toolchain:` input,
+`rustup default|override|toolchain|install|update|target|set|run`,
+`RUSTUP_TOOLCHAIN`, `cargo +` or `rustc +`); every job that runs cargo outside a container
+calls the script before its first cargo line; and the pin's reader refuses a `stable` channel, an
+extra line and an absent file, on copies of itself. **Widened after the review**, which found the
+first build's arm blind to four of its plants — an untagged `FROM rust`, another registry's Rust
+image (`ghcr.io/rust-lang/rust:nightly`), `rustup run nightly cargo build`, and
+`actions-rust-lang/setup-rust-toolchain` with `toolchain: stable` — each now a probe the arm must
+refuse, beside `rust:latest` behind a `--platform` flag. The review's own three files, planted in a
+copy of the tree, are refused by name: eleven refusals across four readers. The probes pass under
+Debian 12's mawk 1.3.4 20200120 and gawk 5.2.1, and the real files hold two Rust images and four
+native cargo jobs, each through the script.
+A **second independent review** then found the arm blind to four more of its plants, each now a probe:
+an image named by a flow mapping (`container: {image: "rust:1.90-slim-bookworm"}`, which the key reader
+took as the word `{image:`) and by `COPY --from=` (with `RUN --mount=…,from=` added beside it); a builder on another
+distribution than the runtime stage (`rust:1.98.1-slim-trixie` beside `debian:bookworm-slim`, which
+links a glibc the runtime lacks and fails at start, not at build — the ruling's decision rule); and
+`rustup_toolchain:` in a Windows job's `env:`, which Windows reads as `RUSTUP_TOOLCHAIN`. A Rust image's
+tag must now be `<pin>-slim-<dist>` or `<pin>-<dist>`, the distribution read from the Dockerfile's one
+`FROM debian:<dist>-slim` (none or two is a premise failure), and `RUSTUP_TOOLCHAIN` is matched in any
+case. The probes number ten images and eight mechanisms the arm must refuse; the review's two files,
+planted in a copy of the tree, draw six refusals by name, every plant among them; and the real files
+hold, on bookworm.
+
+**No tag carries this pin without O421's walk** (the ruling's item 3), **and the preflight holds it.**
+This entry closes because the pin, the assertion and the gate are built. The images' token space moves
+from Unicode 16 to 17 with it, and only O421's `undercroft-hash-v4` walk heals the vaults the images
+wrote. O421 is filed under `## 1.7.0 — unreleased`, this entry's release, as its target release — moved
+there from `## Open` after the second independent review found the sequencing held by prose alone, my
+first record having said "nothing gates it but this sentence". O309's tag-reading arm refuses an
+unfinished entry under a released section, so 1.7.0 cannot be marked released while O421 is open.
+Measured: `--preflight-only` accepts O421 under the unreleased heading; with that heading changed to
+`released 2026-10-12` and nothing else, the arm refuses
+`released-entry-unfinished` for O421, beside `window-not-the-workspace-version` (the workspace still
+reads 1.6.1), and nothing else. If
+the maintainer names another release for the pin, both entries move to it.
+
+**What stays outside it, stated.** Every shipped target has compiled under 1.98.1 — it built all ten
+v1.6.1 assets — but only `windows-check` (Windows, default features, `check`) compiles natively on a
+pull request; O168's legs are what will compile the rest. The pin moves by hand: a bump is one change
+to the file and both image references, which the preflight requires, and a bump whose std carries
+another Unicode version stops at the assertion — how that is ever moved is O422's, who learns that a
+bump is due O425's. The builder image is pinned by version, not digest (O424). Of the two model crates, `undercroft-embed-onnx` compiles under the pin with its tests (`cargo check
+--all-targets`, no warning); `undercroft-embed-ort`, which fetches ONNX Runtime at build time, was not
+built here, and neither crate's tests were run — the `onnx-build` and `ort-build` legs do both.
+**Both shipped compose recipes build the engine from the checkout** — the team server
+(`deploy/docker-compose.server.yml`, its `build: context: ..`) and the observability stack — so an
+operator who rebuilds either from `main` after this merges and before O421 lands runs a Unicode-17
+binary over a vault a 1.90 image wrote, under the unchanged name `undercroft-hash-v3`, and nothing
+says so: its stored vectors, and on an hmac-only vault its search index, keep the old tables while
+its queries use the new. Found by the
+second independent review; CHANGELOG and `UPGRADING.md` state it, naming O421.
+
+**Notes beside, owed by the ruling.** O275 (its maintainer ruling's "1.90"), O163 (`hash`'s identity
+"is its code's"), and each record that states a 1.90 std or cargo behaviour as a property of what
+ships — O254, O271, O275, O287, O289, O157 and O181 — carry a sentence beside, from the desk reads
+above. Of the 31 lines naming 1.90 on `main` at `2b69f04`, the rest name it as the images', the
+suites' or CI's lint toolchain, which it was (O84, O159, O168, O255, O256, O268 and this entry's own
+filing), or as an audit's or a panel's input (O135; O166's, which O166's record of this date
+corrects). O168, O275, O310, O313, O325, O395 and O397 carry notes for the relations this entry and
+O326 declared with them.
+
+### O326 — CLOSED 2026-10-12: every third-party action is pinned by its commit SHA with its version beside it, every workflow reads by default, a write token is granted per job, kept out of every `env:` block and every step that runs cargo, and never persisted by a checkout
+
+**Filed 2026-10-06 by O313's ruling (its refuter).** Every third-party action is referenced by a tag that
+can move: `docker/setup-buildx-action@v4`, `docker/login-action@v4` and `docker/build-push-action@v7` in
+`release.yml` and `republish-ort-image.yml`; `aquasecurity/trivy-action@v0.36.0`,
+`dtolnay/rust-toolchain@stable` (O294's unpinned toolchain) and `taiki-e/install-action@v2` in `ci.yml`;
+`peaceiris/actions-mdbook@v2` in `ci.yml` and `pages.yml`. `release.yml` grants `contents: write` and
+`packages: write` at WORKFLOW level (15-17), so jobs that need only packages hand a contents-write token
+to third-party code — the moved-tag class O313 is about, pointed inward, and a route by which assets
+could be replaced with no tag moving.
+
+**Shape**: pin every third-party action by commit SHA, its version in a comment, and move permissions to
+each job at least privilege. **Gate**: a host-side preflight refusing a `uses:` without a 40-hex SHA
+outside `actions/*` (or with a reasoned allowlist), and refusing workflow-level write permissions in
+`release.yml`; counterfactual, today's files.
+
+**Noted 2026-10-12 by this entry's build — five relations that were declared here**, each a shared diff
+surface: with O310 ("that entry's `guard` job takes its permissions per job, read-only, before the rest
+of this entry lands"), with O325 ("that entry's `draft`, upload, `verify` and publication jobs are the
+only ones that hold `contents: write`"), with O168 ("both change `windows-check`'s toolchain step"),
+with O395 ("inputs through `env:` and per-job permissions in the same workflow") and with O397 ("the
+publishing jobs' permissions"). This entry is closed and the five are open, so each is a note on both
+sides rather than a `Relations:` line, which names open entries only; the partners carry the matching
+notes, with what this build left them.
+
+#### BUILT 2026-10-12, in O294's unit — the filed shape, with the token's exposure inside a job closed beside it
+
+**The pins, each read from the API on 2026-10-08** (the tag's ref, dereferenced through an annotated
+tag where there is one, then the exact version tag that shares the commit; the release's `immutable`
+flag; the commit's signature):
+
+| action | was | pinned to | release | commit |
+|---|---|---|---|---|
+| `docker/setup-buildx-action` | `@v4` | `f87e5991a6d7451dcb8d9637bfbc97413f497069` (v4.4.1) | immutable | verified |
+| `docker/login-action` | `@v4` | `dbcb813823bdd20940b903addbd779551569679f` (v4.6.0) | immutable | verified |
+| `docker/build-push-action` | `@v7` | `c3c9e263c25d99ce0380d002d59b67737d91b0dc` (v7.4.0) | immutable | verified |
+| `aquasecurity/trivy-action` | `@v0.36.0` | `ed142fd0673e97e23eac54620cfb913e5ce36c25` (v0.36.0, annotated tag `a9c7b0f0…`) | immutable | verified |
+| `taiki-e/install-action` | `@v2` | `f7e5d7c961414b23f5b25b2da9294395d08513ad` (v2.87.26) | immutable | unsigned |
+| `peaceiris/actions-mdbook` | `@v2` | `ee69d230fe19748b7abf22df32acaa93833fad08` (v2.0.0, annotated tag `948b432f…`; `v2` is annotated tag `062dc9e3…` on the same commit) | not immutable | verified |
+| `dtolnay/rust-toolchain` | `@stable` (a branch) | removed (O294) | — | — |
+
+The first version of this table gave `062dc9e3…` as v2.0.0's tag object; it is `v2`'s, and v2.0.0's is
+`948b432f…` — both dereference to the pinned commit, so the pin was right and its record was not
+(found by the build's independent review; re-read from the API on 2026-10-12).
+`install-action` resolves `tool: cargo-audit` from its own `manifests/cargo-audit.json`, which at that
+commit names 0.22.2 with a sha256 per platform, so the SHA pins the tool and its checksum too.
+`actions/*` stay on version tags, as filed: GitHub runs the runner and mints the token such an action
+could steal, so a moved `actions/` tag is a compromise of the party every job already trusts in full;
+a branch there is refused.
+
+**Permissions.** Every workflow states `permissions: contents: read` at the top. Per job:
+`release.yml`'s `binaries` and `binaries-ort` take `contents: write` (they create and upload the
+release's assets), `docker` and `docker-ort` take `contents: read` and `packages: write`, the two
+manifest jobs `packages: write` alone; `republish-ort-image.yml` the same two image grants, which it
+had at the workflow level; `pages.yml`'s `build` takes `contents: read` and `pages: read` (for
+`configure-pages`) and its `deploy` alone takes `pages: write` and `id-token: write` — the build job
+runs the third-party mdBook action, and with the OIDC grant beside it that action could have minted
+the token a Pages deployment authenticates with. `ci.yml` already read by default and grants nothing.
+**And the token's exposure inside a job**, which per-job permissions alone leave open: the binary jobs
+held `GH_TOKEN` in a job-level `env:`, so `cargo build` — every crate's build script — ran with a
+`contents: write` token in its environment, and their checkout persisted the token into
+`.git/config`. `GH_TOKEN` is now the upload step's alone, and every checkout in a job holding a write
+grant passes `persist-credentials: false`.
+
+**Gate: the `supply chain is pinned` preflight** (`tests/battery.sh`), placed before the first
+preflight that launches a container. Its actions arm refuses any `uses:` that is not a local path, an
+`actions/*` action by version tag or SHA, a `docker://` image by digest, or a third-party action by a
+40-hex SHA with a `# v…` comment, and refuses a line it cannot parse. Its permissions arm refuses a
+workflow with no top-level `permissions:` or with a write there, a workflow-level or job-level `env:`
+carrying the token, a STEP that runs cargo while it holds the token, and a job holding a write whose
+checkout persists credentials — the token matched in every spelling an expression accepts, the
+property and index forms in any case (`github.token`, `github['token']`, `secrets.GITHUB_TOKEN`,
+`secrets["github_token"]`). **Those last two were added after the review**, which planted a cargo
+step holding `${{ github['token'] }}` and the first build's reader, matching `github.token` and
+`secrets.GITHUB_TOKEN` alone and only in a job's or the workflow's `env:`, passed it. Each arm is
+driven on planted input both ways before the real files are believed (five refs and six grants it
+must refuse, a clean set of each it must pass). Counterfactual: over `main`'s files at `2b69f04` the
+actions reader prints 18 third-party refs by tag and the permissions reader 7 grants — five
+workflow-level writes (two in `release.yml`, two in `pages.yml`, one in `republish-ort-image.yml`) and
+the token in both binary jobs' `env:`. On the built tree, one at a time: the token put back in the
+binary jobs' `env:` (two refusals), their `persist-credentials: false` dropped (two), trivy back on
+its tag (two), Pages' writes back at the workflow level (two), each refused by name; and the review's
+workflow, planted in a copy of the tree, refused twice — the cargo step holding the token, and the
+second checkout of its write job persisting credentials.
+
+**What stays outside it, stated.** A pinned action can still fetch at run time — trivy's database,
+cargo-audit's advisory database, the mdBook release tarball (no checksum) — so the pin fixes the
+code, not its downloads. The arm reads `uses:` lines in `.github/workflows/`; it does not see an
+action a pinned action calls in turn (a composite action's own `uses:`), which is the pinned commit's
+content and moves only with it. **The binary jobs still HOLD `contents: write` while their build
+scripts run.** The token is in no environment and no file a build script reads, but code running in a
+job can reach a token the job holds without either — the runner's own process memory, which is how
+compromised actions have read secrets — so a build script that turns hostile can still write the
+release. The build and the upload belong in separate jobs, the build holding nothing: O325's upload
+jobs, ruled and not built, close it. Pins move only by a reviewed change, and nothing reports a pinned
+action's advisory: filed as O425. `release.yml` and `pages.yml` run only at a tag and on `main`, so
+the new permissions are first exercised there; what was verified here is the YAML, every SHA against
+its tag, and the preflight.
+
+**O310, O313 and O325, noted.** O313's ruling lists "a mutable-tag action holding the workflow-level
+write token is compromised (O326)" among what fails silently; that route is closed by this build, its
+line kept as the record. O310's `guard` job and O325's `draft`, upload, `verify` and publication jobs,
+ruled 2026-10-08 and not yet built, take their permissions per job as their rulings say, which is
+this build's layout; a third-party action either adds must be pinned by SHA, which the preflight
+refuses otherwise.
+
+### O327 — CLOSED 2026-10-12: the former-name scan runs `python:3.14-slim` by its index digest, with the checkout mounted read-only and no network, and the preflight that holds the supply chain refuses any launch that is not
+
+**Filed 2026-10-06 by O314's ruling of that day (its refuter).** `tests/battery.sh` (791, 808-810,
+817-818) runs the no-trace scan in `python:3-slim`, unpinned by digest, with the working tree mounted
+read-write (`-v "$(pwd):/r"`, no `:ro`). The tag moves upstream routinely, and on the maintainer's host a
+replaced image runs with write access to the checkout, `.git/hooks` included, while `verify.py` only
+reads.
+
+**Shape**: pin the image by digest and mount the tree `:ro`, as O189 and O314 pin what they bring in.
+**Gate**: the preflight's own source check refuses an unpinned image or a writable mount, with a premise
+that the scan still runs and fires on its known positive.
+
+#### BUILT 2026-10-12, in O294's unit — the filed shape, with the network removed beside it
+
+`tests/battery.sh`'s `NOTRACE_IMG` is `python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2`
+— the multi-arch index `python:3-slim` resolved to on 2026-10-08, which Docker Hub dates
+2026-10-06 (read from the Hub, pulled, and `imagetools inspect` reporting an OCI image index; Python
+3.14.8), so the scan runs the image it ran the day before, and no other. Both launches mount the
+checkout `:ro` and pass `--network none`: the scan reads the tracked list from stdin and writes only
+into the container's own temporary directory, and a preflight is offline (O65), while the mount
+exposes the whole working tree, gitignored files included, to whatever the image runs.
+
+**Gate: the containers arm of the `supply chain is pinned` preflight**, which runs before the
+former-name trace so a launch it refuses never happens: every container this script launches names
+its image through a `*_IMG` variable assigned once, by digest, mounts read-only and gets no network.
+It joins continuation lines and skips comments and heredoc bodies, and is driven both ways first —
+five planted defects it must refuse, and a clean launch it must pass beside a heredoc and a comment
+that each name a bad one. The former-name preflight's own premise — the planted known-positive must be
+caught — still fires through the read-only, offline launch: on this host, at this unit's merged tree, the trace answered `ok` with 418 files scanned and 127 PDF
+streams examined across 11 PDFs, every pattern probed on its known positive first. Counterfactual: the launches as
+`main` has them (`python:3-slim`, a writable mount, network) print six refusals, three per launch.
+
+**What stays outside it, stated.** The arm reads `tests/battery.sh` alone: the compose suites' images
+live in the compose files (the builder and lint images are pinned by tag, filed as O424), and
+`tests/tls-pins.sh`, a host-side suite, launches its own. The digest fixes the image; a newer Python is
+a deliberate edit to it.
+
+### O421 — `undercroft-hash-v3` names two token spaces in released builds: the GHCR images tokenize with Unicode 16, the prebuilt binaries with Unicode 17
+
+**Filed 2026-10-12 by the ruling on O294 and O166 (three lenses and a refuter).** `HashEmbedder`'s
+tokens read std's `char` tables (`is_alphanumeric` in `segment`, `script.rs` 259; `is_uppercase` and
+`to_lowercase` in `search_key`, `normalize.rs` 115 and 330), and so does the room `mine` and `sweep`
+derive from a file stem (`normalize_wing_name`, `normalize.rs` 625-635, through `room_for_file`,
+`crates/undercroft-cli/src/main.rs` 4944-4949), which is a component of the drawer id. Every image
+since `v1.0.0` was built by Rust 1.90 (Unicode 16); every prebuilt binary by 1.97.1, 1.98.0 or 1.98.1
+(Unicode 17 as the review measured 1.97.1 and 1.98.1; 1.98.0 is P-U1's). `enforce_embedder_identity` returns on a name match (store `lib.rs` 3925-3927), so a vault one
+population wrote and the other opens is not walked and nothing says so. O294's ruling of this date
+pins a Unicode-17 toolchain, which moves the image population.
+
+**Noted 2026-10-12 by O294's build — the relations the ruling declared here, and where this entry
+sits.** Sequenced with O294 — that entry's pin ships in no tag without this entry's walk; sequenced
+after O423 — a fix to the Han arm, if ruled, rides this identity; sequenced before O422 — a decoupled
+token path must reproduce this identity. O294 closed on that date under `## 1.7.0 — unreleased`, and
+this entry was moved there as its target release (`CLAUDE.md`: a filing goes under its target release
+once that is fixed), after the build's second independent review found the sequencing held by prose
+alone: O309's tag-reading arm refuses an unfinished entry under a released section, so 1.7.0 cannot be
+marked released while this entry is open (O294's record has the measurement). A `Relations:` line
+names entries under `## Open` only, so the three relations are notes, here and in O422 and O423. If the
+maintainer names another release for the pin, both entries move to it.
+
+#### RULED 2026-10-12 by three lenses (Agentic Memory Architecture; Retrieval and text processing (Unicode segmentation, normalization stability, vector-space identity); Release engineering and supply chain (reproducible toolchains, what was shipped vs tested, UPGRADING)) and an adversarial refuter
+
+**The question.** Must the released hash space be healed, and how: a new identity with the automatic
+walk, a second identity leg, a targeted re-embed, or a stated residual?
+
+**Prior rulings found, and their disposition.**
+- **O166's ruling of 2026-10-08.** Its option (A), a `v4`, "is not refused as MAJOR (it migrates)"
+  and lost "on the 1.0.0 decision and the fleet-wide cost". The 1.0.0 decision does not reach these
+  populations; both are release populations. Its item 6 put "a v4 back on the table" for exactly a
+  released stale space. Its item 2: "editing a pinned digest IS minting an identity". FOLLOWED.
+- **The v2 precedent** (`embed.rs` 341-356): v2 "could have been redefined in place … Minting v3
+  anyway", because a redefinition leaves vectors "stale and unmigrated, with the identity matching
+  and therefore no warning". FOLLOWED: re-reading `v3` as "Unicode 17" in place is that redefinition,
+  for released vaults.
+- **The documented contract** — `KNOWN_EMBEDDER_UPGRADES`'s doc (store `lib.rs` 707-716): "a user who
+  merely upgraded did not choose a new embedding space and should not have to repair one by hand";
+  `docs/EMBEDDERS.md` 217-219; `CLAUDE.md` 276-283. It is consistent across three surfaces including
+  the doctrine, so by the drift-direction rule the documents lead.
+- **O163's ruling of 2026-10-08.** Its carrier (a second leg, the name unchanged) rests on "an older
+  binary using the same model computes the same space"; for hash an older image computes a DIFFERENT
+  space, so the carrier does not transfer — a distinction, not a refutation. Its scope phrase "`hash`,
+  whose identity is its code's" (ROADMAP 4235) is REFUTED as a description of the released state and
+  restored as a property by O294's compile-time assertion; a sentence goes beside it. Its open point
+  "Sequencing with O166" is the maintainer's; this entry uses the existing name comparison and walk
+  and has no technical ordering constraint with O163's one comparison function, which must carry the
+  `KNOWN_EMBEDDER_UPGRADES` arm whichever lands second.
+- **O233 and O238**: an older binary refusing a vault a newer one has touched shipped as a fix
+  (`UPGRADING.md` 608-636: "There is no supported downgrade after the first writable open"). FOLLOWED.
+- **The code comment at store `lib.rs` 748-749** ("a whole-fleet re-embed is not worth one script's
+  cosine leg"): a judgement about a population O166 then showed no release produced. It is not a
+  ruling and does not outweigh the documents above for a released one.
+
+**Ruled.**
+1. **`HASH_EMBEDDER` becomes `undercroft-hash-v4`**: v3's token rules over the Unicode-17.0.0 tables
+   O294's assertion pins, its doc saying so. A new `HASH_EMBEDDER_V3` constant holds the old name, and
+   `KNOWN_EMBEDDER_UPGRADES` gains `(v3, v4)` beside the v1 and v2 rows, which follow the constant.
+   Every hash vault walks once at its first writable open through `migrate_embedding_space` (store
+   `lib.rs` 4004-4085): every drawer re-embedded through `get`, PQ and IVF dropped
+   (`invalidate_embedding_space`, 4097-4103), one `migrate/embedding-space` chain record, the identity
+   recorded last. Prebuilt-binary vaults recompute byte-identical vectors; image and mixed vaults are
+   healed. No marker tells them apart (O166's option E), so no narrower walk is possible.
+2. **`FTS_KEY_VERSION` moves in the same unit** (store `lib.rs` 705), because `search_key`'s output
+   moves for the 28 newly assigned cased letters and `drawers_fts` holds it; the existing
+   `init_fts_schema` rebuild runs at the first writable open, and a read-only open falls back to the
+   announced full scan until then.
+3. **Mirrors are refused `IndexStale` until `index push`** — correct, since a mirror holds the vectors
+   that were pushed (`remote.rs` 545-557).
+4. **Rooms and refine's KG terms are a stated cost, never a migration.** No walk may move a drawer
+   id. An image vault re-mining a file whose stem holds a codepoint new in 17 derives a new room
+   (under 16 such a stem lost those characters, and a stem made only of them fell to `unsorted`), so a
+   second drawer set counted `created`, outside any room-scoped retention policy; prebuilt-binary
+   vaults re-derive the same room. `refine` re-run moves a triple id only through the 28 cased
+   letters. CHANGELOG names both and the recovery (a re-mine into a fresh wing, or `forget` by source
+   for the old set). Bumping `NORMALIZE_VERSION` (moves every id) and a history-aware room (an id
+   would depend on vault state) are rejected.
+5. **The CJK Extension G–J classification is its own entry** (O423, filed by this ruling),
+   ruled before this entry's unit is built; if it is fixed, it rides this identity so the fleet walks
+   once.
+
+**Options that lost.**
+- **No walk, `v3` redefined as Unicode 17 and `repair` named in CHANGELOG (lens 2).** It leaves image
+  vaults holding Unicode-16 vectors under a name that now means 17 — the redefinition in place the v2
+  precedent refused, the "two spaces under one name" O166 refused in its option (B), and it makes the
+  user "repair one by hand", which the documented contract forbids. Its argument is prevalence, which
+  no corpus on hand can measure for the fleet.
+- **A second identity leg with an unconditional walk, the name unchanged (S4).** Same walk cost; no
+  mirror re-push and no older-binary refusal. It loses because the name would still name two spaces
+  (older images keep writing Unicode-16 vectors into a healed vault with nothing refusing, and a
+  legacy mirror marker is trusted under O163's rule), against O166 item 2's minting rule, and it adds
+  a second mechanism beside a tested one.
+- **Re-embed only the affected drawers (S5)**: O166's option (B), two spaces under one name, and a
+  full decrypt on a sealed vault.
+- **The Unicode version in the identity string per build (S3)**: every reference holder moves with the
+  distribution, and a mixed deployment walks back and forth.
+- **A `v4` over Unicode 16 (lens 3)**: removes reach from every prebuilt-binary vault (O294's record).
+
+**Claims refuted.**
+- Lens 1's end-to-end probe: "the 1.6.1 binary then refuses the vault `EmbedderMismatch`, exit 1,
+  writing nothing" — the open runs `init_fts_schema` (store `lib.rs` 5259) before
+  `enforce_embedder_identity` (3748), so an older WRITABLE open finds `fts_key_version` foreign,
+  rebuilds `drawers_fts` under its own key, writes its own marker, and only then refuses. The next new
+  open rebuilds again. Nothing is lost, and it is stated rather than tested as "nothing written".
+- Lens 1: the name change is a fence. Partly: it also refuses prebuilt-binary 1.6.x binaries that
+  compute identical vectors — a cost O163 counted for its own question, accepted here on the O233
+  precedent.
+- Lens 2's additive standard for future bumps ("V moves with the toolchain" without an identity):
+  refuted by O166 item 2 and the v2 precedent.
+
+**Probes owed.**
+- **P-U1** (O294's record) first. If it shows no std-table difference between 1.90.0 and the pin,
+  this entry is withdrawn by evidence. If it shows an assigned-in-16 character changing a token-path
+  property, the ruling is unchanged and CHANGELOG names that wider class.
+- **P-L2, end to end, no download.** Stand-ins: `git archive v1.6.1` built in
+  `rust:1.98.1-slim-bookworm` (the binaries' population) and in `rust:1.90.0-slim-bookworm` (the
+  images'). Each writes a sealed and an hmac-only vault holding (a) a drawer with U+323B0, (b) a plain
+  drawer, (c) a mined file whose stem holds U+323B0, and a pushed mirror marker. Premise, before the
+  open: (a)'s stored vector differs from a fresh embed by the `v4` build on the images' vault and
+  equals it on the binaries', or the stand-ins did not reproduce the two populations. Opened writable
+  by the `v4` build: one `migrate/embedding-space` record naming `v4`; (a)'s stored vector equals a
+  fresh embed on both; (b)'s decrypted vector is unchanged (premise); `fts_key_version` moved and an
+  hmac-only query holding U+A7CE's case form and a common word returns both drawers; a mirror search
+  refuses `IndexStale` until re-push; a lexical query for (a)'s ideograph finds it on both
+  populations' vaults; re-mining (c) adds no drawers on the binaries' vault and adds the file's chunks
+  on the images' (the stated room cost, measured). Then the 1.6.1 build opens the walked vault and
+  refuses `EmbedderMismatch` with exit 1, appending no drawer, embedding or audit record. Counterfactual:
+  without the `(v3, v4)` row the open refuses `EmbedderMismatch` instead of walking.
+- **P-U7, the maintainer's go (a long run).** The walk at about 10⁵ drawers, sealed and hmac-only,
+  with the PQ retrain. It sets `UPGRADING.md`'s figure and decides nothing else; 45.9 µs/drawer is the
+  old branch head's, on an unnamed corpus.
+- **P-U3 and P-U4, informational.** How many texts and stems in the corpora on hand hold a codepoint
+  new in 17, and that stored bytes, chunk boundaries and `match_key` are identical across the two
+  toolchains. A zero is a fact about those corpora, not the fleet.
+
+**Dissent.** Lens 2 holds no walk; refuted above.
+
+**Fails silently if** the `(v3, v4)` row is omitted (loud, every vault refuses) or the v1 and v2 rows
+are hand-written to `v3`; `FTS_KEY_VERSION` stays; the gate corpus lacks a codepoint new in 17; the
+pin ships in a tag without this walk; the multi-tenant server meets the walk inside each vault's first
+request with no warning in `UPGRADING.md`; or the Han-arm change ships later as a second identity.
+
+**What remains.** Which release carries it with O294 (the maintainer's); P-U1, P-L2, P-U7; the
+sentence beside O163; `CLAUDE.md` 276-288 through the maintainer's approval of the pull request.
+
+**Version class.** PATCH-class: O166 records that a `v4` "is not refused as MAJOR (it migrates)"; no
+document names a Unicode version (searched `docs/`, `website/src/`, README, `UPGRADING.md`); the
+change restores the documented promises (byte-reproducible, an upgrade chooses no new space) and
+removes reach from no released population (pending P-U1's assigned-in-16 row: a character that leaves
+Alphabetic between 16 and 17 would remove reach from the images' vaults, and is then named in
+CHANGELOG); an older binary's refusal follows the O233 precedent.
+`UPGRADING.md` owes: every hash vault walks once at its first writable open (P-U7's figure; on the
+multi-tenant server inside the first request per vault, so one writable open per vault before
+serving); prefilter vaults retrain; mirrors are refused `IndexStale` until `index push`; a binary
+before this release refuses a walked vault (`EmbedderMismatch`, exit 1), and on an hmac-only vault
+its writable open first rebuilds `drawers_fts` — upgrade every binary sharing a data directory together, no supported
+downgrade without FORCE plus `repair` on the older binary; read-only replicas warn until a writer
+opens; an older archive restores and walks at the stage, which `RestoreReport` states. `config check`
+cannot detect any of it: it opens no database, the exemption O154 argues and O163 applied. Rides
+`1.7.0`, already MINOR.
+
+**Noted 2026-10-12 by O294's build, beside item 4 — found by the build's second independent review.**
+Item 4's classes are each one short. Rooms: `normalize_wing_name` (`normalize.rs` 625-635) lowercases
+with `str::to_lowercase` before it filters, so a stem holding U+0295 before a capital sigma — a
+character assigned in Unicode 16 that leaves Lowercase in 17 — derives `ʕς` on the images' builds and
+`ʕσ` on the binaries', a different room and so a different drawer id, as a stem holding a codepoint new
+in 17 does. Refine: a subject or predicate holding `ʕΣ` (`refine.rs` 244-245, then
+`kg_add_grounded`) moves its triple id the same way, beside the 28 cased letters. Item 4's treatment
+covers both — a stated cost, never a migration, and no walk may move an id — and CHANGELOG names U+0295
+for rooms and triple ids as well as for tokens (O294's record). Every later move of these id inputs is
+O432's.
+
+#### RULED 2026-10-12 by the maintainer
+
+**The question.** P-U7 — the walk at about 10⁵ drawers, sealed and hmac-only, with the PQ retrain — a
+long run, which the ruling above left to the maintainer's go.
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-12 to the list of
+questions that day's rulings escalated, each shown with its recommended answer, this one among them,
+and relayed with the list to O294's build by the integrator.
+
+**Decided — as recommended, in the integrator's words:** the ~10⁵ walk-cost measurements may run when
+the machine is otherwise idle. P-U7 runs only while no other run, battery or unit is using the machine;
+it sets `UPGRADING.md`'s figure and decides nothing else, as the ruling says. The same answer covers
+O406's P15f (its record of this date).
+
+**What remains open.** The build. Which release carries this entry is settled by O294's: it sits under
+`## 1.7.0 — unreleased` beside that entry (the note above), until the maintainer names another. P-U1 is
+done (O294's record): the ruling stands, and U+0295's class is one CHANGELOG must name.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -24993,6 +27143,8 @@ saves is dominated by one `jq` and one `curl` process per request.
   #184); the Windows `-ort` asset compiled on no pull request is O168; and
   `vendor/tiny_http` is a `[patch]` path, not a workspace member, so it is no
   target that no leg runs.
+
+**Noted 2026-10-12 by O294's build (its ruling's item 5).** The reach above rests on "measured cargo 1.90 behaviour", and 1.90 built none of what shipped. Measured again on cargo 1.98.1, the pin every build uses from O294 on: naming `model_e2e` without its features is still a hard error naming them (``target `model_e2e` in package `undercroft-cli` requires the features: `onnx`, `ort`, `undercroft-embed-onnx/test-fixture` ``, exit 101), the `dep/feature` entry read as a feature, and the unnamed `cargo test --release` still skips the target. The positive arm is the `ort-build` leg's, not run by that build.
 
 ### O165 — CLOSED 2026-09-14: the handover gate read a token that moves on its own, so it now reads the text a session acts on first
 
@@ -35970,15 +38122,17 @@ an ordinary drawer, while the pending row stays at its queue id — so the text
 is retrievable and still awaiting a ruling at once. Whatever is ruled here
 has to answer that arm too.
 
+O226, built 2026-10-12, made every convergence onto a pending row carry that row's
+covered declaration, so the convergences this entry's hold makes reachable with the
+screen off carry it too; its relation line left with it.
+
 **Relations:** shares a diff surface with O147 — both fixes edit `migrate_tenant` in `crates/undercroft-orchestrator/src/proxy.rs`: one conditions its closing source delete, the other refuses before the export or forces `keep_source` in that same branch.
 
 **Relations:** sequenced before O219 — that entry's rule is complete only under the hold this entry adds.
 
 **Relations:** shares a question with O223 — through that entry's arm, a self-restore of a vault with a queue is a no-op in both screening postures.
 
-**Relations:** shares a question with O221 — that entry's screen-off remedy exists once this entry's hold lands, and that entry owns its wording.
-
-**Relations:** shares a question with O226 — that entry's convergences are reached with the screen off once this entry's hold lands.
+**Relations:** shares a question with O426 — that entry's screen-off remedy exists once this entry's hold lands, and that entry owns its wording.
 
 **Relations:** shares a question with O227 — that entry's cost lands at every destination once this entry's hold lands.
 
@@ -36509,6 +38663,85 @@ space.
 **Version class.** PATCH-class: a test and corrected records, no observable change. It rides
 1.7.0. No `UPGRADING.md` entry: nothing that worked stops.
 
+#### RULED 2026-10-12 by three lenses (Agentic Memory Architecture; Retrieval and text processing (Unicode segmentation, normalization stability, vector-space identity); Release engineering and supply chain (reproducible toolchains, what was shipped vs tested, UPGRADING)) and an adversarial refuter
+
+**The question.** O294's measurement found the released binaries and the released images tokenizing
+with different std Unicode tables under `undercroft-hash-v3`. Does that refute or confirm this
+entry's 2026-10-08 ruling, and what does this entry now owe?
+
+**Prior ruling found, and its disposition.** This entry's ruling of 2026-10-08 (two panels and a
+reconciling refuter). Its Hebrew verdict (item 1) is FOLLOWED; four of its general statements are
+corrected beside; item 2 is amended before it is built; item 6 is followed in substance.
+
+**Ruled.**
+1. **The Hebrew verdict stands.** Hebrew's class is an explicit range (`script.rs` 172), its points
+   are stripped by explicit ranges, Hebrew has no case, and its letters have been assigned since
+   Unicode 1.1, so the only std table its tokens read is `is_alphanumeric` over letters both versions
+   class alike; lens 2 found no codepoint new in, or changing General_Category in, U+0590–U+05FF or
+   U+FB1D–U+FB4F between 16 and 17 (UCD data, not std's tables). The population that holds the
+   Hebrew stale space is still the five branch commits, decided by git, and the toolchain axis does
+   not reach it. P-U1's Hebrew rows are the confirming probe; a
+   difference there would be the identity entry's divergence, not this verdict's.
+2. **Corrections beside the 2026-10-08 ruling, never in place.**
+   - "From `db2e470` to HEAD the token path does not move … the Dockerfile builds on
+     `rust:1.90-slim-bookworm`": true of the SOURCE and of every image; the prebuilt binaries were
+     built by 1.97.1, 1.98.0 and 1.98.1 (O294's measurement), whose std tables the review measured at
+     Unicode 17 for 1.97.1 and 1.98.1 (1.98.0 unmeasured, P-U1), so their
+     token path differed from the images' from `v1.0.0` on, for every drawer holding one of the
+     codepoints new in 17.
+   - "true for every vault a release wrote" (of "the walk recomputes byte-identical vectors"): false
+     for a vault one release population wrote and the other re-walks, wherever such a drawer exists.
+   - "Fails silently if … a native release toolchain moves past 1.90's Unicode version while O294
+     stays open": already met when written; `v1.0.0`'s binaries were 1.97.1.
+   - Item 6's trigger is P1's digests, which run both trees in one Docker toolchain and cannot see
+     this axis; its consequence — "a RELEASED stale space with a v4 back on the table" — is reached by
+     O294's measurement instead. Followed in substance: the identity entry filed by this ruling is that
+     new entry.
+3. **Item 2 is amended before it is built.**
+   - The two version checks become the compile-time assertion of O294's ruling of this date, in
+     `undercroft-core`, at `(17, 0, 0)` for both; the test keeps the digest.
+   - The corpus gains: one CJK Extension J ideograph (U+323B0); one ideograph from Extensions G, H or
+     I, which pins today's `Script::Other` treatment so the Han-arm entry filed by this ruling moves the
+     digest loudly; one of the 28 newly assigned cased letters in its uppercase form (U+A7CE, or one of
+     U+16EA0–U+16EB8), which probes the case leg; and one letter from a script new in 17. With them the
+     DIGEST discriminates a table change, not only the assertion.
+   - The table stays keyed by identity alone, and one identity names exactly one Unicode version. A
+     key of (identity, version) would let the version move under an unchanged identity — the in-place
+     redefinition the v2 precedent refused.
+   - The pinned digests are first computed under the pin O294 rules, so `v4` is the first identity the
+     table carries; item 3's tag read compares from the first release that carries the table.
+4. **Sequencing.** This entry's unit builds after O294's pin and with or after the identity entry's
+   `v4`, because the digest must name the identity it pins. The identity entry's walk also re-embeds a
+   branch-built vault, so P3's remedy becomes automatic from the release that carries it; item 1's "no
+   v4 for Hebrew" is unchanged — the `v4` is the identity entry's, for a released divergence.
+5. **The comment at `crates/undercroft-store/src/lib.rs` 731-751 and `CLAUDE.md` 276-288** are
+   rewritten by the identity entry's unit rather than twice; `CLAUDE.md` through the maintainer's
+   approval of the pull request, as item 4 of the 2026-10-08 ruling already says.
+
+**Options that lost.** Keeping this entry open for the toolchain axis (R2): it would imply released
+vaults hold stale HEBREW vectors, which git refutes. Folding the axis into O294 (R3): it would turn a
+build-reproducibility entry into a vector-space entry with different reference holders, gate and
+`UPGRADING.md` text. A sentence inside a finished entry: O171 refuses it.
+
+**Claims refuted.** The three general statements of the 2026-10-08 ruling corrected in item 2. Lens
+2's (identity, version) keying (item 3). The brief is right that P1 cannot see the toolchain axis, so
+item 6 cannot fire on its literal trigger; reading it literally would leave a known released
+divergence unfiled, which is why it is followed in substance.
+
+**Probes owed.** P-U1's Hebrew, Cc and White_Space rows (O294's record of this date). P1 stays this
+entry's first step, run under the pin.
+
+**Dissent.** None on the verdict.
+
+**Fails silently if** the corpus is pasted as designed on 2026-10-08, so only the assertion
+discriminates; the assertion sits in a test; or the digest is pinned under one toolchain and the
+release built under another.
+
+**What remains.** Item 2 as amended, item 3, the corrections of item 4 of the 2026-10-08 ruling, P3.
+
+**Version class.** PATCH-class: a test, a compile-time assertion and corrected records. No
+`UPGRADING.md` line for the Hebrew leg; the identity entry carries the walk's.
+
 ### O168 — seven of the ten release binaries are compiled on no pull request: Windows `-ort`, and both macOS targets and Linux arm64 in both builds
 
 **Filed 2026-09-14, from a gap the drift sweep stated in a `ci.yml` comment.**
@@ -36573,9 +38806,9 @@ branch adding `#[cfg(windows)] compile_error!("probe");` inside
 both Apple legs and `#[cfg(all(target_os = "linux", target_arch = "aarch64"))]`
 the arm64 leg, each while every job CI runs today stays green.
 
-**Relations:** shares a diff surface with O294 — both change `windows-check`'s toolchain step.
+**Noted 2026-10-12, a relation that was declared here:** shares a diff surface with O294 — both change `windows-check`'s toolchain step. O294 closed on that date: `windows-check` now runs `bash .github/scripts/pinned-toolchain.sh` after its checkout, the installer `release.yml`'s binary jobs call with their target, so a leg built to this entry checks with the pin (1.98.1) installed the release's way and names no version itself; the images' toolchain this entry's record calls 1.90 is that pin too. This is a note rather than a `Relations:` line, which names open entries only.
 
-**Relations:** shares a diff surface with O326 — both change `windows-check`'s toolchain step.
+**Noted 2026-10-12, a relation that was declared here:** shares a diff surface with O326 — both change `windows-check`'s toolchain step. O326 closed on that date: the job holds no third-party action, and the `supply chain is pinned` preflight refuses a job that runs cargo outside a container without the pin's script first. A note rather than a `Relations:` line, for the same reason.
 
 #### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
 
@@ -37159,6 +39392,23 @@ an O(corpus) read per call is a cost lever on a served vault." Item 6's inventor
   maintainer's word.
 - The cost run at ~10⁵ sealed drawers (probe P1), on the maintainer's explicit go if it is long.
 
+#### RULED 2026-10-12 by the maintainer
+
+**The question.** The name the 2026-10-08 ruling left open: the new door's command and its route.
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-12 to the list of
+questions that day's rulings escalated, each shown with its recommended answer, this one among them,
+and relayed with the list to O294's build by the integrator.
+
+**Decided — as recommended, in the integrator's words:** O174's door is `undercroft vault holes` and
+`GET /v1/vaults/{id}/holes`, on the surfaces the 2026-10-08 ruling decided: the orchestrator's ops
+plane on the `verify-forgetting` precedent, and absent from MCP with an `OPERATOR_ONLY` entry and a
+`Boundary` row in `SURFACE_ABSENCES`.
+
+**What remains open.** The build, under the panels' items 1-8, and the cost run at ~10⁵ sealed drawers
+(P1) on the maintainer's explicit go if it is long — the answer on O421 and O406 of this date covers
+those entries' walks, not this probe.
+
 ### O187 — `refine`'s fact-mirror drawers are embedded and screened with no record naming those endpoints
 
 **Filed 2026-09-15 by O167's panel; verified by reading.** `refine` files each
@@ -37583,6 +39833,8 @@ ORT fence, which depends on P-ORT. O182 does not change. O328 is sequenced first
 text was never a contract. Nothing stops, so no `UPGRADING.md` entry is owed; a CHANGELOG note goes
 to anyone parsing the lines.
 
+**Noted 2026-10-12 by O294's build (its ruling's item 5) — P-SLICE, answered for what ships.** Against 1.90.0 the `str` slice panic embeds up to 256 bytes of the string it was slicing (`slice_error_fail_rt`: "byte index {} is not a char boundary; it is inside {:?} (bytes {:?}) of `{}`"). Against 1.98.1, the pin every build uses from O294 on, it never embeds the string: its panics name the byte indices, the string's length and, for an index inside a character, that one character. So under the pin a slice panic carries at most one character of its input. The shipped binaries from v1.5.2 on were built by 1.98.1; 1.97.1's and 1.98.0's source was not read.
+
 ### O182 — whether the tokenizer can panic on arbitrary text is unmeasured
 
 **Filed 2026-09-14 by O150's ruling panel.** Both backends tokenize with
@@ -37815,6 +40067,13 @@ restores to a declared id while the record describes the recipe id refuses
 rather than passes, which is safe and would be a new trap.
 
 **Relations:** shares a diff surface with O217 — both edit `filing_ids` and `aimed_filing`.
+
+**Note from O221's and O226's build (2026-10-12).** `admission list` now reports a row it cannot
+verify through `UnverifiableQueueRow`, whose `UnverifiableReason` is a closed vocabulary this
+entry's malformed target joins as one more arm (ruling item 2's "O221(a)'s report lists such a
+row"). A convergence now carries the pending row's whole covered meta (`admission::converged_meta`),
+so this entry's item 3 adds the target to `read_queue_row`'s `SameText` test, to the `taken` map's
+comparison and to `admission::carries`, beside the declaration those already compare.
 
 #### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
 
@@ -38938,158 +41197,6 @@ implementor's `score_batch`, counted by a fixture that records which method
 ran. Counterfactual: today's `SharedReranker`, under which the sequential
 default runs.
 
-### O213 — a vault `init` just created, opened read-only, is reported as tampering
-
-**Filed 2026-09-17 by O204's ruling; measured by its probe P13.** `init`
-writes a manifest and no database; the database appears at the first writable
-store open. A read-only open of that vault refuses `DatabaseMissing` (A33),
-which the CLI reports as exit 2, the tamper verdict — while the vault's own
-authenticated manifest records zero writes, so nothing is missing that was
-ever written. The team-server recipe's `--read-only` first start meets it,
-and `UPGRADING.md` tells operators to start writable once.
-
-**Shape, for a ruling**: when the manifest verifies and records no writes,
-a read-only open either serves the vault as empty or refuses as a posture
-error (exit 1, "start it writable once"); a manifest that records writes and
-has no database stays exit 2. The manifest's `writes` is covered by its MAC,
-so reading it is evidence, not inference.
-
-**Gate**: P13 (`init`, then `--read-only search x`) exits 0 or 1 as ruled;
-the same after one `remember` with the database removed still exits 2.
-
-**Noted 2026-09-30 by O303's ruling.** A fresh vault's EMPTY chain — a database whose first
-writable open stopped between creating `chain_meta` and seeding it — now answers the read-only
-posture `ReadOnlyUnmigrated` (exit 1), the class its absent-table twin answers. It is the same
-question one step later: whatever this entry rules for a vault with no writes, that state follows.
-
-**Relations:** shares a diff surface with O308 — both are answered through the absent-database predicate and door that entry's ruling defines.
-
-**Relations:** shares a question with O323 — the state that entry measures reads as the empty chain here and gets this entry's refusal text.
-
-**Relations:** shares a diff surface with O302 — that entry's read-only retry lands on this entry's fresh-vault state and answers whatever this entry rules.
-
-#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
-
-**The question.** A vault that `init`, `vault create` or `POST /v1/vaults` just made has a MAC-verified
-manifest at genesis and height 0 and no database. Opened read-only, `open_inner_read_only` asks only
-`vault.database_exists()` (store `lib.rs` 5444-5458) and answers `DatabaseMissing`: exit 2, `/v1` 409 with
-`class: "integrity"`. Keep it, refuse as a posture error (exit 1), or serve the vault as empty? The empty
-chain, one step later, follows (O303's note in this entry).
-
-**Prior rulings found, and their disposition.** This entry holds no ruling; its `rul(ed|ing)` hits are its
-filing line and O303's note. Searched also in A33/R4, O204, O268, O291, O303, O308 and O323.
-- **A33/R4**: FOLLOWED for every manifest that records anything; DISTINGUISHED, not refuted, for one that
-  records nothing — a *Fresh* manifest describes no database content, so an absent file contradicts
-  nothing it claims. O204 drew the same line ("A33 … is distinguished, not refuted: here nothing has been
-  authenticated") and O268 item 5 already applies it at the restore stage (`restore.rs` 253-266).
-- **O204** (moving exit 2 to exit 1 is PATCH with an `UPGRADING.md` entry): FOLLOWED.
-- **O303, 2026-09-30, item 5, its note and its dissent** ("one state, one class"; the empty chain is not
-  served): FOLLOWED. It rules out serving, binds the empty chain to this ruling, and licenses the variant
-  moving with it ("follows whatever O213 rules").
-- **R4** (a read-only role cannot fabricate a database): FOLLOWED.
-- **O291 item 11** ("A33 is untouched") describes the delete race and rules nothing here.
-
-**Decided shape.**
-1. **Option (b), through O308's door** (its ruling of this date, items 1-5): a *Fresh* manifest beside no
-   database content, with no non-empty `-wal` and no authenticated staged manifest, answers a posture
-   refusal on the read-only posture — exit 1, `/v1` 409 with no `class` — and creates nothing.
-2. **A new `StoreError` variant**, whose name and text state only evidence: the authenticated manifest
-   records no anchored write; a read-only open neither creates, seeds nor migrates a database; a writable
-   open starts a vault in this state; and, as O204 requires of every refusal, the second reading — if this
-   vault ever held data, do not open it writable: its database or its trail and a later manifest are
-   missing; restore it. A name that asserts history (`NeverOpened…`) is refused: P-LAG (a vault written
-   with every anchor failing) contradicts it.
-3. **One never-anchored vault answers one variant wherever the read-only open can see nothing was
-   migrated**: no content (O308 item 4(f)); a database holding none of `READ_SCHEMA`'s tables beside a
-   *Fresh* manifest (`check_read_schema`, 5652-5684, asks the predicate first); and the empty chain
-   (`check_chain_read_only`'s `Headless::Empty` arm moves from `ReadOnlyUnmigrated` to this variant). A
-   database holding PART of a schema keeps `ReadOnlyUnmigrated`, whose remedy — open it once writable — is
-   right both for a first open interrupted mid-batch and for an older build.
-4. **A *Mixed* manifest answers `ManifestTampered` on the read-only posture**, at the no-content arm (O308
-   item 4(e)) and beside an empty chain, as the writable `adopt_empty_chain` does (6551-6553).
-5. **A database with no `audit` table beside a *History* or *Mixed* manifest is judged on the read-only
-   posture as the erased trail it is**: `refuse_headless_without_table` no longer returns early for a
-   missing `audit` table (5738) when the predicate says the manifest records something, and answers
-   `ManifestTampered` from the predicate (it must not call `judge_headless`, which queries `audit`), as the
-   writable open answers the same file after its schema batch. Beside a *Fresh* manifest it falls through
-   to item 3.
-6. **The variant is registered on every surface**: an arm in `store_err`'s 409 list with no class (its
-   `_ => 500` catch-all, `tenant.rs` 3941, is what a forgotten arm becomes — O238's founding defect one
-   variant later); a `false` row in `the_cli_exit_2_set_and_v1s_integrity_class_are_one_set`; absent from
-   `integrity_verdict`'s set; the MCP mapping checked.
-7. **The two A33 store tests are split**: `a_read_only_open_of_an_absent_database_refuses_instead_of_faking_one`
-   and `reading_the_recorded_embedder_never_creates_the_database` each keep a written-then-deleted arm
-   (`DatabaseMissing`, no file created) and gain a fresh arm (this variant, no file created).
-
-**Where the two runs disagreed, and what settled it.**
-- *The carrier.* Run 1 reused `ReadOnlyUnmigrated` with a reworded text; run 2 minted a variant. Settled
-  for a variant on run 2's evidence: `ReadOnlyUnmigrated`'s text (2092-2096) is about schema age, and the
-  fresh case's required caution ("if this vault ever held data, do not open it writable; restore") is
-  false for an old-schema vault whose database is present, so one fixed text cannot be true of both. Run
-  1's objection — a schema-less file already answers `ReadOnlyUnmigrated` through `check_read_schema`
-  (5512-5513 run before `check_chain_read_only`), so one never-anchored vault would carry two variants —
-  is verified by reading and met by item 3.
-- *The evidence read.* Run 1's strict re-read against run 2's binding: settled in O308's record.
-- *Items 4 and 5.* Run 1's item 6 (a schema-less database beside a recording manifest: exit 1 read-only,
-  exit 2 writable) is verified by reading — `refuse_headless_without_table` returns `Ok` when `audit` is
-  absent (5738) and the schema check answers `ReadOnlyUnmigrated` — and run 2 did not address it; it is
-  adopted. The *Mixed* asymmetry (exit 1 read-only, `ManifestTampered` writable, because `judge_headless`
-  reads only the anchor, 4681-4687) was found by both.
-
-**Options that lost, with their cost.**
-- (a) Keep exit 2: a tamper verdict on every genuine fresh volume and on every `--read-only vault list`
-  over a fresh installation, which the recipe's comment (`deploy/docker-compose.server.yml` 137-139) and
-  `docs/remote-server.md` already describe as a posture refusal; and one never-anchored vault answering
-  two classes by how far its first writable open got.
-- (c) Serve as empty: a second open path whose `verify`, `stats`, label guard and chain arithmetic answer
-  for a file that does not exist; O303 settled serving for the twin state; and a refusal heals where a
-  served empty vault would not — `store_for` caches only a successful open (`tenant.rs` 3360-3420), so the
-  next request after a writer creates the database succeeds. Not escalated: refusing offers nothing new.
-- Reusing `ReadOnlyUnmigrated`: above.
-
-**Claims refuted, the brief's first.** The brief's CLI line numbers do not match `781b5b9` (its content is
-right). The brief omits O323 (the same discriminator, a genesis manifest put back beside an emptied
-`audit`), the *Mixed* asymmetry and the schema-less posture split. Its question whether serving is "what
-a surface offers" is answered: refusing is not. Both runs' proposed wordings infer history ("no writable
-process has opened it"), which P-LAG contradicts. The runs' "the read-only change grants nothing the
-writable posture does not" is true of capability and incomplete as a record: the A2 erase-and-put-back
-answers exit 1 after this ruling where it answered exit 2 — with no loss of detection, since today's exit
-2 fires on every fresh vault and so never told the attack from `init`.
-
-**Probes owed.**
-- P13 on the build: `init`, then `--read-only search x` and `--read-only stats` exit 1; `--read-only vault
-  list` exits 0 naming the vault unavailable; `serve-http --read-only` answers `GET
-  /v1/vaults/default/stats` 409 with no `class`; no `vault.db*` created by any of them. Then one
-  `remember` with `vault.db*` removed: exit 2, `DatabaseMissing`, nothing created.
-- P-FIRST (premise): `init`, one write-free writable command, then `vault.json`'s `writes` and head, at
-  both security levels — that a completed first writable open leaves the manifest past genesis.
-- P-A2-GEN and P-LAG characterise the residual only; neither decides the ruling.
-
-**Dissent.** Run 1 (its refuter and engineering lens) held `ReadOnlyUnmigrated`; settled by the evidence
-above, its objection adopted as item 3.
-
-**Fails silently if** the variant lacks a `store_err` arm or an identity-test row; a gate asserts exit 1
-alone — a fabricated database answers `ReadOnlyUnmigrated`, also exit 1, so the gate asserts the variant
-and that no `vault.db` exists (as `tests/e2e.sh` already does for A33); the A33 fixtures stay on fresh
-vaults only; the predicate reads `writes` alone; the empty chain stays on `ReadOnlyUnmigrated`; item 5
-calls `judge_headless` on a database with no `audit`; the check is proved through `open_read_only` alone
-rather than `open_store_as` and `store_for` (O91).
-
-**What remains.**
-- The A2-class put-back (a create-time manifest beside a deleted database) reads *Fresh* on both postures;
-  the writable posture already adopts it today, and only O245's witness sees a rollback to genesis.
-- P-LAG (every anchor failed, the first open's chain-v2 anchor included) reads *Fresh* too.
-- O323's state (a genesis manifest beside an emptied `audit` with drawers kept) reads as the empty chain
-  and gets this variant's text; its measurement stays O323's.
-- `config check` cannot see this state (it opens no database); `UPGRADING.md` says so.
-- Relations owed, each with its reciprocal in the same commit: O308 and O323.
-
-**Versioning.** PATCH, on O204's precedent: exit 2 becomes exit 1 for a state the documentation already
-describes as a posture refusal. `UPGRADING.md` owes an entry: a fresh `--read-only` start exits 1 (409 with
-no class) where it exited 2, an alert keyed on the integrity class stops firing for it, `--read-only vault
-list` over a fresh installation exits 0, and the O212 entry's sentence on this state changes with it. The
-recipe's comment, `docs/remote-server.md`'s "Start the server writable once first" and `UPGRADING.md`'s "A
-`--read-only` server needs one writable start first" move with it.
 
 ### O214 — a search query has no bound, and a refused save still pays for its whole body, on the listener's one request loop
 
@@ -39854,324 +41961,6 @@ two vaults' exports concatenated, for one — now exits 1 or answers 400 with
 nothing written, naming both positions; the remedy is to keep one version.
 `config check` cannot see payload content.
 
-### O221 — a queue row no ruling door can act on: one whose tag fails, and one flipped into the reserved wing
-
-**Filed 2026-09-18 by O216's ruling panel; measured by its probes P2 and P3 on
-the `4ff51ab` binary.**
-- **A pending row whose tag fails** makes `admission list` fail for the WHOLE
-  queue, because `admission_pending` propagates `get`'s error
-  (`crates/undercroft-store/src/admission.rs`). `allow` and `deny` fail on
-  `Integrity` through `quarantined`, `drawer delete` refuses it on the clear
-  column, and, by reading, `repair` aborts on it
-  (`crates/undercroft-store/src/manage.rs:1600-1603`). The one remedy measured
-  is re-importing the genuine queue record with the screen on, which
-  converges onto the row through the diversion. With the screen off there is
-  none.
-- **An ordinary row whose clear `wing` was flipped offline to the reserved
-  wing** is listed with no destination, `allow` answers "not in the quarantine
-  wing", and `drawer delete` refuses it with advice to use `allow`/`deny`,
-  neither of which can act on it. `drawer update` is the one exit, and nothing
-  says so. An import of the IDENTICAL record over it is O215's no-op, because
-  the covered copy matches, so the flip stays; only a changed record heals it
-  (pinned as a cost in `the_covered_wing_decides_what_an_import_may_not_replace`).
-
-**Shape.** `admission list` should report an unverifiable row rather than fail
-on it; the delete fence's advice should match what the ruling doors can do;
-and whether an operator may deny a pending row that fails verification is a
-question of what destroying unverifiable evidence means.
-
-Related, and in prose since O220 closed: O220's slot rule treats a pending row that cannot be read as replaceable, which is what keeps the one remedy measured here working.
-
-**Gate**: with one pending row's tag zeroed, `admission list` lists the others
-and reports that row; the delete refusal on a row flipped to the reserved wing
-names the exit that works. **Counterfactual**: today's whole-queue failure,
-and advice no door can follow.
-
-**Added 2026-09-19 by O206's ruling, in prose because O206 is done.**
-- **The reverse flip destroys review evidence (P4, measured on `129c789`).**
-  A pending row whose clear `wing` was flipped offline from the reserved wing
-  to `notes` is destroyed by an operator's `drawer delete` — exit 0, the row
-  gone, a plain `del/` tombstone — where the unflipped row is refused. The
-  destruction fence (`is_quarantine_pending`) reads the clear column, so the
-  flip lifts it. MCP is not affected: its by-id fence is `_for_read`, which
-  refuses when either copy names the queue.
-- **O206's retention sweep meets the forward flip.** A drawer whose covered
-  scope is a policy's and whose clear `wing` names the queue is withheld by
-  the sweep, through the fence's own function, with `drawer update` as the
-  exit the reason names — because handed to `forget_with_proof` the fence
-  would refuse the whole sweep. O206's panel judged that changing the fence to
-  read the covered copy where the row is readable (the shape of O216's verdict
-  2) is this entry's decision, not O206's; if this entry rules it, the sweep's
-  withheld arm and its advice follow.
-
-**Relations:** shares a question with O148 — this entry's screen-off remedy exists once that entry's hold lands, and this entry owns its wording.
-
-#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
-
-**The question.** This subsection rules parts (a) and (b); part (c) is escalated in the next subsection.
-- **(a)** What `admission list` does with a queue row it cannot verify.
-- **(b)** Which copy the destruction fence `is_quarantine_pending` reads — and so what the list enumerates, what the refusals advise, and what the read fences built on that function do.
-
-**Prior rulings found and their disposition.** No `#### RULED` subsection exists in this entry. The `rul(ed|ing)` search covered O206, O216, O220, O224, O231, O259 and O267.
-- **The fence's own rationale** (`manage.rs:1253-1258`), clause by clause:
-  - "the fence and the queue can never disagree": FOLLOWED, and kept by construction (ruling item 4).
-  - "reading the HMAC-covered `meta.wing` instead would make an unreadable row undeletable … a stuck vault": FOLLOWED on the unreadable arm, where the clear column still decides. Recorded here: it never held for a tag-failing PENDING row, which the clear column refuses. That row is part (c).
-  - "a flipped column is already an integrity failure `verify` reports": REFUTED, recorded beside it. O206's P4 destroyed a reverse-flipped pending row at exit 0 before anyone ran `verify`. Each door that destroys or overwrites such a row also erases the `mirror_drift` that was its only trace, because the walk reads rows that still exist (`lib.rs:10642-10655`); it leaves a keyed tombstone, a receipt or an ordinary row. An offline `DELETE` of the same row would instead be caught by `verify`'s orphan-label leg.
-- **O216 verdict 2** (the covered copy decides; the clear column only where the read fails) and **its lost options** ("either copy" for destruction; "the clear column alone"): FOLLOWED, now applied to the fence O216 left alone. `import_verdict` (`lib.rs:8243-8276`) already implements it inline.
-- **O206 on the fence** — "revising it is O221's", its lost option "breaks the fence's stated invariant", and O221's prose that the sweep's withheld arm follows: FOLLOWED. The invariant is kept by moving the list with the fence.
-- **O206 ruling 2** ("an unverifiable row is reported from anywhere and destroyed nowhere"): FOLLOWED at its scope, the sweep. For the list, its reason — a report scoped by either copy alone reinstates the escape — is followed by scoping the report to the union of both copies' claims (item 7), not to the whole vault.
-- **O206 ruling 3** (the sweep asks "the fence itself, never a copy") and **its split ruling** (destroy a covered member whose mirror disagrees, and report the drift): FOLLOWED.
-- **O206 ruling 4** (`ok` false while drift is reported): FOLLOWED for the list (item 4).
-- **O206's lost option (d)** (`json_extract` candidates beside the mirror, "a second parser deciding scope"): FOLLOWED. Nothing here lets that parser decide.
-- **O224 item 9** ("an unreadable destination … never fails the list"): FOLLOWED, extended to the row itself.
-- **`is_quarantine_pending_for_read`'s own doc** (either copy refuses a READ; on a read, unverifiable means refuse): FOLLOWED, and extended to the agent-scope history fence.
-- **A28** and **the 2026-09-08 versioning ruling**: FOLLOWED.
-
-**Read before ruling.**
-- **(a) One unverifiable row fails every reader of the queue.**
-  - `admission_pending` enumerates the clear column (`admission.rs:1224`) and `get`s each row with `?` (`:1229`). One tag-failing or meta-unparseable row therefore fails the whole queue on every surface (O216's P3). The export stops on the same row (`export_each`, `lib.rs:11070-11104`).
-  - `drawers.id` is an unconstrained `TEXT NOT NULL UNIQUE` (`lib.rs:5190-5201`), and `StoreError::Integrity` renders it through `Display` (`lib.rs:1926`). An id an offline writer planted reaches stderr and the `/v1` body verbatim, terminal escapes included.
-- **(b) The fence has eight production callers, not the brief's six:**
-  - `delete_drawer_ruled` (`manage.rs:1009`);
-  - `delete_by_source` (`:1227`, through `unwrap_or(false)`);
-  - `_for_read`'s clear leg (`:1289`), which MCP's by-id fence (`mcp.rs:164`) and `/v1`'s (`tenant.rs:1252`) ride;
-  - the agent-scope history fence (`manage.rs:2509`);
-  - `forget --backend`'s pre-flight (`forget.rs:364`);
-  - `attest_in` (`forget.rs:463`), which `forget`, the sweep and `deny` reach;
-  - `import_verdict`'s unreadable arm (`lib.rs:8250`);
-  - the sweep's withheld arm (`retention.rs:470`).
-- **Two more doors exclude the queue by the clear column without calling the fence:**
-  - `dedup_groups` (`manage.rs:1680`), which deletes drop members through `delete_drawer` (`:1795`); MCP's `undercroft_dedup` reaches it;
-  - the dedup refresh's scan (`lib.rs:8042-8051`), which writes `{id: match_id, meta: incoming}` through `Screen::Apply` (`:8085`) after a verified `get` of the match (`:8080-8084`).
-
-  Nothing in `write_drawer_stmts` asks whether a non-diverted write lands on a covered-pending row: its guards cover writing INTO the reserved wing (`:7495`) and diverted writes (`:7513`).
-- **The reverse flip launders the destruction of review evidence.** A pending row whose clear wing was set offline to an ordinary wing is destroyed or overwritten by the vault's own doors:
-  - `drawer delete` (O206's P4, measured);
-  - `forget`, with a third-party-verifiable receipt: `attest_in` verifies the row (the tag covers `meta_json`, not the column) and then asks the clear-column fence;
-  - `dedup --apply`;
-  - a `/v1` save with `dedup_threshold`, which answers `deduped`.
-
-  The history fence also shows the agent the labels of its own diverted write.
-- **The forward flip is advised toward doors that refuse it.** An ordinary row whose clear wing was set to the reserved one is listed with a "would proceed" state while `allow` refuses it (`quarantined`, `admission.rs:1451`):
-  - `destination <X> applied` when X re-derives (`aimed_filing` takes the covered wing, `:246-257`, then `:919`);
-  - `unrecorded-absent` when it does not, because its `queued_against` was stripped (`lib.rs:7596-7598`);
-  - and its intended fields print blank (`admission.rs:1244-1245`).
-- **The cost.** O206's covered walk measured about 1.8 µs a drawer, 0.21 s for a dry sweep over 102,000 sealed drawers; O224 measured today's list at 4–9 ms over 23 rows. The console reloads the list after every ruling (`ui.html:1442`, `:1485`), on `/v1`'s one request loop.
-
-**The ruling, part (b): F2, with the list moved to the same rule.**
-1. **One predicate** answers a row's standing — `Pending`, `PendingUnverifiable` or `NotPending`.
-   - It reads the COVERED `meta.wing` wherever the row's tag verifies and its meta parses, and the clear column only where it does not.
-   - It reads through `covered_one` (`lib.rs:10661`, no decrypt) on the caller's own connection — inside the destruction lock where the caller holds one. `attest_in` uses the meta of the drawer it has already verified.
-   - Any other error propagates.
-   - The current function name is retired, so no caller changes meaning silently.
-2. **Destruction and write fences use it**:
-   - `delete_drawer_ruled`;
-   - `delete_by_source`, whose `unwrap_or(false)` becomes `?` in this unit (O259's shape, made worse once the fence reads a row; O259 keeps its one-lock half);
-   - `forget --backend`'s pre-flight;
-   - `attest_in`;
-   - `import_verdict`, which calls it in place of its inline copy;
-   - the sweep (item 6).
-
-   The two doors that bypass the fence today follow it, through lookups they already make:
-   - **the dedup refresh** never refreshes a match whose covered wing is reserved. Such a match counts as none, and the save files as an ordinary insert;
-   - **`dedup_groups`** drops from a group any member, survivor included, whose covered wing is reserved, read from the `get`s it already makes. Without this, moving the fence would make one reverse-flipped duplicate fail a whole `dedup --apply` midway — O206's hostage shape.
-3. **Read fences decide by EITHER copy**, as `_for_read` does: `_for_read` itself and the agent-scope history fence.
-   - Each is rewritten over an explicit clear-column probe, so moving the destruction predicate cannot relax it.
-   - A28 lets a mirror NARROW a read and forbids it to lift an exclusion, and either-copy only narrows.
-   - On a row that does not verify, the history fence omits that row's records. That is the list analogue of `_for_read`'s "unverifiable means refuse": it depends on nothing the writer chose, and it fails no history call.
-4. **The list enumerates by the same rule**, through `walk_covered`, and takes exactly the rows item 1 calls `Pending`.
-   - Those rows are read for content and destination as today, and each carries its own mirror drift (the walk's strings), so a reviewer sees a reverse flip before a ruling erases its only trace. Drift on a listed row makes `ok` false (O206 ruling 4).
-   - A forward-flipped ordinary row is not listed, and the false `applied` goes with it.
-   - `CoveredRow::TagFailed` and `MetaUnparseable` gain the clear wing, the `seq` and the row's own `meta_json` wing claim, which the walk's statement already selects.
-   - The build may nominate candidates instead — `wing = ? OR json_extract(meta_json, '$.wing') = ?`, optionally behind an expression index — only if the cost probe finds the walk too slow, and the predicate still decides each nominee. That is not O206's lost option (d): there the parser decided scope, here it only proposes, and for a verified row both parsers read the same tag-covered serde output. An expression index is a schema migration with a `READ_SCHEMA` row.
-5. **Refusals name the door that works**, from the typed answer.
-   - `Pending` → `admission allow`/`deny`, which now always act on it.
-   - `PendingUnverifiable` → `Integrity`, naming item 8's remedies and whatever part (c) returns.
-   - A forward-flipped ordinary row is no longer fenced, so `drawer delete` deletes it.
-6. **The sweep keeps asking the fence** (O206 ruling 3).
-   - For a member the walk decided, the answer is now `NotPending`, so a forward-flipped member is destroyed and its drift reported — O206's own "destroy" split. O206's test asserting "withheld" for that member is inverted.
-   - The arm stays, with its reason rewritten for the one case that can still reach it: a member re-diverted between the sweep's decision and its lock. `Settle::AsDecided` asks the fence inside the lock (`retention.rs:443-470`), and by reading the case is reachable — an ordinary row sitting at another filing's queue id (O220 item 1(ii) names such residue), which that filing's flagged write replaces. Without the arm, `attest_in`'s fence would refuse the whole sweep. A test reaches it through that route.
-
-**The ruling, part (a): report the row, never fail the list.**
-
-7. **The unverifiable report.** `admission_pending` returns the readable rows and, beside them, `unverifiable`.
-   - **Its scope** is every row that either copy places in the queue and that does not verify. The two copies are the clear `wing` column and the row's own `meta_json` wing claim, read through `claimed_site` (`lib.rs:2190`). "Does not verify" means: the tag fails, the covered meta does not parse, the content does not decrypt, or (O197) the target field is malformed.
-   - **Each entry carries** the `seq`; the id only when `is_drawer_id` holds, and otherwise "malformed id, N bytes"; a reason from a closed vocabulary; and whether the destruction fence holds the row (its clear column names the queue).
-   - **None of the row's own claims travel** — no intended wing, room, signals or filing. Once the tag fails, those are the writer's strings.
-   - `ok` is false while the report is non-empty.
-   - The return type changes and is `#[must_use]`, so the compiler enumerates every caller and no convenience wrapper can drop the report.
-   - `record_read` counts only the readable rows.
-8. **Every surface.**
-   - **CLI**: prints the pending rows, then the unverifiable ones, and exits 2 when `ok` is false. It never prints "Nothing awaits review." (`main.rs:3155`) beside a non-empty report. It names the remedies: re-import the genuine exported queue record with `UNDERCROFT_ADMISSION=quarantine` declared (O216 verdict 3), or `backup restore` an archive older than the tampering.
-   - **`/v1`**: 200, with additive `unverifiable` and `ok` keys beside `pending` and `screening`; the body is already an object (`tenant.rs:2086-2089`).
-   - **Ops plane**: no code change. `is_integrity_verdict` reads `ok: false` on a body under 400 (`orchestrator/src/main.rs:229-237`), so it exits 2.
-   - **Console**: renders the report and the drift through its escaping helper, with no rule buttons on an unverifiable row, and shows NOT CLEAN on `ok: false`.
-   - **`HAND_PROJECTED`**: rows for the new struct, and for `PendingAdmission`'s drift field, on the CLI and on `ui.html`.
-
-**Options that lost.**
-- **Part (b):**
-  - **F1** (the clear column, with corrected advice): keeps the laundering lever on the four doors above, and the history leak.
-  - **F2′** (move the fence only, list on the clear index): the fence refuses a row the list does not show, on exactly the row the flip hid. The "never disagree" invariant would be refuted rather than kept, to save the walk.
-  - **F3** (either copy, for destruction): O216's lost option. It refuses a row its tag proves ordinary, with advice no door can follow.
-  - **Re-pointing `_for_read` silently at the new rule**: relaxes a read fence nobody ruled on.
-  - **A covered-copy boundary in `write_drawer_stmts` for every ordinary write**: O216 rejected a verified read on every overwrite as a cost every re-mine pays. Item 2 closes the two doors that reach a covered-pending row through lookups they already make.
-- **Part (a):**
-  - **Keep failing**: one offline byte denies review of the whole queue.
-  - **A state on the row carrying its own claims**: unverified strings beside verified ones on a reviewer's surface.
-  - **The id shown verbatim**: the id is the writer's on exactly these rows.
-  - **A vault-wide report** (a run-1 lens): turns the list into a second `verify`, and exits 2 on any vault with an unrelated tampered row.
-  - **A report scoped to the clear column alone** (run 1's refuter, a run-2 lens): hides a tag-broken row whose clear column was moved away while its `meta_json` still claims the queue.
-
-**Where the two runs disagreed, and what settled it.**
-- **The history fence.** Run 1 moved it onto the destruction predicate; run 2 put it on the read rule. **Settled for run 2**: it is a READ fence, `_for_read`'s own doc rules either copy for reads, and A28 lets a mirror narrow a read. Tightened here on the unverifiable arm: both runs read the clear column there, and this record omits the row's records instead, on `_for_read`'s rule, because a failing row's clear column is the writer's.
-- **The report's scope.** Run 1 scoped it to the fence's unreadable arm (clear column reserved); run 2 to either copy's claim, with a marker saying whether the fence holds the row. **Settled for run 2**, by O206 ruling 2's reason: a report scoped by one copy reinstates the escape. Run 1's "double flip" residual holds only for a row whose BOTH copies were rewritten.
-- **The report's rendering.** Run 2 showed the id; run 1 rendered by `seq`, with the id only when `is_drawer_id` holds. **Settled for run 1**, by reading `lib.rs:5190-5201` and `:1926`.
-- **The dedup doors.** Run 1 brought both into this unit; run 2 filed the refresh as a new entry and did not see `dedup_groups`. **Settled for run 1**:
-  - `dedup_groups` must move with the fence, or the fence move creates a hostage (reading of `manage.rs:1680-1797`);
-  - the refresh is the same laundering lever, closed through a lookup it already makes, and leaving it out would let this unit claim to close reverse-flip laundering with one door open.
-
-  Run 2's other route, the id framing, remains a new entry.
-- **The sweep's withheld arm.** Run 1 removed it as unreachable; run 2 kept the call (O206 ruling 3). **Settled for run 2**: by reading, the arm is reachable through residue at a queue id (item 6). Run 1's concern is kept: the stale test is inverted, and a new test reaches the arm.
-- **How the list enumerates.** Run 1: the walk, with an expression index in reserve. Run 2: the walk or nomination, at the build's choice. **Settled**: the walk; nomination is the lever only if the cost probe requires it (item 4).
-- **`ok` on drift.** Neither run said so; tightened here on O206 ruling 4's precedent.
-
-**Claims refuted, the brief's included.**
-- **The brief**:
-  - it named six fence callers; there are eight. It missed `forget --backend`, the history fence, and that `_for_read` is built on the fence;
-  - it missed both dedup doors;
-  - "what it can name of an unverifiable row without trusting it is the id": the id column is unconstrained and the writer's.
-- **A run-1 lens**: "the exit code was already 2, so no `UPGRADING.md` entry". The CLI's exit stays 2, but `/v1` moves from 409 to 200 with `ok: false`, and O206 recorded exactly that move for the sweep.
-- **Run 1's refuter**: the sweep's arm "can no longer fire". It can, through residue at a queue id.
-- **Run 1's refuter**: the history fence "moves with item 1 because the helper it calls moves". That is a mechanical reason for a doctrinal question, and the doctrine says it is a read.
-
-**Probes owed by the build**, run by the integrator:
-- **P2a.** One pending row's tag zeroed. The other rows are listed; the row is reported by `seq` and id; CLI exit 2; `/v1` 200 with `ok: false`; ops plane exit 2; the console shows it.
-- **P2a′.** A row inserted offline into the reserved clear wing under a non-hex id carrying an ANSI escape. It is rendered by `seq`, and no control byte reaches stderr, the `/v1` body or the console.
-- **P2a″.** A tag-broken row whose clear wing is `notes` and whose `meta_json` still claims the queue: reported, marked as not held by the fence.
-- **P2b.** A forward flip: not listed, no `applied`, deletable, and swept with its drift reported.
-- **P2c and P4, inverted.** A reverse flip is listed with its drift, `ok` false. `drawer delete`, `delete_by_source`, `forget` and `forget --backend` each refuse it, naming `allow`/`deny`.
-- **P3a.** A reverse flip, then `forget <id>`. Today: a receipt and exit 0. After: refused.
-- **P3b.** A reverse flip, then a `/v1` save with `dedup_threshold` of similar clean text into the flip's wing and room. Today the pending row becomes an ordinary row and `verify` reads green. After: an ordinary insert, with the pending row intact.
-- **P3c.** A reverse flip on a pending text that duplicates a live drawer, then MCP `undercroft_dedup` with `apply`. Today: destroyed. After: excluded, and the rest of the group collapsed.
-- **The history fence, before and after.** A reverse-flipped row's records are hidden; a forward-flipped row's records are hidden; an unverifiable row's records are omitted. **The `_for_read` arm**: MCP's fence and `GET …/drawers/{id}` answer exactly as before.
-- **The sweep arm.** A member that is residue at another filing's `Q0`, re-diverted between the decision and the lock through a retention pause point: withheld, not a failed sweep. O206's forward-flip test, inverted: destroyed, with the drift reported.
-- **P-cost.** `admission list` wall time and peak RSS at 10⁵ sealed drawers, the walk against nomination. 10⁶ is a long run and needs the maintainer's go.
-
-**Fails silently if:**
-- `_for_read` or the history fence changes through a shared helper;
-- `unwrap_or(false)` survives on the new predicate;
-- the list stays on the clear index while the fence moves;
-- `import_verdict` keeps its inline copy;
-- the sweep's old forward-flip test still asserts "withheld";
-- the dedup refresh or `dedup_groups` keeps its clear-column decision;
-- the report renders an unconstrained id raw;
-- any renderer prints "Nothing awaits review." beside a non-empty report;
-- the console reads a 200 as clean without reading `ok`.
-
-**Dissent.** A run-1 lens for a vault-wide report; run 1's refuter and a run-2 lens for a clear-column scope; run 1's refuter for the history fence on the destruction predicate and for removing the sweep's arm; run 2's refuter for leaving the dedup refresh to a new entry. All overruled above.
-
-**What remains.**
-- **The double flip.** A row whose tag is broken AND whose clear column and `meta_json` were both moved away is outside the fence and the report. That is O216's stated residual: it needs an offline writer, who could delete the row outright. `verify`'s `bad_records` names it, and `backup create` and every rotation refuse while it exists.
-- **Three new entries are owed**, listed at the end of this record: the id-framing route into the queue id space; `check_duplicate`'s clear-column oracle; and `StoreError::Integrity`'s raw rendering of an unconstrained id.
-- **Part (c)** is escalated in the next subsection. O231 is untouched.
-
-**Version: PATCH.** Part (a) is reporting surface for a silent defect; part (b) is a fence that keeps its documented promise (`docs/AGENTS.md`: pending review evidence is refused "on every surface"). **`UPGRADING.md` is owed**, for:
-- `/v1 GET …/admission` answering 200 with `ok: false` and the readable rows, where one unverifiable row made it 409; the CLI also exits 2 on drift on a listed row;
-- `drawer delete`, `delete_by_source`, `forget` and `forget --backend` refusing a reverse-flipped pending row; `dedup --apply` skipping it; a `/v1` dedup save no longer refreshing it;
-- a forward-flipped ordinary row no longer being listed, and now being deletable and swept;
-- the list's cost moving from an indexed lookup to one pass over the corpus.
-
-`config check` cannot see data; `admission list` and `verify` are the detectors.
-
-#### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
-
-**The question (O221(c)).** A pending row whose tag fails can be neither allowed, denied, deleted nor forgotten:
-- `quarantined` and `attest_in` `get` it first (`admission.rs:1447-1450`, `forget.rs:455-459`);
-- `drawer delete` refuses it on the clear column, and still will under part (b)'s unreadable arm.
-
-May an operator destroy it, and with what record and what receipt?
-
-**Why it is the maintainer's.** Every shape that destroys the row either changes a documented reply or adds a verb or a flag. `docs/AGENTS.md`'s `POST …/admission` row says a deny "destroys through the attested-forgetting path and the response carries the receipt" (`tenant.rs:2113-2121`). Either way the choice decides what destroying unverifiable evidence means, which borders O228 (escalated) and O267's erasure ruling. A panel does not decide what a surface offers. Both runs escalated it, and both recommend the same shape.
-
-**Read for the analysis** (both runs, re-read here).
-- **The brief's "stuck until… nothing" is partly wrong.**
-  - O220's slot rule lands any diversion of a filing on its `Q0` when `Q0` cannot be read (`admission.rs:815-818`). So any flagged record of that filing, imported with the screen on, overwrites a tag-failing `Q0` row, and `deny` then destroys it with a receipt — for the substituted text, never the evidence. The trail does not record the act for what it was.
-  - A tag-failing version-slot row is reached only by its own text. While `Q0` is free, its genuine re-import lands on `Q0` and leaves the broken `Qv` in place (`:798-819`). With its text unknown, a `Qv` row has no exit at all.
-- **The measured remedy has two costs.**
-  - O216 verdict 3's re-import needs an export taken BEFORE the tampering, because `export_each` stops on the row (`lib.rs:11070-11104`).
-  - Since O224 it also downgraded the repaired row's record to `unrecorded` (P2d: `lib.rs:8529`, `admission.rs:834-836`). O227's ruling item 1 repairs that where the destination is unchanged.
-- **While the row exists, the vault cannot be backed up or rotated.** `verify` fails, so `backup create` refuses (`backup.rs:175-178`); every rotation refuses (`lib.rs:3379-3401`); `repair` aborts (`manage.rs:1824-1826`). Blocking rotation is the sharpest cost, because rotation is the response to a suspected key compromise. An agent can create the pending row over MCP by submitting flagged text; breaking its tag needs an offline writer.
-- **An unverifiable ORDINARY row is destroyable today**, unattested, through `drawer delete`: `delete_drawer_ruled` reads no content, and `destroy_in` writes a keyed `del/` tombstone (`manage.rs:1105-1112`).
-
-**Decided by both panels in the meantime: D1, plus part (a)'s report.** No ruling door destroys such a row. The list reports it and names the remedies: re-import its genuine exported queue record with `UNDERCROFT_ADMISSION=quarantine` declared, or `backup restore` an archive older than the tampering.
-
-**Options and their costs.**
-- **D1 alone.** The vault stays unable to `backup create` or rotate, and a `Qv` row of unknown text has no exit. The only exit for a `Q0` row substitutes text under a ruling. This is the "stuck vault" the fence's own rationale says it exists to prevent, and it never prevented it for this row.
-- **D2, plain `deny` destroys it unattested** (a ruling record plus `destroy_in`'s keyed tombstone, through `delete_drawer_ruled(Ruled)`, the body the allow already uses). It adds no path. But it changes the documented reply ("the response carries the receipt") on one arm without the operator asking, and a script reading a receipt-less 200 can take it for an attested erasure.
-- **D3, an attestation that marks its content unverified** (or carries a fingerprint over unverified bytes): REJECTED on evidence, three ways.
-  - A receipt that cannot verify must never be minted (`attest_in`'s own rule, `forget.rs:507-526`).
-  - O267's `#### RULED 2026-10-06` item 4 forbids any signed extension to the attestation before O315's age fence, because `verify_forget_attestation` checks the signature before the version and drops unknown fields.
-  - Unsigned, an older verifier drops the marker and reads the document as an ordinary receipt.
-- **D4, an explicitly declared act**: a flag on `deny`, or a verb of its own.
-- **A fence change letting `drawer delete` destroy it**: reuses an existing door, but the trail cannot tell it from housekeeping (`PendingEvidence::Protect`'s reason, `manage.rs:108-111`).
-
-**Recommended answer: D4's shape.** The maintainer picks the spelling. The act is explicit, on one named row, and inside one destruction lock it:
-1. re-classifies the row through part (b)'s predicate and refuses unless the row fails verification now AND the destruction fence holds it — so it can never bypass attestation on a readable row;
-2. appends a ruling whose keyed canonical carries a distinct verdict word (for example `denied-unverified`), so "denied" never means two acts and never reads as housekeeping;
-3. destroys through `destroy_in` and its keyed tombstone;
-4. mints no attestation and no fingerprint, and says so on the CLI, `/v1`, the ops plane and the console;
-5. is unreachable from the sweep, bulk deletes and `forget`, and never allows: releasing unverified bytes into the vault is refused on every arm.
-
-**The split, recorded.** One lens (run 2's software engineering lens) preferred D2 with the same distinct verdict word, because it adds no path. Both refuters and every other lens that stated a preference chose the explicit form, because a script that runs `deny` expects a receipt.
-
-**Claims refuted.**
-- **The brief** did not cite O267 item 4 (a run-1 lens found it), and its "stuck until… nothing" missed the `Q0` substitution route and the `Qv` dead end.
-- **A run-1 lens and a run-2 lens**: "the remedy's downgrade is the correct consequence". That holds across vaults, not within one: see O227 item 1.
-
-**Probes owed, whichever is chosen.**
-- **P-L2b.** Two flagged texts for one filing (`Q0`, then `Qv`); export; rule on `Q0`; zero `Qv`'s tag; re-import the genuine `Qv` record with the screen on. Expected by reading: the text lands on `Q0`, `Qv` still fails, and the list still reports it.
-- **P4x.** A crafted flagged record of the same filing replaces a broken `Q0`, and `deny` then succeeds with a receipt for the crafted text.
-- **P2d**, and its inversion under O227 item 1.
-
-**Fails silently if:** a receipt is minted over bytes nothing verified; a destruction carries no ruling record; or the act is reachable from a sweep or a bulk delete.
-
-**Version class.**
-- **D1**: PATCH — nothing beyond part (a).
-- **D4**: MINOR, a new opt-in capability. No `UPGRADING.md` entry, because nothing that runs today stops.
-- **D2**: changes a documented reply on one arm, which is why it is recommended against.
-- **D3**: rejected.
-
-#### RULED 2026-10-08 by the maintainer
-
-**The question (O221(c)).** May an operator destroy a pending row whose tag fails — a row that can be neither
-allowed, denied, deleted nor forgotten — and with what record and what receipt?
-
-**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
-escalated questions, each shown with its panel's recommended answer, this one among them.
-
-**Decided: D4's shape.** The act is explicit, on one named row, and inside one destruction lock it has the five
-properties the recommendation lists, verbatim:
-1. re-classifies the row through part (b)'s predicate and refuses unless the row fails verification now AND the
-   destruction fence holds it — so it can never bypass attestation on a readable row;
-2. appends a ruling whose keyed canonical carries a distinct verdict word (for example `denied-unverified`), so
-   "denied" never means two acts and never reads as housekeeping;
-3. destroys through `destroy_in` and its keyed tombstone;
-4. mints no attestation and no fingerprint, and says so on the CLI, `/v1`, the ops plane and the console;
-5. is unreachable from the sweep, bulk deletes and `forget`, and never allows: releasing unverified bytes into
-   the vault is refused on every arm.
-
-D2 (one lens's preference) and D3 (rejected on evidence) are not taken. Until D4 is built, D1 and part (a)'s
-report stand, as both panels decided. The probes are owed: P-L2b, P4x, and P2d with its inversion under O227
-item 1.
-
-**Version.** "**D4**: MINOR, a new opt-in capability. No `UPGRADING.md` entry, because nothing that runs today
-stops."
-
-**What remains open: the spelling.** The recommendation says "The maintainer picks the spelling" — a flag on
-`deny` or a verb of its own, and the verdict word, `denied-unverified` being the analysis's example only — and
-the answer approved the shape without naming one. It is still the maintainer's; the building unit asks it with
-its pull request.
-
 ### O223 — a vault's own export restored into that vault rewrites every row, because the import stamp moves `added_by`
 
 **Filed 2026-09-18 by O216's real-corpus drive, measured on the `4ff51ab`
@@ -40590,120 +42379,6 @@ CHANGELOG states that a new diversion's queue id is its text's version slot and 
 reused; `docs/THREAT_MODEL.md`, `docs/MULTI_TENANCY.md`, the `queue_slot` and `admission_divert` doc comments,
 O221's prose sentence on the slot rule and CLAUDE.md's slot-rule sentence move with the build (the CLAUDE.md
 change through the maintainer's approval of the pull request).
-
-### O226 — a convergence with equal content still replaces the pending row's covered declaration
-
-**Filed 2026-09-18 by O220's refuter, established by reading.** O220's ruled
-design converges a diversion whose text equals the pending row's, and the
-write replaces the row's metadata wholesale: `kind`, `supersedes`, the agent
-claims, `content_date`, `occurrences`. `admission_allow` restores those
-fields, and `PendingAdmission` shows none of them, so what a reviewer allows
-can carry a declaration the screen never saw beside the text it did.
-
-**Why it is a ruling.** Equality deliberately excludes metadata, because
-`filed_at`, `added_by` and the signals legitimately differ on every re-mine
-and restore. Which covered fields are part of "what the screen saw" is the
-question — and the answer decides whether a convergence may write them.
-
-**Gate**: a convergence that changes only `kind` or `supersedes` leaves the
-pending row's covered declaration as the reviewer will allow it, as ruled.
-**Counterfactual**: today, the incoming declaration replaces it.
-
-O224's ruling fixes this entry's answer for one field: a convergence never
-rewrites `queued_against`, the record of what the destination held, because
-that record is what an allow requires to hold and restoring the vault's own
-backup converges every pending row. Whatever is ruled here for the other
-covered fields must not loosen that.
-
-**Relations:** shares a question with O148 — this entry's convergences are reached with the screen off once that entry's hold lands.
-
-#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
-
-**The question.** A diversion whose text equals a pending row's text converges, and its write replaces the row's metadata wholesale (`lib.rs:7647-7653`); only `queued_against` is carried (O224 item 3). The allow restores every covered field it does not clear (`admission.rs:1317-1326`). Which covered fields may a convergence rewrite, and does the list have to show the declaration the allow will restore?
-
-**Prior rulings found and their disposition.** No `#### RULED` subsection exists in this entry.
-- **O220 item 2** (equality is verbatim content; metadata is excluded): FOLLOWED. It rules what is EQUAL, not what is written, and slot choice is untouched (O197's ruling adds the target to identity, beside that item).
-- **O220's "equal text converges and writes, as today"** and **O215** (re-mining is never a no-op): "writes" is FOLLOWED — the convergence still writes and appends its chain record. "As today" is REVISED beside it, on the evidence below, for what the write carries.
-- **O224 item 3** (a convergence copies the stored record verbatim, a stored none included) and **its lost "re-basing" option**: FOLLOWED and generalized. Nothing here loosens it, because `queued_against` is part of what is carried.
-- **`update_drawer`'s "the reviewer must rule on exactly what the screen saw"** (O216) and **O224's converse**: FOLLOWED, extended from the text to the whole row.
-- **O31** (the screen is the only author of screen fields): FOLLOWED. It is why the signals are the one exception (item 1).
-- **O224's residual** (a metadata-only move of the destination is replaced by the allow): untouched.
-
-**Read before ruling.**
-- **What a convergence writes today.** The door clones the incoming candidate and changes only the wing, room, signals, id and `queued_against` (`admission.rs:1134-1140`, `:761-769`). `write_drawer_stmts` replaces `meta_json` wholesale. The batch carry (`lib.rs:7840-7866`) and the backstop `queue_row_raced` (`:7421-7432`) handle `queued_against` alone.
-- **What the allow restores, and what the reviewer sees.** The allow restores verbatim `kind`, `supersedes` (receipted at write time, `lib.rs:7565-7581`), the `agent`/`channel`/`session` claims, `content_date`, `hall`, `occurrences`, `filed_at`, `added_by`, the line span, `normalize_version` and `id_recipe`. `filed_at` is the retention clock, and any past value passes (`admission.rs:472-491`). The list shows none of these except `filed_at` and the signals (`:51-78`).
-- **What the screen reads**: content, wing, room and the writer identity (`admission.rs:1063-1126`). It never reads `kind`, `supersedes`, `content_date` or the claims.
-- **Legitimate convergences differ only in `filed_at`, `added_by` and the signals:**
-  - API saves never converge, because each takes a unique append index;
-  - an unchanged re-mine carries a new `filed_at`;
-  - a self-restore stamps `added_by` as `import` (`lib.rs:8569-8576`) and carries the payload's `filed_at`;
-  - two identical flagged updates keep the stored meta and re-stamp `added_by` (`manage.rs:1335-1336`).
-- **Signals legitimately vary between equal-text submissions.** The rate signal is a function of the window (`admission.rs:1067-1072`, `:1171-1203`) and the tier-2 advisor is a model call (`:1114-1125`). A later screen can therefore carry fewer, or more, signals than the first.
-- **What a hostile converger can do today.** A converger is anyone holding the text and the filing; the filing is recoverable offline (O220), and a tenant reaches the convergence through `/t/import`. Today such a converger can:
-  - back-date `filed_at`, so the allowed drawer is swept at once;
-  - move `content_date` into a date window;
-  - attach a `supersedes` link, receipted at release, or a `kind` the reviewer never saw.
-- **No false alarm.** An identical rewrite raises no version-replay finding: `replay_finding` returns none when the newest record's tag equals the row's (`replay.rs:176-179`).
-
-**The ruling: C1. A pending row's covered declaration changes only by a ruling, as its text already does.**
-1. **What a convergence writes.** It still WRITES (O215, O220), so the chain records every re-submission. What it writes is the stored row's whole covered meta, verbatim, with one exception: `admission_signals` becomes the stored signals followed by any the current screen raised that are not already there, deduplicated by (code, offset), stored order first.
-   - The signals are the screen's own output (O31).
-   - The allow clears them (`admission.rs:1322`), so they cannot widen what is released.
-   - A re-submission's own signal (a rate anomaly, an advisor verdict) is evidence the reviewer should keep.
-2. **Carried by default.** The function clones the stored meta and replaces only the signals. It does not enumerate fields, so a `DrawerMeta` field added later is carried — fail-closed — with no second inventory to keep in step. A gate drives a convergence whose incoming meta differs from the stored row's in every serialized key (iterated from the serialized form, so a new field is covered without editing the test) and requires the stored covered meta back, byte for byte, apart from the signal union.
-3. **One function, three call sites, at `Q0` and at `Qv` alike:**
-   - **the door**: `read_queue_row` returns the stored meta, read in the same `get` that judged `SameText`, and `Slot` carries it;
-   - **the batch `taken` map**: it holds the occupant's meta, not the text-and-record pair;
-   - **`queue_row_raced`**: a row counts as raced unless its text and every carried field equal the candidate's and its stored signals are a subset of the candidate's. A retry converges and carries.
-4. **The target.** With O197's ruling, a convergence requires the same filing, text and target, so carrying the stored target is a no-op. `queued_against` is carried as O224 item 3 ruled.
-5. **The doc.** `PendingAdmission.filed_at`'s doc (`admission.rs:60-63`) is corrected: it is the filing time the FIRST submission carried — for an update the drawer's original time, for a re-mine when its `Drawer` was built, for an import the payload's value.
-
-**Costs, stated.**
-- A re-mine no longer moves a pending row's `filed_at`. An allowed drawer's retention clock therefore starts at the first submission, the earlier of the two and so the stricter.
-- A self-restore no longer moves `added_by` on queue rows. O223 keeps the question for ordinary rows.
-- A corrected declaration takes effect at the first re-mine after the ruling.
-- A bursty self-restore under a declared rate screen adds its rate signal to the rows it converges on, as the wholesale write records it today.
-
-**Options that lost.**
-- **C2, carry a named subset** (a run-2 lens): sound for the declaration, but it lets a convergence move `filed_at` — a crafted one backward, after review — which is the one covered field the reviewer is shown. A subset list also defaults a new field to "rewritable", the fail-open direction.
-- **C3, a slot per declaration**: revises O220 item 2 with no legitimate producer, and puts two rows with one text before a reviewer; the siblings both reach `applied` (`admission.rs:919`), so the later allow rewrites the declaration anyway.
-- **C4, refuse a differing declaration**: breaks "never rejected and never silently dropped", whose cost O220 measured on re-mines and restores (P-tail, P-restore).
-- **C5, the status quo plus showing the declaration**: the list is stale by allow time (O224's r3), and binding the declaration into the allow is O225's question, the maintainer's.
-- **Signals from the incoming write alone** (a run-1 lens): drops evidence a reviewer may already have seen.
-- **The stored signals verbatim** (run 2): see the split below.
-- **A `DrawerMeta` destructure with no `..`** (run 1's mechanism): see the split below.
-
-**Where the two runs disagreed, and what settled it.**
-- **The signals.** Run 1 took the union; run 2 kept the stored signals verbatim. **Settled for run 1.** O220 item 2's own words ("the signals vary") and the screen's code (the rate window, the advisor call) show that a later submission can raise a signal the first did not. Under verbatim that signal is written nowhere durable: the converging write's chain record holds only the row's tag. Run 2's reason — staleness cannot widen what is released — is true, and it answers release, not the loss of review evidence. The union only grows, so it never removes what a reviewer saw.
-- **The mechanism.** Run 1 destructured `DrawerMeta` with no `..`, so a new field would not compile until ruled; run 2 carried by default. **Settled for run 2's mechanism.** Carrying by default is already fail-closed for a new field, and a destructure is a second inventory every future field must touch for no change in outcome. The serialized-key gate (item 2) is what sees a new field.
-- **Agreed by both runs, and kept**: C1, `filed_at` and `added_by` carried, three call sites, and the doc correction.
-
-**Claims refuted.**
-- **The brief**: its list of who converges is right, but it omitted that a later screen can carry different signals from the first.
-- **A run-2 lens**: C2 "costs the legitimate convergences nothing". It keeps today's moving `filed_at`, the one covered field the reviewer is shown, and with it the back-dating lever.
-
-**Probes owed by the build**, run by the integrator:
-- **P5, inverted.** Two converging imports that differ only in `kind`, `supersedes`, a past `filed_at` and `agent`. After an allow, the drawer carries the FIRST declaration, and the chain holds one write record per submission. Counterfactual: today it carries the second.
-- **A back-dated `filed_at` convergence**, then an allow, then a retention sweep. Today the drawer is destroyed; after, it is kept.
-- **An in-batch convergence** (one CLI chunk) that differs only in `kind`.
-- **A raced convergence** carrying a different stored meta: refused by the backstop, and converging on retry.
-- **A convergence whose screen raises a rate signal the first lacked**: the row's signals become the union.
-- **O224's self-restore gate** still passes, and an unchanged re-mine of a flagged file leaves the covered meta byte-identical apart from the signal union.
-
-**Fails silently if:**
-- the carry runs at the door but not in the `taken` map or the backstop;
-- it applies at `Q0` and not at `Qv`;
-- the merge enumerates fields, so a new one takes the incoming value;
-- O224's self-restore gate changes;
-- `filed_at`'s doc keeps the old rule.
-
-**Dissent.** A run-2 lens for C2; run 2's refuter and two run-2 lenses for verbatim signals. Overruled above.
-
-**What remains.**
-- **The list shows little of what an allow restores.** Beyond `filed_at`, the list shows nothing of the restored declaration. That gap exists on every pending row, not only on convergence, and binding the declaration into the allow is O225's question (decided with O229), the maintainer's.
-- **O223's neighbourhood narrows** for queue rows, without ruling O223.
-
-**Version: PATCH.** No surface field is added; one reporting field's documented meaning is corrected. **`UPGRADING.md` is not owed**: nothing that runs today stops. CHANGELOG states that a convergence keeps the pending row's declaration.
 
 ### O227 — a restore into another vault leaves every restored pending update un-allowable as it stands
 
@@ -41604,6 +43279,21 @@ boundary, as "What remains" asks; and item 13's five filings are O416 (i), O417 
 and O420 (v). The correction beside O238 and the scoping of CLAUDE.md's VACUUM sentences remain owed.
 
 **Relations:** shares a diff surface with O269 — one arm for undecodable rows and unparseable meta, and the boundary move that produces both.
+
+#### RULED 2026-10-12 by the maintainer
+
+**The question.** P15f — the walk's wall time and WAL growth, `verify` with the new legs, warm search
+and repeated withheld opens, at ~10⁵ on both levels — a long run; the ruling above allows 10⁶ "only on
+the maintainer's go".
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-12 to the list of
+questions that day's rulings escalated, each shown with its recommended answer, this one among them,
+and relayed with the list to O294's build by the integrator.
+
+**Decided — as recommended, in the integrator's words:** the ~10⁵ measurements may run when the machine
+is otherwise idle; 10⁶ still needs a go of its own.
+
+**What remains open.** The build, gated by its probes; P15f at 10⁶.
 
 ### O235 — `StoreError::Integrity` says "HMAC mismatch" at sites where no HMAC was compared
 
@@ -43225,6 +44915,13 @@ still refused.
 
 **Relations:** shares a question with O356 — both change what `verify_forget_attestation` answers for a genuine document.
 
+**Noted 2026-10-12 by O315's build.** `verify_forget_attestation` now runs an age fence first — a version or
+a key this build does not know is refused as NOT CHECKED (`StoreError::Invalid`) before the vault, the
+signature or a tag — so this entry's verdict is reached only by a document past it. The three types gained a
+flattened `unknown` map, empty on every minted receipt and serialised to nothing; `AttestationVerdict` is
+untouched and keeps `Copy`. Every receipt this entry's gate mints with `v1.5.2` and `v1.6.1` passes the
+fence: no key any release minted is unknown to it.
+
 #### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
 
 **The question.** A receipt minted before O255 while another handle committed carries that handle's records inside
@@ -44354,6 +46051,10 @@ docs sweep, including `forget.rs` 798-799's comment), O317 (an archive-removal s
 open for its engineering half — `secure_delete`, a TRUNCATE checkpoint after a destruction, and P-Q1e's
 FTS5 residue.
 
+**Noted 2026-10-12 by O315's build.** Item 4's fence is built (O315, under `## 1.7.0`): a version or a key
+this build does not know is refused as NOT CHECKED before the vault, the signature or a tag, so a signed
+archive extension may follow it from 1.7.0 on.
+
 #### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
 
 **The question.** This entry's engineering half, as its ruling of 2026-10-06 left it (item 5 and its closing
@@ -45057,6 +46758,12 @@ The history arm's `/v1` 400 (O268 item 9's classes). O274 (a restore records not
 already offers. `UPGRADING.md`'s manual-step text is narrowed and the fresh-host precondition documented;
 no new entry, since nothing that runs today stops.
 
+**Noted 2026-10-12 by O308's build.** The predicate this entry's ruling splits by is built:
+`undercroft_vault::ManifestHistory::of(head, writes, staged_attached)`, with
+`Vault::manifest_history()` over a handle's unlock values, and the restore stage already asks it in
+place of `writes() > 0`. A *Fresh* live target read through `unlock_as(id, Access::ReadOnly)` is
+`manifest_history() == ManifestHistory::Fresh` on that handle.
+
 ### O271 — `vault create` checks for the vault, then writes, with nothing in between
 
 **Filed 2026-09-26 by O268's ruling (security, memory and storage lenses).**
@@ -45353,6 +47060,8 @@ point, or a non-empty directory that is not a vault at `vaults/<id>`, with sympt
 **What remains open.** Nothing for the maintainer. The build lands with or after O292's ruling on a directory
 holding a database and no manifest; the probes G1-G6 are the integrator's; the Windows arms are O275's W9 and
 W10.
+
+**Noted 2026-10-12 by O294's build (its ruling's item 5).** The reading above that run 1's refuter took from 1.90.0's source — `FileRenameInfoEx` with POSIX semantics after `ERROR_ACCESS_DENIED` — is the same in 1.98.1's `std::fs::rename` on Windows (the same code, one comment moved), the pin every build uses from O294 on, so it now describes what ships; no Windows binary was built by 1.90.
 
 ### O272 — `validate_name` measures the trimmed value while its callers keep the raw one
 
@@ -45996,7 +47705,7 @@ only where a Windows deployment that worked stops (delete's narrowed retry may r
 to move). A refusal of restore-over-existing on Windows (C) is PATCH where W1 shows it never
 worked there; were it to work today and be withdrawn, the maintainer weighs it as a possible MAJOR.
 
-**Relations:** sequenced after O294 — a claim about Rust's rename on Windows is a claim about the toolchain that builds the shipped binary, which that entry pins.
+**Noted 2026-10-12, a relation that was declared here:** sequenced after O294 — a claim about Rust's rename on Windows is a claim about the toolchain that builds the shipped binary, which that entry pins. O294 closed on that date, pinning 1.98.1, so this is a note rather than a `Relations:` line (the maintainer's ruling below, and the note after it).
 **Relations:** shares a question with O285 — the moved-file check answers nothing off unix, so whether a move can happen there decides what that entry's check leaves uncovered.
 **Relations:** shares a question with O271 — that entry's directory publish and its link check are measured on native Windows here.
 
@@ -46027,6 +47736,8 @@ helper is built with the order the probe selects, never before it (item 3).
   and a second `unsafe` block is, by `CLAUDE.md`'s Conventions, a new decision for the maintainer, so before
   outcome (A)'s check is built the integrator confirms with the maintainer, measurement attached, that this
   answer granted it.
+
+**Noted 2026-10-12 by O294's build — the "1.90" in the maintainer's answer, refuted beside by O294's ruling of that date.** "On the pinned 1.90 toolchain" described the pin the panels then assumed. The pin O294 ruled carries Unicode 17 and is 1.98.1, not 1.90, and no Windows binary was ever built by 1.90 (O294's P2: every v1.* binary was built by 1.97.1, 1.98.0 or 1.98.1). The probe runs on the pin, which is the toolchain that builds the shipped binary — the intent this entry's relation to O294 stated — and the changed number is put before the maintainer in the pull request that carries the pin, before this entry's run is dispatched. The 1.90 readings above hold of the pin: 1.98.1's `std::fs::rename` on Windows is the same code as 1.90.0's (one comment moved), so a failed fallback still returns the first error unless the second is `DIR_NOT_EMPTY`, and its `decode_error_kind` maps `ERROR_ACCESS_DENIED`, a sharing violation and delete-pending as 1.90.0's did (O294's desk reads).
 
 ### O285 — an `immutable=1` handle whose database moved after its open serves the set-aside vault for its life
 
@@ -46297,6 +48008,14 @@ that removes the escalation fails it if the escalation is what it claims.
 
 **Relations:** sequenced before O285 — that entry's narrowing of the escalation's arrival route lands only once this measurement shows at which step a write-protected mount fails.
 
+**Relations:** shares a question with O431 — the escalation this entry would measure is where that entry's blind handle comes from.
+
+**Noted 2026-10-12 by O213's independent review.** A genuinely read-only mount reached the escalation:
+a vault directory mounted `:ro` in Docker, with the `-shm` removed and a hot `-wal`, printed the
+escalation's "opened with immutable=1" warning on `--read-only stats` (the reviewer's probe, in the
+O213 unit's evidence). That is one shape — no `-shm` — and does not settle the shape this entry names,
+where the `-shm` is present.
+
 
 ### O292 — a vault directory holding a database and no manifest reads as no vault at all, and `create` mints a new salt beside it
 
@@ -46480,31 +48199,6 @@ gate admits no read of a manifest file outside the guarded read.
 **Amended 2026-09-29 by O290's ruling.** The store's open no longer reaches `promote`'s bare read of `vault.json`: its promote is licensed by the manifest rule's guarded reads, and the body that writes reads no `vault.json`. The rotation alone still makes that read, under its exclusive hold, where a FIFO would hold the fence; its ruled miss stays the rotation's heal, and an unreadable file must stay `Io`, never "not current, so write". The bare `staged_on_disk` read inside `remove_staged_if_unchanged` is still reached under the write lock on the licence's promoted-since branch, so a FIFO at `.next` there still blocks — this entry's, with how an unreadable `.next` beside a verified `vault.json` answers. Sequenced after O290 deliberately: a guarded `promote` read refusing a missing file, landed first, would have closed two of O290's arms on its own and let its counterfactual pass.
 
 **Noted 2026-09-29 by O291's ruling.** Restore's hold on a FIFO at `vault.db` answers a raw SQLite `SystemIoFailure` ("disk I/O error") in 78 µs — no hang, but no named refusal either (O291's PR5). O291's delete refuses any entry that is not a regular file before its hold opens anything; restore's door surveys no entries, so this stays here with its other bare reads.
-
-### O294 — the native release targets build on an unpinned toolchain
-
-**Filed 2026-09-28 by O289's ruling (its engineering lens, confirmed by the refuter).** The
-Docker images pin `rust:1.90-slim-bookworm`, so every suite, the lint and the Linux images build
-on 1.90. `release.yml`'s binary targets build with whatever stable toolchain each runner has
-installed (it only adds the target), and `windows-check` takes `dtolnay/rust-toolchain@stable` —
-so the Windows, macOS and native Linux artifacts are built by a compiler no suite ran, and a claim
-about "Rust 1.90's std" (O289's Windows reading) is not a claim about what ships.
-
-**Shape**: one pinned toolchain for every build — a `rust-toolchain.toml`, or the version named in
-both workflows — with a gate that the Dockerfile's image and the pin agree.
-
-**Gate**: a preflight comparing the Dockerfile's `rust:` tag with the workflows' toolchain, both
-directions.
-
-**Relations:** sequenced before O275 — a claim about Rust's rename on Windows is a claim about the toolchain that builds the shipped binary, which this entry pins.
-
-**Relations:** shares a diff surface with O168 — both change `windows-check`'s toolchain step.
-
-**Noted 2026-10-08 by O166's ruling (its item 5).** The hash identity's token space depends on std's
-Unicode tables (`is_alphanumeric` in `segment`, `to_lowercase` in `search_key`), so two native
-release artifacts built on different stable toolchains can tokenize a newly assigned codepoint
-differently under one name. O166's golden-vector assertion runs only in the Docker toolchain and
-cannot see the native release builds until this entry pins them.
 
 ### O295 — the rotation's own promote overwrites a `vault.json` edited inside its fence, and reports nothing
 
@@ -47243,8 +48937,13 @@ only one posture is driven; only `VaultStore::open` is driven.
 documented contract moves and no running deployment stops, so **`UPGRADING.md` owes nothing**.
 
 **Relations:** shares a diff surface with O271 — that entry's publish decides which directory a stale open can meet, and this predicate is what such an open asks first.
-**Relations:** sequenced before O308 — both decide what the writable open answers on the line that creates a missing database, and this predicate runs before that refusal or a race answers `DatabaseMissing`.
-**Relations:** shares a diff surface with O213 — the read-only retry of this race lands on that entry's fresh-vault state and answers whatever it rules.
+**Noted 2026-10-12 by O308's and O213's build, which landed first.** O308's door (`absent::door` in
+the store crate) asks, in order: the vault directory gone; the unlock's values bound to `vault.json`
+by `manifest_seen`'s digest; a non-empty `-wal`; then the predicate. Item 5's order puts this entry's
+predicate between the first two, and the binding already answers this race with the reopen class at
+the CREATE arm — except an absent `vault.json` there, which it answers in the manifest rule's
+integrity class where item 2 rules the reopen class. The read-only retry lands on O213's
+`ReadOnlyNoAnchoredWrite`. Both partners are under `## 1.7.0`.
 
 ### O306 — the anchor door writes over an anchor its committed head does not descend from, when `chain_meta` is edited beneath a live handle
 
@@ -47568,213 +49267,6 @@ for another first open is this entry's question too.
 **Gate**: the two-process first-open loop answers no raw SQLite error in ≥200 runs, and an open-pause arm
 places the second open's migration between the first's read and its `ALTER`.
 
-### O308 — a writable open over a deleted `vault.db` beside a manifest past genesis creates the database before it refuses
-
-**Filed 2026-09-30 by O303's independent review (its F1); established by reading.** `connect_writable`
-opens with `SQLITE_OPEN_CREATE` whenever the layout is `DbLayout::Absent`, and the schema batch commits
-`meta`, `drawers`, `audit` and their indexes; the rotation reconcile's lock path (the marker is absent)
-then judges the empty trail `Headless::Erased` and refuses `ManifestTampered` (O303). So the refusal
-leaves an empty database behind, and every later open on either posture answers `ManifestTampered` where
-the read-only open answered A33's `DatabaseMissing` before it — an incident read as tampering rather
-than as a missing file. On `main` `5fc6171` the same writable open seeded `chain_meta` from the manifest
-and served an empty vault at the manifest's height, taking writes; O303 closed that, and this is what
-it leaves. The deleted file is the most ordinary producer of O303's erased trail.
-
-**Shape, for a ruling**: the writable posture refuses an absent database beside a manifest whose head is
-past genesis or whose height is above 0, before it connects, as A33's `DatabaseMissing` (an integrity
-verdict), after O291's `vault_gone` check; a manifest at genesis and height 0 is a fresh vault's first
-open and keeps creating. O213 asks the read-only half of the same question for a manifest at genesis.
-
-**Gate**: a vault with records whose `vault.db` is deleted — a writable open refuses and no `vault.db`
-exists afterwards; a read-only open still answers `DatabaseMissing`; a fresh vault's first open still
-creates it; a delete racing the open still answers the reopen class.
-
-**Relations:** shares a diff surface with O213 — both are answered through the absent-database predicate and door this entry's ruling defines.
-
-**Relations:** sequenced after O302 — both decide what the writable open answers on the line that creates a missing database, and that entry's predicate runs before this refusal.
-
-#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
-
-**The question.** What the writable posture does with a vault directory that holds no database beside a
-manifest past genesis or above height 0. Today `connect_writable` opens with `SQLITE_OPEN_CREATE` whenever
-`DbLayout::Absent` (store `lib.rs` 4980-4982), the schema batch commits in autocommit (5185-5230), and
-only then does the rotation reconcile's lock path, taken because the new file has no keycheck marker
-(4346-4349), judge `Headless::Erased` (4681-4687) and refuse `ManifestTampered` (2677-2679). The created
-file outlives the refusal, so every later open on both postures answers tampering where the read-only open
-answered A33's `DatabaseMissing`. Ruled with O213, O270 and O292, because all four ask what a door may do
-with a vault directory missing half its pair.
-
-**Prior rulings found, and their disposition.** A case-insensitive `rul(ed|ing)` search of this entry finds
-its filing line only; searched also in A33/R4, O279, O280, O291, O296, O303, O254, O257, O91, O213 and
-O302.
-- **A33/R4** ("'Empty' is not 'absent'; this is an integrity verdict and exits 2"): FOLLOWED. A manifest
-  that records history beside no database answers `DatabaseMissing` on both postures.
-- **O279/O280** (no open by path carries CREATE unless the directory holds no database; the layout is read
-  ONCE and its path is the one opened): FOLLOWED, and narrowed by the manifest.
-- **O303, 2026-09-30** (only the empty chain is adopted; a genesis head beside a nonzero height is
-  `ManifestTampered`; "fails silently if `CREATE TABLE` stays before the judgement"): FOLLOWED one level up.
-- **O296** (a refusal writes nothing): FOLLOWED.
-- **O291 item 11** (a vault whose directory is gone answers the reopen class first): FOLLOWED, its order
-  kept.
-- **O254's P1** (no byte comparison of `vault.json` on the writable posture, because a busy writer
-  anchors): FOLLOWED — item 2's comparison is asked only where no database exists to anchor from.
-- **O257** (an unlock deletes no `vault.json.next`; a file this build cannot authenticate is inert, vault
-  `lib.rs` 2779-2786): FOLLOWED, and it settles a split between the runs (below).
-- **O91** (a posture is a property of the path): FOLLOWED — it is why `recorded_embedder` is one of the
-  places the door is asked.
-- **O302** (open): touched, not ruled; its absent-database race is met by item 2.
-
-**Decided shape.**
-1. **One predicate, in `undercroft-vault`, over the manifest's two MAC-covered fields** (`writes`,
-   `chain_head_hex`):
-   - *Fresh*: the head is `Vault::chain_genesis_hex()` AND the height is 0 AND no authenticated staged
-     manifest is attached (`Vault::has_pending()`). An unauthenticated `vault.json.next` decides nothing
-     (O257).
-   - *Mixed*: a genesis head with a height above 0, or a non-genesis head with height 0. No build writes
-     either; only a key holder can.
-   - *History*: anything else, an attached authenticated `.next` included.
-
-   It replaces the restore stage's `vault.writes() > 0` (`restore.rs` 257), `adopt_empty_chain`'s
-   `manifest.writes() == 0` (store `lib.rs` 6546, which keeps its strict `verified_manifest()` read under
-   the lock, 6538), and `check_chain_read_only`'s `Headless::Empty` arm, which today reads neither field
-   (5775-5779). `judge_headless` keeps its anchor comparison: it classifies rows against an anchor, a
-   different question. A source gate pins that no other `writes() == 0` / `writes() > 0` spelling remains
-   in the store crate's production code.
-2. **The evidence is the unlock's verified values, bound to the directory.** Where the door finds no
-   content, it compares the digest of `vault.json`'s current bytes with the unlock's `manifest_seen`
-   (vault `lib.rs` 1153, set at 2771 from the very buffer whose MAC was verified, 2744-2771). Equal: the
-   unlock's values ARE a strict read of those bytes. Different: `StaleUnlock`, the reopen class. Missing
-   or not a manifest file: the manifest rule's own answer (`absent()`, 2364-2384; integrity, no tamper
-   event). A handle minted by `create` (`manifest_seen` is `None`) skips the comparison. Never asked
-   outside the no-content arm (O254's P1).
-3. **"No content"** is decided by a stat that follows a link, as `DbLayout` and SQLite do (O279's gate G8
-   opens a linked database), with every error but not-found propagated, never `Path::exists`: no main
-   file at either name, or the one main file a regular file of length 0. Not inside `DbLayout::of`: O291's
-   delete holds the zero-length file it made through that function.
-4. **The door, in order**: (a) the vault directory gone → `vault_db::deleted`, the reopen class (O291);
-   (b) item 2's binding; (c) a NON-EMPTY `-wal` of either name beside no content → `DatabaseMissing`
-   naming the `-wal`, saying it may hold committed frames and must not be deleted, with nothing opened;
-   an empty `-wal` or a `-shm` is scaffolding and is ignored; (d) *History* → `DatabaseMissing`, nothing
-   created, its text naming `vault.json.next` with O296's "do NOT delete it" where one is attached;
-   (e) *Mixed* → `ManifestTampered` on both postures, as `adopt_empty_chain` already answers it
-   (6551-6553); (f) *Fresh* → the writable posture proceeds, the read-only posture answers O213's variant.
-5. **Where it is asked**: in `recorded_embedder` (7037-7081), which answers `None` without opening
-   whenever there is no content, so it never opens a zero-length file; at the head of `open_inner`,
-   before `migrate_db_filename` (5173); at the head of `open_inner_read_only`, replacing 5444-5458; and
-   again on `connect_writable`'s single layout read (4964-4982), where `SQLITE_OPEN_CREATE` is granted
-   only on the door's *Fresh*-and-no-content answer at that same observation. One production CREATE grant
-   in the store crate, pinned by a source gate.
-6. **`DatabaseMissing` becomes posture-neutral**: it drops "or open the vault with a writable process if
-   you intended to start an empty one" (2053-2054), which after this ruling is false on both postures; it
-   names the recorded height (MAC-covered evidence) and says no open creates a database; its remedy is to
-   stop every process that had the vault open, then restore the database, or the vault, from a backup
-   (O270's procedure); it never advises deleting a file. Its doc comment stops saying "a read-only open
-   found".
-7. **`UPGRADING.md`**: the O303 entry ("where every `audit` row is gone beside a manifest past genesis") is
-   amended in place if this lands before `1.7.0` is tagged: a deleted `vault.db` beside a manifest past
-   genesis answers `DatabaseMissing` and leaves no database; `ManifestTampered` stays for an emptied
-   `audit` beside a database that is present. Landing after the tag, it is an entry of its own.
-
-**Where the two runs disagreed, and what settled it.**
-- *Placement.* Run 1 placed the decision on `connect_writable`'s one layout read alone; run 2 at four
-  sites. Settled by reading: `recorded_embedder` opens any present main file read-only before either open
-  (CLI `open_store_as`; `/v1`'s factory, `tenant.rs` 3405), and `migrate_db_filename` opens a legacy file
-  before the connect, so run 1's single site comes after two openers. Run 1's objection to a pre-check
-  alone — a `vault.db` deleted between that check and 4965 is still created — is met by keeping the
-  connect's read as the one CREATE grant. The union stands.
-- *The evidence read.* Run 1 asked a strict `verified_manifest()` re-read; run 2 the unlock's values bound
-  by item 2. Settled for run 2's shape, with both runs' stated reasons corrected. Run 2's "a fresh
-  `verified_manifest()` read has a fall-back of its own" is false: its doc and body say "with NO
-  fall-back" (vault `lib.rs` 2386-2418); its staged branch serves only a handle whose keys came from
-  `.next`. Run 1's strict read fails on the race run 2 named: after a delete and a `create` of the same id
-  between the unlock and the check (O302), the new `vault.json` fails the old handle's MAC, and
-  `verified_manifest`'s refusal raises the manifest tamper event (`refusal`, 2344-2352) — a page for a
-  race. The binding answers it with the reopen class, and when the bytes are unchanged it reads exactly
-  what a strict read would.
-- *The zero-length file.* Run 1 held it for probes; run 2 settled it by reading SQLite. Settled by
-  reading the pinned source: `pagerOpenWalIfPresent` (`sqlite3.c` 60436-60464) DELETES the `-wal` of any
-  database whose main file has 0 pages (60452-60453), whenever a connection takes its shared lock
-  (`pagerSharedLock`, 62516), with no read-only guard; and `journal_mode=WAL` on a rollback-mode file
-  calls `sqlite3BtreeSetVersion(2)` through a rollback-journal transaction (101043-101049), writing page
-  1, so no WAL database SQLite made has a 0-byte main file. The arm's safety does not even rest on that:
-  a 0-byte main file with no `-wal` holds no committed byte anywhere, and with a non-empty `-wal` the door
-  refuses having opened nothing. The probes become build gates.
-- *`vault.json.next`.* Run 2 refused any `.next` beside no content in the integrity class; run 1 counted
-  only an authenticated one. Settled for run 1 by O257's recorded doctrine ("A file this build cannot
-  authenticate is inert", vault `lib.rs` 2779-2786) and by `integrity_verdict`'s, which gives no integrity
-  verdict where nothing was verified (O204). An authenticated `.next` makes the manifest *History*.
-- *A Mixed manifest.* Run 1 folded it into "records something" (`DatabaseMissing`); run 2 answered
-  `ManifestTampered`. Settled for run 2: one state answers one class at every arm, and
-  `adopt_empty_chain` already answers it so.
-- *A link.* Run 2 decided presence by `symlink_metadata`, which reads a dangling link at `vault.db` as
-  content, so beside a *History* manifest the connect would still see `DbLayout::Absent` and CREATE
-  through the link — defeating this entry. Item 3 follows the link; what a link at a database name should
-  answer is a new entry (below).
-
-**Options that lost, with their cost.**
-- (ii) Keep `ManifestTampered`, judged before the connect: a second head-less judge that runs with no
-  database (`judge_headless` and `chain::regime` both query `audit`), against O296's one judgement, and it
-  names a missing file as tampering.
-- (iii) Today's order: the open manufactures the evidence its own verdict then reads, for every later
-  open, and on a lone `-wal` the connect's first statement destroys it (P-WAL).
-- Either single placement: each leaves an opener ahead of it (above).
-- A strict re-read: a tamper page for a race (above).
-- Refusing any `.next` by presence: an integrity verdict on an unauthenticated file, against O257.
-- Deferring the zero-length arm: the pinned source settles it, and the arm is safe without it.
-
-**Claims refuted, the brief's first.** The brief's P-ZERO premise ("SQLite reads a 0-byte file as an
-empty database, so the schema batch would still run") is right and incomplete: the first lock deletes any
-`-wal` beside it. The brief's "the panel should say which is the evidence" is answered by item 2. Run 1's
-lens claim that `PRAGMA page_count` after O279's proof would count committed `-wal` frames, and the lenses'
-"a zero-length main file beside a `-wal` may be a live database", fall to the same reading. Run 2's
-`verified_manifest` fall-back and run 1's strict read: above. Run 2's "read-only connections included" is
-CONFIRMED by the pinned source.
-
-**Probes owed (the integrator's; build gates, none decides the shape).** Each gate asserts the variant AND
-that no `vault.db`, `-wal` or `-shm` exists afterwards AND `vault.json`'s SHA-256 unchanged, because
-today's class is integrity too.
-- P-ZERO: a vault with records; `vault.db` truncated to 0 bytes, `-wal`/`-shm` removed; a writable open on
-  `781b5b9` (expected: the schema batch, then `ManifestTampered`, the file holding the schema) and on the
-  build (`DatabaseMissing`, the file still 0 bytes).
-- P-ZERO-WAL: a 0-byte `vault.db` beside a non-empty `vault.db-wal` and a manifest that records writes;
-  `--read-only stats` on `781b5b9` (expected: the `-wal` gone, through `recorded_embedder`) and on the
-  build (refused, the `-wal`'s SHA-256 unchanged).
-- P-WAL: `vault.db` removed, `vault.db-wal` kept; a writable open on `781b5b9` (expected: CREATE, the
-  `-wal` deleted) and on the build (refused, the `-wal` unchanged).
-- P-O302-ABSENT: pause at `Opener::WritableLayout`; delete the vault; `vault create` the same id; release.
-  Both postures answer the reopen class; the retry creates (writable) or answers O213's variant
-  (read-only); no tamper event is counted.
-- P-LINK (for the new entry): a dangling link at `vault.db` beside a *Fresh* manifest; a writable open on
-  `781b5b9`. Is the link's target created outside the vault directory?
-
-**Dissent.** None on refusing before the CREATE or on the class.
-
-**Fails silently if** `recorded_embedder` or `migrate_db_filename` opens a no-content file before the door;
-the zero-length test lands in `DbLayout::of`; the CREATE grant reads a different observation from the
-door's; item 2 is asked on the writable posture outside the absent arm; the predicate reads one field, or
-reads `.next`'s presence rather than its MAC; a gate asserts the class alone; there is no arm deleting only
-`vault.db*` during the `WritableLayout` pause; the A33 unit test's premise "the writable open is allowed to
-create it" and `o303_only_the_empty_chain_is_adopted` stop running on a *Fresh* vault;
-`o291_open_store_as_meets_a_delete_in_its_window_as_no_such_vault` stops answering the reopen class
-because (d) is asked before (a).
-
-**What remains.**
-- What a link at a database name answers on the open path — followed (as O279's G8 opens a linked
-  database, and as a dangling one beside a *Fresh* manifest is created through today) or refused (as O283
-  and O291 refuse links on restore and delete) — is a new entry, measured by P-LINK, its ruling the
-  maintainer's ratification of O283's extension.
-- A process still holding the deleted database's unlinked inode can anchor by path between the unlock and
-  item 2: the reopen retries once, then says so (exit 1). O268 item 8's residual.
-- A NON-EMPTY schema-less main file (one page, no tables) beside a *History* manifest still gets the
-  writable open's schema batch before `ManifestTampered`. Stated with its argument: the verdict is the
-  same on both postures before and after the batch (O213's item 6), no build writes that file, and
-  judging it first is O322's option (b), which lost there.
-- O302's other arms (a present database; the `immutable=1` escalation) stay O302's.
-- Relations owed, each with its reciprocal in the same commit: O213 and O302.
-
-**Versioning.** PATCH. The class does not move (exit 2, `/v1` 409 with `class: "integrity"`); the variant
-and text change and nothing is created. `UPGRADING.md` is amended per item 7.
-
 ### O310 — a release tag is published before anything checks it: release.yml has no pre-publish guard
 
 **Filed 2026-10-05 by O309's ruling.** `release.yml` fires on any `v*` tag push and publishes five
@@ -48089,7 +49581,7 @@ the workflow.
 
 **Relations:** calls O324 — the guard runs that entry's tag-ruleset decision before anything publishes, and first-parent is durable only while `main` stays append-only, which that entry's ruleset (A) makes readable.
 
-**Relations:** shares a diff surface with O326 — the `guard` job's job-level `contents: read` is that entry's per-job permissions, applied first to the one job that must never hold a write token.
+**Noted 2026-10-12, a relation that was declared here:** shares a diff surface with O326 — the `guard` job's job-level `contents: read` is that entry's per-job permissions, applied first to the one job that must never hold a write token. O326 closed on that date: `release.yml` reads at the workflow level and grants each job its write, with `persist-credentials: false` on every checkout in a write job, so the guard job takes `contents: read` in that layout, and a third-party action it uses must be pinned by commit with its version beside it, which the `supply chain is pinned` preflight requires. A note rather than a `Relations:` line, which names open entries only.
 
 **Version class.** Release tooling inside the unreleased 1.7.0: PATCH-class at most, with a CHANGELOG
 line and no `UPGRADING.md` entry. No documented operator contract moves and nothing an operator runs
@@ -48337,25 +49829,6 @@ the tree, which no arm judges — filed as its own entry, not ruled here.
 **Version class.** PATCH-class: a preflight change with no bump of its own; a CHANGELOG line; no
 `UPGRADING.md` entry.
 
-### O315 — a signed erasure receipt is checked for its signature before its version, so a field a newer build adds makes every older build call it forged
-
-**Filed 2026-10-06 by O267's ruling (its refuter; the order read again by the integrator).**
-`verify_forget_attestation` checks the Ed25519 signature over `att.canonical()`
-(`crates/undercroft-store/src/forget.rs` 650-656) before it matches the version (684-693), and the
-attestation type drops unknown fields (no `deny_unknown_fields`, 179). A receipt minted by a build that
-signs one more field is recomputed shorter by an older build, fails the signature, and is reported
-`ATTESTATION FAILED`, exit 2 — the tamper verdict — which the comment at 681-683 ("a document a newer
-build minted is not a forgery") says must not happen, and which a version bump does not prevent. It has
-happened once: the `mirror` extension (256-258) shipped in `30c560f`, first tagged `v1.1.0`, with no
-version change, so every pre-1.1.0 verifier reads a genuine mirror-bearing signed receipt as forged.
-
-**Shape**: an age fence on the O241 ruling 4 and O238 precedent — an unknown version, or a field this
-build does not know, refused as "a newer build minted it" (exit 1) BEFORE the signature is checked —
-landing in a release before any further canonical extension; O316's signed archive note waits for it.
-**Gate**: a signed receipt carrying an extra canonical field is refused with exit 1 by the fenced build,
-and the same document without the field verifies; counterfactual, today's order answers exit 2 (O267's
-P-Q1d).
-
 ### O316 — an erasure says nothing of the copies it leaves, and a restore reverses receipted erasures in silence
 
 **Filed 2026-10-06 by O267's ruling (items 2 and 3).** A vault DELETE answers `deleted: true` while the
@@ -48381,6 +49854,13 @@ step; every over-claim above is corrected and the `Dangling` scope stated; the c
 new field gets its `HAND_PROJECTED` rows; `ui.html` renders neither, which is written down. **Gate**:
 P-Q1a and P-Q1b driven through the CLI and `/v1`; the new fields asserted present and, with nothing left,
 empty or "unknown" as ruled; a text check over the surfaces above.
+
+**Noted 2026-10-12 by O315's build.** The age fence refuses any key a receipt does not declare, before its
+signature, as NOT CHECKED, and `POST /v1/vaults/{id}/forget` answers with the attestation itself — so this
+entry's unsigned archive note cannot ride as a top-level key of that reply, or this build's own
+`verify-forgetting` refuses the reply it minted. Where the note travels instead is this entry's build to
+settle. A SIGNED note, declared in a later release, is answered as not checked by every verifier from 1.7.0
+up to that release and as forged by 1.6.1 and older, which its `UPGRADING.md` entry owes.
 
 **Relations:** shares a diff surface with O147 — both add fields to the reply of `DELETE /v1/vaults/{id}`.
 
@@ -48921,112 +50401,6 @@ precede.
 
 **Relations:** shares a diff surface with O318 — both edit the `BackupAction` enum and its dispatch in `crates/undercroft-cli/src/main.rs` and the backup rows of the surface tables.
 
-### O322 — the head-less refusal says "Nothing was written." for a database whose open has already renamed and migrated it
-
-**Filed 2026-10-06 by O303's ruling of that day.** The `Orphaned` refusal text
-(`crates/undercroft-store/src/lib.rs` 2680-2685) says "Nothing was written." unconditionally while naming
-"a source build older than 0.19.0" as a cause, and for that population `open_inner` has already run O7's
-`palace.db` to `vault.db` rename (5173) and the schema batch with the fts, kg, manage and retention
-initialisers (5185-5262) before `init_chain` refuses. O303's record admits it among what fails silently
-(its "for the source-built population 'nothing written' is not literal") with no argument for leaving the
-text as it is.
-
-**Shape**: scope the sentence to 1.x databases, or move the judgement ahead of the rename and the schema
-batch for a database with no `chain_meta` table — a ruling, since the second moves O7's order. **Gate**:
-a source-built-shaped database's refusal text and its bytes after the refusal agree.
-
-#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
-
-**The question.** `ChainJudgement::answer` maps `Headless::Orphaned` to an integrity finding ending "Nothing
-was written." (store `lib.rs` 2680-2686) while the writable open has already run O7's `palace.db` rename,
-the schema batch and, at one of its two sites, the fts, kg, manage and retention initialisers. Scope the
-sentence, move the judgement ahead of the rename and the batch, or leave it with an argument?
-
-**Prior rulings found, and their disposition.** O303, 2026-09-30, item 8 (which wrote the text) and its
-"fails silently if … for the source-built population 'nothing written' is not literal": FOLLOWED — this
-closes what it admitted. O303, 2026-10-06 (the maintainer's approval: D′ stands; no "open it once with
-1.6.1"; its residual that the remedy cannot work for a source-built database): FOLLOWED. O284 item 2 ("the
-wording says what is true"): FOLLOWED. O7 (the maintainer's naming ruling; its mechanism refuted and
-rebuilt by O279, O280 and O281): UNTOUCHED — nothing is reordered, so nothing is escalated. The
-maintainer's 1.0.0 decision: FOLLOWED.
-
-**Decided shape: (a), each text naming what it guarantees.**
-1. Every open-path refusal that can follow the rename, the schema batch or the initialisers stops saying
-   "Nothing was written" and names what its path leaves as found. The sites, the union of both runs: the
-   store's `answer()` `Orphaned` arm (2682); `foreign_race` (4461-4466); both `settle_foreign` texts
-   (4507-4514, 4517-4524); `init_chain`'s re-adoption race (6452-6456); `chain::writes`'s two texts
-   (`chain.rs` 322-337, reached through `judge_chain` at 4632); and the vault crate's `ManifestMoved`
-   (~424), `StagedLost` (2262-2269) and `absent()` (2364-2384), reached from the same lock path through
-   `license_promotion`, `anchored_head` and `promote_licensed`. `refuse_before_effect`'s "The rotation
-   reconcile wrote nothing: …" (4544-4545) already says what it guarantees and stays.
-2. One shared constant carries the guarantee every site has: the `audit` rows and `chain_meta` are as
-   found (no step before either site appends a record; `init_chain` judges before it creates
-   `chain_meta`, and `adopt_empty_chain`'s lock rolls the table back on a refusal). The lock-path sites
-   add `vault.json`, `vault.json.next` and the key-generation marker as found: nothing acts before their
-   judgement and the lock rolls the marker back. The `init_chain` sites do not claim those three, because
-   this open's own reconcile may have promoted a staged manifest or re-seeded the marker before them. No
-   text claims the `-wal` is as found: the legacy rename's TRUNCATE checkpoint runs first.
-3. The vault-crate texts are reworded so they stay true on their non-open callers too (the anchor door,
-   `verify`).
-4. The `Orphaned` remedy names both readings it gives: an edited or rolled-back vault — restore it from a
-   backup that verifies; a database a source build older than 0.19.0 wrote and no 1.x build opened — no
-   supported path (O303, 2026-10-06; `UPGRADING.md`). Text only; nothing new is served.
-5. A source gate counts every "Nothing was written" literal in the store and vault crates' production code
-   against an allowlist with reasons (O80: counted against the code), so a site neither run found — store
-   `lib.rs` 910, 931, 6008, 7545, `chain.rs` 275 among the candidates — is classified rather than missed.
-
-**Where the two runs disagreed, and what settled it.** Run 1 proposed ONE constant claimed true at every
-site; run 2 per-site subsets. Settled for per-site subsets with a shared core (item 2), by reading
-`reconcile_rotation` (4349-4446): its ACT block promotes, removes a stage and commits a marker before
-`init_chain` runs, so at the `init_chain` sites "`vault.json`, `.next` and the marker as found" is not
-guaranteed. The site lists differed: run 1 missed the vault-crate texts, run 2 missed `chain::writes`'s;
-the union stands, and item 5's gate keeps it complete.
-
-**Options that lost, with their cost.**
-- (b) Judge first: a second, schema-tolerant judge or a judgement inside `migrate_db_filename`'s exclusive
-  hold — a second implementation of O296's one judgement and a reorder of the stretch O279/O281 pin — for
-  a population 1.0.0 withdrew, and it would still leave the `init_chain` sites false.
-- (a) by plumbing what this open did (the security lenses: the rename's outcome, `schema_version` before
-  and after): true, but new plumbing that becomes its own thing to gate, threaded into typed refusals one
-  of which (`ManifestTampered`) carries no text, for what the rename's own warning already logs.
-- (c) Leave it: a false sentence in an integrity verdict, which O303 itself listed under "fails silently".
-
-**Claims refuted, the brief's first.** The brief lists `refuse_before_effect`'s staged text among the false
-ones; it is scoped and true. The brief misses the vault-crate texts, `foreign_race`, `init_chain`'s race
-and `chain::writes`. Its "on an already-migrated 1.x database these are no-ops by reading" holds only at
-1.7.0's schema. The population is wider than source builds: any refused writable open of a vault still
-named `palace.db` (1.0.0 to 1.4.x, never opened by 1.5.0 or later) runs the TRUNCATE checkpoint and the
-rename first, and `idx_audit_record_id` first ships in `v1.1.0` (`53949bd`, after the `v1.0.0` tag). The
-filing's "(5185-5262)" and O303's 2026-10-06 "(lib.rs 5173-5262)" overstate for the source-built
-population, which has no keycheck marker before `cc0e1c7` and so refuses at `reconcile_rotation` (5233),
-before the initialisers; both records are corrected beside, never in place. The memory lens's "every
-pre-judgement effect is evidence-neutral": the TRUNCATE checkpoint can discard superseded WAL frames, which
-is why no text claims the `-wal`.
-
-**Probes owed (build gates; the text is chosen by reading).** Two fixtures, each run on `781b5b9` and on the
-build, each naming its site with a pause witness: (1) the lock path — `palace.db`, the keycheck row
-deleted, `chain_meta` dropped, `idx_drawers_room` and `idx_audit_record_id` dropped, a non-empty `-wal`;
-(2) the fast path — `palace.db`, `idx_audit_record_id` dropped, the marker kept. Each records file names,
-`sqlite_schema` and every file's SHA-256, asserts the narrowed text and the absence of "Nothing was
-written", asserts what the text claims (`vault.json`'s bytes, the `audit` rows and tags, `chain_meta` and,
-at the lock path, the marker and `.next`, as found), and pins the rename and the indexes as effects the text
-does not deny. On the read-only posture both show no rename and a true text. P-1x322 (a `v1.0.0`
-release-built vault) is the cheaper real-population check; P-SRC322 only if the source-built population is
-revisited.
-
-**Dissent.** The security lenses of both runs would plumb what this open did; not adopted, for the cost
-above.
-
-**Fails silently if** the only fixture is `to_v1` plus `DROP TABLE` (marker kept, `vault.db`, both indexes
-present), which reaches the `init_chain` site and exercises none of the effects; a posture-blind rewording
-is false on the read-only posture; one site is reworded and not the others; a vault-crate text stops being
-true on the anchor or `verify`; O296's pinned `Want` fragments move without the record beside them.
-
-**What remains.** D′'s residual (O303, 2026-10-06): a source-built database is refused as integrity for
-what is really age. Unchanged; item 4 only stops the remedy pointing that reader at a backup that cannot
-help.
-
-**Versioning.** PATCH, text only. No `UPGRADING.md` entry is owed.
 
 ### O323 — unmeasured: a genesis manifest put back beside an emptied audit table may be adopted as a fresh vault's empty chain
 
@@ -49042,7 +50416,10 @@ an A2- and O241-class pair restore, the same under D′ and C.
 — then rule whether a verify leg owes each drawer its record. **Gate**: as the measurement rules; until
 then this entry is the record that the case is unmeasured.
 
-**Relations:** shares a question with O213 — the state this entry measures reads as the empty chain there and gets that entry's refusal text.
+**Noted 2026-10-12 by O213's build.** On the read-only posture the empty chain now answers
+`ReadOnlyNoAnchoredWrite` beside a *Fresh* manifest and `ManifestTampered` beside a *Mixed* or
+*History* one; this entry's state (a genesis manifest put back beside an emptied `audit`) is the
+*Fresh* case and gets that text, whose second reading names it.
 
 #### PANEL RECORD 2026-10-08 — a probe decides first
 
@@ -49640,7 +51017,7 @@ the escalation that follows.
 
 **Relations:** depends on O310 — that entry's `guard` runs first, and every pointer move here asks its item 5 again.
 
-**Relations:** shares a diff surface with O326 — `draft`, the upload legs, `verify` and publication are the only jobs that hold `contents: write`.
+**Noted 2026-10-12, a relation that was declared here:** shares a diff surface with O326 — `draft`, the upload legs, `verify` and publication are the only jobs that hold `contents: write`. O326 closed on that date: `release.yml` reads at the workflow level, its `binaries` and `binaries-ort` take `contents: write` per job and give `GH_TOKEN` to their upload step alone, and the image jobs take `packages: write`; the placeholder `gh release create` and the `--clobber` uploads cited above (78-82, 188-190) sit at 107-108 and 221-222 of `release.yml` now. Those binary jobs still HOLD the grant while their build scripts run, which is what this entry's separate upload jobs close. They take their grants in that layout, and a third-party action they use must be pinned by commit. A note rather than a `Relations:` line, which names open entries only.
 
 **Version class.** Release tooling: PATCH-class, with a CHANGELOG line and no `UPGRADING.md` entry.
 Install URLs and asset names do not move; a release named latest only once complete keeps the promise
@@ -49796,44 +51173,6 @@ analysis lists. The costs stated above are taken. Not on in the same unit as dra
 
 **What remains open.** The maintainer applies the setting once all five conditions hold; until then it stays
 off.
-
-### O326 — the workflows run third-party actions by mutable tag, and `release.yml` hands every job a token that can write the repository and its packages
-
-**Filed 2026-10-06 by O313's ruling (its refuter).** Every third-party action is referenced by a tag that
-can move: `docker/setup-buildx-action@v4`, `docker/login-action@v4` and `docker/build-push-action@v7` in
-`release.yml` and `republish-ort-image.yml`; `aquasecurity/trivy-action@v0.36.0`,
-`dtolnay/rust-toolchain@stable` (O294's unpinned toolchain) and `taiki-e/install-action@v2` in `ci.yml`;
-`peaceiris/actions-mdbook@v2` in `ci.yml` and `pages.yml`. `release.yml` grants `contents: write` and
-`packages: write` at WORKFLOW level (15-17), so jobs that need only packages hand a contents-write token
-to third-party code — the moved-tag class O313 is about, pointed inward, and a route by which assets
-could be replaced with no tag moving.
-
-**Shape**: pin every third-party action by commit SHA, its version in a comment, and move permissions to
-each job at least privilege. **Gate**: a host-side preflight refusing a `uses:` without a 40-hex SHA
-outside `actions/*` (or with a reasoned allowlist), and refusing workflow-level write permissions in
-`release.yml`; counterfactual, today's files.
-
-**Relations:** shares a diff surface with O310 — that entry's `guard` job takes its permissions per job, read-only, before the rest of this entry lands.
-
-**Relations:** shares a diff surface with O325 — that entry's `draft`, upload, `verify` and publication jobs are the only ones that hold `contents: write`.
-
-**Relations:** shares a diff surface with O168 — both change `windows-check`'s toolchain step.
-
-**Relations:** shares a diff surface with O395 — inputs through `env:` and per-job permissions in the same workflow.
-
-**Relations:** shares a diff surface with O397 — the publishing jobs' permissions.
-
-### O327 — the former-name preflight runs an unpinned `python:3-slim` with the checkout mounted read-write
-
-**Filed 2026-10-06 by O314's ruling of that day (its refuter).** `tests/battery.sh` (791, 808-810,
-817-818) runs the no-trace scan in `python:3-slim`, unpinned by digest, with the working tree mounted
-read-write (`-v "$(pwd):/r"`, no `:ro`). The tag moves upstream routinely, and on the maintainer's host a
-replaced image runs with write access to the checkout, `.git/hooks` included, while `verify.py` only
-reads.
-
-**Shape**: pin the image by digest and mount the tree `:ro`, as O189 and O314 pin what they bring in.
-**Gate**: the preflight's own source check refuses an unpinned image or a writable mount, with a premise
-that the scan still runs and fires on its known positive.
 
 ### O329 — an exit-2 verdict on a telemetry build skips the flush of its spans and metrics
 
@@ -50236,6 +51575,13 @@ through `mine` (a filename holding U+001F, the chunk chosen by the file) and MCP
 unmeasured. Related: an ordinary import record whose id equals a queue id lands as residue in that
 space (O220 item 1(ii) replaces such residue on the next diversion of that filing). O221's ruling of
 2026-10-08 keeps its sweep arm because the residue route reaches it.
+
+**Corrected beside, 2026-10-12, by O221's build (measured):** the residue route does not reach
+the sweep's arm. The in-lock recheck re-classifies a member before the fence is asked, and a
+member re-diverted onto its queue id between the decision and the lock has a covered wing no
+policy covers, so it is dropped as out of scope — not destroyed, not withheld, the sweep `ok`
+(`o221_a_member_re_diverted_inside_a_sweep_window_is_not_destroyed`). The arm stays, as ruled, as
+a backstop.
 
 **Shape, candidates for its build.** Refuse control characters in `source_file` in
 `validate_declaration`; or a covered check scoped to a write landing on an existing row in the queue
@@ -51374,7 +52720,7 @@ publishes nothing.
 
 **Relations:** shares a question with O310 — this workflow publishes outside that entry's guard.
 
-**Relations:** shares a diff surface with O326 — inputs through `env:` and per-job permissions in the same workflow.
+**Noted 2026-10-12, a relation that was declared here:** shares a diff surface with O326 — inputs through `env:` and per-job permissions in the same workflow. O326 closed on that date: `republish-ort-image.yml` reads at the workflow level, grants `packages: write` to its two jobs (`docker-ort` and `manifest-ort`) alone, and names its third-party actions by commit. A note rather than a `Relations:` line, which names open entries only.
 
 ### O396 — the default release artifacts are never smoke-probed, and the ort image is pushed before its smoke
 
@@ -51414,7 +52760,7 @@ on) and the two annotations.
 
 **Relations:** shares a diff surface with O325 — a digests asset uploaded before that entry's `verify`.
 
-**Relations:** shares a diff surface with O326 — the publishing jobs' permissions.
+**Noted 2026-10-12, a relation that was declared here:** shares a diff surface with O326 — the publishing jobs' permissions. O326 closed on that date: every publishing job takes its write per job (`packages: write` for the image and manifest jobs, `contents: write` for the binary jobs), the workflow reading by default. A note rather than a `Relations:` line, which names open entries only.
 
 ### O403 — a vault 1.6.0 or 1.6.1 wrote may hold a resurrected tunnel that a surplus repeat record hides from `verify`
 
@@ -51596,6 +52942,27 @@ three a linkless filesystem gets:
 either no file at the name or a whole one (or the refusal, writing nothing); on a real vfat mount the
 same. Windows' link error on FAT is unmeasured and owed by whichever option is ruled.
 
+#### RULED 2026-10-12 by the maintainer
+
+**The question.** Which writer a filesystem without hard links gets for a key: the in-place create as
+built, a no-replace rename, or a refusal.
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-12 to the list of
+questions that day's rulings escalated, each shown with its recommended answer, this one among them,
+and relayed with the list to O294's build by the integrator.
+
+**Decided — as recommended, in the integrator's words:** O210's no-link-filesystem fallback becomes a
+no-replace rename, through the `rustix` crate. Where `link()` answers "unsupported", the key's fsynced
+temp is published by a rename that refuses an existing name, so the torn-key window the in-place create
+keeps closes there too — through `rustix`, a new dependency, rather than a second `unsafe` block, which
+`CLAUDE.md` reserves to the maintainer and which this answer does not grant.
+
+**What remains open.** The build and the gate above. Which call `rustix` reaches on each target
+(`renameat2(RENAME_NOREPLACE)` on Linux, `renamex_np(RENAME_EXCL)` on macOS, `MoveFileExW` without
+`MOVEFILE_REPLACE_EXISTING` on Windows), and what a target it does not reach gets, is the build's to
+establish and state; Windows' link error on FAT stays unmeasured until then. `rustix`'s licence and its
+`NOTICE` line are the build's.
+
 ### O413 — nothing reports a secret file's leftover temp, including one that is a second hard link to the live key
 
 **Filed 2026-10-12 by the independent review of O210's build.** O210's publisher leaves a
@@ -51719,6 +53086,340 @@ validation joins that narrower refusal is this entry's question.
 import keeping what its payload says. **Gate**: a `valid_from` that is not a date — or, if only item 10's
 refusal is ruled, one holding a C0 byte — is refused on MCP, the CLI and `/v1`, and an import of the
 vault's own export still lands; counterfactual, today's acceptance.
+
+### O422 — the token path, room derivation and refine's lowercasing read std's Unicode tables, so every Rust release that moves them is an identity decision
+
+**Filed 2026-10-12 by the ruling on O294 and O166.** With O294's compile-time assertion, a toolchain
+whose std moves Unicode version fails to compile until someone rules: hold the toolchain, or mint an
+identity and walk the fleet. Decoupling — the sites read a pinned Unicode-data source at a declared
+version, so the toolchain moves freely — needs a data source, which is a dependency and licence
+choice.
+
+**Noted 2026-10-12 by O294's build — a relation the ruling declared here.** Sequenced after O421 — at
+version 17.0.0 a decoupled path must reproduce that identity byte for byte, so it needs no walk of its
+own. O421 sits under `## 1.7.0 — unreleased`, its target release, so this is a note rather than a
+`Relations:` line, which names entries under `## Open` only.
+
+**Relations:** shares a question with O432 — the tables this entry generates are what that entry's id recipes would read, at a version that entry rules.
+
+#### PANEL ANALYSIS 2026-10-12 — escalated to the maintainer
+
+**The question.** Which Unicode-data source, under which licence and `NOTICE` text, may the token
+path read in place of std, and when?
+
+**Why escalated.** A new dependency or generated data and its attribution are the maintainer's.
+
+**Recommended answer.** Tables GENERATED in-tree from the Unicode Character Database 17.0.0 files,
+each pinned by sha256, the O189 `textfit` precedent: no crate a `cargo update` can move, and the
+definition's provenance is the repository's. Exactness is binding, or tokens move at the same
+version: `is_alphanumeric` is Alphabetic ∪ General_Category {Nd, Nl, No} (ICU's binary `Alnum` is
+POSIX, Alphabetic ∪ Nd, and drops every No character); `is_uppercase` is the derived Uppercase
+property, not General_Category Lu; lowercase is `str::to_lowercase`'s, unconditional SpecialCasing
+plus Final_Sigma. A source gate counts every std Unicode property call in the token path and the
+derived keys against the one door, both directions: a hand list misses sites (the brief missed
+`lexical_score`'s split and two `is_numeric` guards). Timing: before the first Rust release that
+carries Unicode 18 is wanted.
+
+**Options.** The generated tables (recommended). The already-linked `icu_properties` 2.2.0 (Unicode-3.0
+licence, reached through `url` → `idna` → `idna_adapter`), plus a case-mapping source that the lock
+does not hold. `unicode-properties` 0.1.4: General_Category only, no Alphabetic, so it moves Brahmic
+vowel signs — rejected. Not decoupling: every Unicode-moving toolchain is a held toolchain or a fleet
+walk.
+
+**Separately, for the maintainer, independent of any option:** `icu_properties` and `icu_normalizer`
+(Unicode-3.0) are already compiled into the binary through `url`, while `NOTICE` (59-80) attributes
+ICU4X only for `calendrical_calculations`. Whether they owe attribution is a licence question.
+
+**Probe owed when a source is chosen: P-U6**, that source against the pin's std over every scalar
+value in P-U1's format, equal at 17.0.0.
+
+**Version class.** PATCH at version 17.0.0 if P-U6 shows equality: nothing observable moves.
+
+#### RULED 2026-10-12 by the maintainer
+
+**The question.** The panel analysis above: which Unicode-data source the token path reads in place of
+std, under which licence and `NOTICE` text — and, separately, whether `icu_properties` and
+`icu_normalizer` owe attribution.
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-12 to the list of
+questions that day's rulings escalated, each shown with its recommended answer, this one among them,
+and relayed with the list to O294's build by the integrator.
+
+**Decided — as recommended, in the integrator's words:** the token path reads in-tree tables generated
+from the Unicode Character Database 17.0.0 files, each pinned by sha256 (the O189 precedent), proven
+equal to Rust 1.98.1's std; and `icu_properties` and `icu_normalizer` (Unicode-3.0) get `NOTICE`
+attribution. So no crate a `cargo update` can move holds the definition. Exactness binds as the
+analysis states — `is_alphanumeric` as Alphabetic with General_Category Nd, Nl and No, the derived
+Uppercase property, `str::to_lowercase`'s SpecialCasing and Final_Sigma — and P-U6 is the proof: the
+generated tables against 1.98.1's std over every scalar value, in P-U1's format (O294's record), equal
+at 17.0.0.
+
+**What remains open.** The build, before the first Rust release carrying Unicode 18 is wanted, and the
+`NOTICE` attribution (below).
+
+**Noted 2026-10-12 by O294's build — the attribution can land on its own, and it is not one line.** It
+waits for nothing here: the crates are compiled into every binary today, through `url`, whatever this
+entry's build does. The Unicode License V3 (`icu_properties` 2.2.0's `LICENSE`, read from the registry
+under the pin) grants its permission "provided that either (a) this copyright and permission notice
+appear with all copies of the Data Files or Software, or (b) this copyright and permission notice
+appear in associated Documentation", so `NOTICE` owes the copyright line and the whole notice, a block
+of the `calendrical_calculations` shape; and the resolved graph holds 19 packages declaring
+Unicode-3.0 (`cargo metadata` under 1.98.1): the seven `icu_*` crates, `litemap`, `potential_utf`,
+`tinystr`, `writeable`, `yoke`, `zerofrom`, `zerotrie` and `zerovec`, the three `-derive` proc-macro
+crates beside them, and `unicode-ident` (MIT or Apache-2.0, AND Unicode-3.0). The answer named two.
+Which of the 19 a `NOTICE` block must name — the proc-macro crates and `unicode-ident` run at build
+time — is the attributing unit's to read and state, so O294's build leaves the block to that unit
+rather than writing a one-line entry that would be short.
+
+### O423 — `script_of`'s Han arm stops at Extension F, so CJK Extensions G, H, I and J tokenize as one whole-run `Other` token
+
+**Filed 2026-10-12 by the ruling on O294 and O166.** `script_of` (`crates/undercroft-core/src/script.rs`
+139-180) classes Han by explicit ranges ending at `0x2A700..=0x2EBEF` and `0x2F800..=0x2FA1F`
+(144-149). Extension I (U+2EBF0–U+2EE5F), G (U+30000–U+3134F), H (U+31350–U+323AF) and J (U+323B0–
+U+3347F, Unicode 17) fall to `Script::Other`, which does not attach without a delimiter, so a run of
+them is one token (`emit`, 320-330) rather than Han unigrams and bigrams: under the default fusion a
+query for a two-character word inside a longer run finds nothing on the lexical channels, and the
+hash embedder gives such a query no trigram either. 9,753 ideographs assigned by Unicode 16
+(lens 2, from Python's `unicodedata` names) and 4,298 in J. Released in both populations, independent
+of the toolchain. Fixing it moves assigned characters' tokens, so it carries an identity question;
+O421 item 5 asks that it be ruled before that entry's unit is built, so that a fix rides the
+same walk.
+
+**Noted 2026-10-12 by O294's build — a relation the ruling declared here.** Sequenced before O421 — if
+fixed, the fix rides that entry's identity. O421 sits under `## 1.7.0 — unreleased`, its target
+release, so this is a note rather than a `Relations:` line, which names entries under `## Open` only.
+
+**For a ruling**: whether to widen the arm, and whether Extension J (Unicode 17 only) joins it. **Gate**:
+a drawer holding a two-character Extension G word inside a longer run answers a query for that word,
+and the golden digest moves.
+
+### O424 — the image that compiles every shipped Linux binary is named by a tag, not a digest
+
+**Filed 2026-10-08 by O294's build, and revised on 2026-10-12 for the pin its ruling set.** The
+Dockerfile's builder stage, `FROM rust:1.98.1-slim-bookworm`, compiles the Linux binaries inside both
+GHCR images, and CI's `lint` job runs in the same image; both name it by a tag Docker Hub can move.
+O327 pinned the former-name preflight's `python` image by digest because a replaced image ran beside
+the checkout; the image that compiles what ships is the same class with more at stake. O159 left the
+builder untouched deliberately, as "a supply-chain question with a different shape", and filed
+nothing. Read 2026-10-12 by pulling it: the tag resolves to the index
+`sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730`, so a pin moves nothing that
+is built today. The runtime stage's `debian:bookworm-slim` stays a tag by O159's ruling (its security
+updates are the point), and the compose suites' service images (Caddy, Alpine, the vector databases)
+are test infrastructure that builds nothing shipped.
+
+**Shape**: the builder and the lint container named `rust:<version>-slim-bookworm@sha256:<index
+digest>`, and the toolchain arm of the `supply chain is pinned` preflight requiring the digest beside
+the version. **Gate**: that arm refuses a Rust image without `@sha256:`; counterfactual, today's
+Dockerfile.
+
+### O425 — nothing reports that a pinned action, or the pinned toolchain, has a fix the pin does not carry
+
+**Filed 2026-10-08 by O326's build.** Since O294 and O326, every third-party action runs at a commit
+named in the workflow and every build at the version `rust-toolchain.toml` names. That is the point of
+a pin, and it has a cost nothing here states: a security release of a pinned action, or a Rust point
+release, reaches CI only when someone edits the pin, and nothing in the tree or in CI says one exists.
+GitHub's Dependabot reads workflow `uses:` lines, keeps a `# vX.Y.Z` comment beside a SHA it bumps, and
+raises alerts for actions with published advisories; whether to turn it on is a repository setting
+and a `.github/dependabot.yml`, the maintainer's, as O313's settings were. Since O294's ruling of
+2026-10-12 a Rust release whose std moves Unicode version cannot be taken by a bump at all:
+`undercroft-core`'s assertion refuses it, so a fix that ships only in such a release waits on O422 or
+on a new hash identity.
+
+**Shape**: escalated to the maintainer — Dependabot for the `github-actions` ecosystem (alerts, and
+optionally version updates opening SHA-bump pull requests that the preflight already accepts), or a
+stated decision that pins move only when a person reviews a release. The toolchain pin has no such
+feed either way; a bump is one change across the file and the image references, which the preflight
+holds. **Gate**: on enabling, a deliberately stale pin on a scratch branch draws an alert or a pull
+request; on a decision not to, the decision is recorded here with its argument.
+
+### O426 — a review-queue row whose tag fails can be neither allowed, denied, deleted nor forgotten: the explicit destroy-unverifiable act the maintainer approved (O221(c), D4)
+
+**Filed 2026-10-12 by O221's build**, which built that entry's parts (a) and (b) and not part (c),
+whose ruling is the maintainer's of 2026-10-08, recorded in O221: "approve all as recommended",
+decided as D4's shape. Until this is built, D1 and part (a)'s report stand, as both panels decided:
+`admission list` reports such a row by `seq`, with `fenced: true`, and names the remedies; every
+destruction fence refuses it as an integrity verdict naming the same remedies (O221 item 5); and the
+vault cannot `backup create` or rotate while it exists, because `verify` fails.
+
+**What is built, verbatim from the decision.** The act is explicit, on one named row, and inside one
+destruction lock it:
+1. re-classifies the row through O221(b)'s predicate — `VaultStore::queue_standing`, which answers
+   `PendingUnverifiable` for exactly this row — and refuses unless the row fails verification now AND
+   the destruction fence holds it, so it can never bypass attestation on a readable row;
+2. appends a ruling whose keyed canonical carries a distinct verdict word (for example
+   `denied-unverified`), so "denied" never means two acts and never reads as housekeeping;
+3. destroys through `destroy_in` and its keyed tombstone;
+4. mints no attestation and no fingerprint, and says so on the CLI, `/v1`, the ops plane and the
+   console;
+5. is unreachable from the sweep, bulk deletes and `forget`, and never allows: releasing unverified
+   bytes into the vault is refused on every arm.
+
+**Still the maintainer's: the spelling** — a flag on `deny` or a verb of its own, and the verdict
+word. The building unit asks it with its pull request.
+
+**Probes owed** (from the ruling): P-L2b (two flagged texts for one filing, `Q0` then `Qv`; export;
+rule on `Q0`; zero `Qv`'s tag; re-import the genuine `Qv` record with the screen on — by reading, the
+text lands on `Q0`, `Qv` still fails, and the list still reports it), P4x (a crafted flagged record
+of the same filing replaces a broken `Q0`, and `deny` then succeeds with a receipt for the crafted
+text), and P2d with its inversion under O227 item 1.
+
+**Gate**: the act destroys a tag-failing pending row with a ruling record and a keyed tombstone and
+no receipt, on every surface; it refuses a readable pending row, an ordinary row and an unverifiable
+row the fence does not hold; and the sweep, `delete_by_source` and `forget` cannot reach it.
+**Counterfactual**: today every door refuses the row and the list reports it.
+
+**Version: MINOR**, a new opt-in capability; no `UPGRADING.md` entry, because nothing that runs today
+stops.
+
+**Relations:** shares a question with O148 — the screen-off remedy for a row this act would destroy exists once that entry's hold lands, and this entry owns the remedies' wording (`admission::UNVERIFIABLE_REMEDIES`).
+
+### O427 — one covered column retyped offline makes `verify` and the retention sweep fail with a conversion error instead of naming the row
+
+**Filed 2026-10-12 by O221's build, after its independent review; measured by that review's probe.**
+`walk_covered` reads `meta_json` as TEXT and `content` and `tag` as BLOBs. An offline writer who
+rewrites one of them with another storage type (`UPDATE drawers SET content = 'x'`, or
+`meta_json = CAST(meta_json AS BLOB)`) leaves a row no tag can be checked over. Since O221 the walk
+yields it as `CoveredRow::Undecodable`, and the review queue's doors read it as a row that does not
+verify. `verify` and the retention sweep still raise the conversion error, as they did before O221:
+`verify` answers `sqlite error: Conversion error …` rather than an integrity verdict naming the row,
+and one such row anywhere in the vault fails every sweep. By reading, `backup create` and a rotation,
+which run `verify` first, fail with the same error (not measured).
+
+**Why it is its own entry.** It is not O221's: the review queue's doors regressed on it and are
+fixed, while `verify` and the sweep answered it the same way before. What it owes is a verdict, which
+is a ruling: a `BadReason` for `verify` beside O231's `MetaUnparseable` (and whether a rotation
+blocks on it, O232's question), and the sweep's `unverifiable` arm (O206 ruling 2's rule).
+
+**Gate**: a row whose `content` is TEXT, and one whose `meta_json` is a BLOB: `verify` names each
+with its reason and exits 2; a sweep names each as unverifiable and destroys the rest.
+**Counterfactual**: today, both fail with the conversion error.
+
+### O428 — the export bundle's manifest drops a key it does not declare and reads no version, so a newer build's signed field reads as a bad signature
+
+**Filed 2026-10-12 by O315's build (its sibling sweep); read in code, unmeasured.** O315 fenced the erasure
+receipt and the chain witness; the third signed document this tree verifies keeps the parse they replaced.
+`BundleManifest` (`crates/undercroft-vault/src/bundle.rs` 523) captures no undeclared key and its `version`
+is read by nothing: `BundleManifest::attest` verifies the signature over `canonical()` unconditionally, so a
+field a newer build signs makes every older importer answer "manifest attestation failed" naming the
+signature — exit 1, `/v1` 400 (`tenant.rs`, `verify_attestation`) — over a genuine bundle, naming the wrong
+cause, and an UNSIGNED newer manifest imports with the field ignored, which matters the day a field
+constrains an import as `expires` does. Unlike the receipt and the witness, the bundle shipped in 1.0.0, so
+its fence changes what a released importer answers.
+
+**Shape, for a ruling panel**: O315's — capture undeclared keys and read the version, refusing either as
+not checked before the signature, in the import's refusal class — with that class, and what an unsigned
+bundle carrying an unknown key now does, ruled. **Gate**: a signed bundle manifest carrying one extra
+signed field, and one carrying a version above 1, refused as not checked; the same manifests without them
+imported; counterfactual, today's order answers a bad signature.
+
+### O429 — "not checked" shares exit 1 with a run that failed, so a forged receipt that carries a key no build declares is retried and ignored rather than alarmed on
+
+**Filed 2026-10-12 by O315's independent review; a documented exit contract, escalated to the maintainer.**
+O315's age fence refuses a receipt or a witness carrying a version or a field the build does not know as
+NOT CHECKED, `StoreError::Invalid`: exit 1, `/v1` 400 with no class. That is sound for a genuine document a
+newer build minted. Its cost is exact and permanent: a forger who adds a key no build will ever declare,
+or a version none will ever mint, gets exit 1 from EVERY build, present and future, where the same forgery
+without it is exit 2. And exit 1 is "the run failed — retry", the class the CLI's `verify-forgetting` arm
+(`crates/undercroft-cli/src/main.rs`, the comment above its `ATTESTATION FAILED` line) records a compliance
+script retrying and then ignoring a forged document under, which is why exit 2 was given to this command.
+
+**The question**: does "not checked" deserve its own exit class (and a `/v1` class beside `integrity`) —
+neither 1 ("retry") nor 2 ("tampered") — so a script can tell "this build cannot read the document" from
+"the run failed"? It is a documented exit contract (`docs/AGENTS.md` §7.3 lists exactly four classes since
+O287), so it is the maintainer's, with the panel's analysis. Options visible from the code: keep exit 1
+and document "not checked" as never-retry (no contract moves; the cost stays); a fifth exit class for both
+binaries and every surface that relays it (the orchestrator's ops CLI, `is_integrity_verdict`), MINOR or
+MAJOR by the versioning doctrine's test; or answer an unknown key as the integrity verdict and an unknown
+version alone as not checked (refutes O267 ruling 4's order for keys, and re-creates O315's false alarm
+for a genuine newer receipt). **Gate**, whichever is ruled: the forged-plus-key receipt and the genuine
+newer-build receipt each answer the ruled class on the CLI, `/v1`, MCP and the orchestrator's ops CLI.
+
+### O430 — a link, or a planted zero-length file, at a vault's database name becomes the vault's database — created outside the vault directory, or written into a file the vault did not make
+
+**Filed 2026-10-12 by O308's build, which measured its ruling's probe P-LINK.** Beside a manifest
+that records no anchored write, a link at `vault.db` whose target does not exist reads as absent —
+to `DbLayout::of` and to O308's survey, which follow links as SQLite does — so the writable connect
+grants `SQLITE_OPEN_CREATE` and SQLite creates the TARGET: measured on the build, one `stats` made a
+126,976-byte database at the link's target outside the vault directory, and a `remember` then wrote
+there. The same happened before O308. Beside a manifest that records history the door refuses it,
+with nothing created (pinned by `absent_tests::o308_a_dangling_link_at_the_database_name`, which
+also pins the fresh arm as a cost).
+
+**Widened 2026-10-12 by the unit's independent review, measured on the build.** A link at `vault.db`
+to an EXISTING zero-length file anywhere is opened without CREATE, as the vault's database, and the
+file is overwritten with it (`/tmp/victim.log` became a 126,976-byte SQLite database). On an hmac-only
+vault the drawers' PLAINTEXT then sits outside the data directory: a `remember` beside a dangling link
+left its marker readable in the link's target. And no link is needed: a zero-length regular file planted
+at `vault.db` beside a fresh manifest — mode 0666, say — is opened and written as the vault's database,
+readable by whoever planted it. A link to a non-empty file that is not a database refuses ("file is not
+a database"), leaving it unchanged; beside a manifest that records history the door refuses with nothing
+created. Every case is pre-existing, not introduced by O308. Severity, the reviewer's: LOW to MEDIUM —
+the attacker needs write access to the vault directory, which can do worse, but the plaintext case moves
+content past the data directory's permissions silently.
+
+**Shape, for a ruling**: follow the link, as O279's gate G8 opens a linked database and as today, or
+refuse a link at a database name on the open path, as O283 refuses links on restore and O291 on
+delete; and whether a zero-length file the vault did not make is adopted as a fresh vault's database,
+or refused for its owner or mode. O308's ruling names the link question the maintainer's ratification
+of O283's extension.
+
+**Gate**: a link at `vault.db` (dangling and resolving), beside a fresh and a recorded manifest, on
+both postures: the ruled answer, and no file created outside the vault directory.
+
+### O431 — a read-only handle that cannot see a hot `-wal` answers the head-less verdicts from the main file alone
+
+**Filed 2026-10-12 by O213's independent review, measured.** The read-only open escalates to
+`immutable=1` where its ordinary connection cannot open — a read-only mount, a snapshot — and an
+`immutable=1` connection reads no `-wal`. A young vault whose writer was killed before any checkpoint
+holds every table in its `-wal`: its main file is one page with none. O213's first build answered that
+`ManifestTampered`, exit 2, on a vault nothing had touched; the unit withholds the verdict on such a
+BLIND handle (immutable, beside a non-empty `-wal`) and answers `ReadOnlyUnmigrated`, exit 1, as before
+it — which is honest about the posture and wrong about the remedy: no writable open can run on a
+read-only mount, and "the schema predates this build" is not what happened. O303's `Erased` and
+`Orphaned` arms read the same main file on the same handle and are unguarded: a main file that holds an
+emptied `audit` while the `-wal` holds the records is called an erased trail, and one whose `chain_meta`
+sits only in the `-wal` beside records in the main file an orphaned one.
+
+**Shape, for a ruling**: a refusal of its own for a blind handle that names what it cannot see — the
+`-wal`, its size, and the remedy (copy the vault to a writable place and open it read-only there, or
+mount it writable) — classed as a posture refusal; or reading the `-wal` read-only without a wal-index,
+as SQLite's unreliable-shm path does when the `-shm` alone is missing; or refusing the escalation itself
+beside a non-empty `-wal`. And whether O303's arms take the same guard.
+
+**Gate**: the reviewer's state — a killed young writer's files, `-shm` removed, opened on a read-only
+mount — answers the ruled class with its text naming the `-wal`; a counterfactual of today's
+`ReadOnlyUnmigrated` fails it; O303's arms meet the same state at both of their shapes.
+
+**Relations:** shares a question with O286 — the review's read-only mount reached the escalation that entry asks a measurement of.
+
+### O432 — a mined drawer's room and a refined fact's id are derived through std's Unicode lowercasing, so a Unicode version that moves moves an identifier
+
+**Filed 2026-10-12 by O294's build, from its second independent review.** Two id recipes take an input
+std's Unicode tables decide. `room_for_file` (`crates/undercroft-cli/src/main.rs` 5136-5141) derives a
+mined drawer's room from its file stem through `normalize_wing_name`
+(`crates/undercroft-core/src/normalize.rs` 625-635: `str::to_lowercase`, then `is_alphanumeric`), and
+the room is a component of the drawer id; `refine` lowercases a triple's subject and predicate with
+`str::to_lowercase` (`crates/undercroft-cli/src/refine.rs` 244-245) before `kg_add_grounded` derives
+the triple id from them. Between 1.90.0 and 1.98.1 (O294's P-U1) both move for the 4,672 codepoints
+newly alphanumeric, the 28 newly cased letters and one character assigned in Unicode 16: U+0295 before
+a capital sigma, `ʕΣ` lowercasing to `ʕς` under 1.90.0 and `ʕσ` under 1.98.1. An identifier is a
+durable reference — held by the audit chain, receipts, supersession links, exports and agents across
+sessions (`CLAUDE.md`) — and no embedder identity or walk can heal one that moved. O421's ruling item 4
+states the 1.90-to-1.98.1 move as a cost for the images' vaults and forbids a walk that moves an id.
+What no entry asks is whether a LATER move may happen at all: O294's assertion holds both inputs at
+Unicode 17.0.0 only as long as the toolchain is held, and O422's generated tables, once the token path
+moves to Unicode 18, would carry the room and the triple id with it unless these recipes read a table
+frozen for identifiers. O422's title names room derivation and refine's lowercasing among the sites;
+its question is the data source, not whether an identifier may move.
+
+**For a ruling.** Whether an id recipe's Unicode input is frozen for the life of `NORMALIZE_VERSION`
+(room derivation and refine's lowercasing reading O422's tables at 17.0.0 forever while the token path
+moves on), versioned with the recipe (a `NORMALIZE_VERSION` bump, which moves every id and which O421's
+ruling rejected for this move), or moved with a cost stated per Unicode version as O421 did. **Gate**: a
+stem and a triple subject holding `ʕΣ` and a codepoint new in Unicode 17 derive byte-identical rooms and
+triple ids under every build that compiles; counterfactual, the derivation over 1.90.0's tables.
+
+**Relations:** shares a question with O422 — the tables that entry generates are what this entry's id recipes would read, at a version this entry rules.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
@@ -53616,6 +55317,8 @@ stated residual; P4 is O324's and P5 is O325's.
 entry leaves `## Unversioned` through the battery's roster" was my own wording, and wrong: a roster entry
 stays under `## Unversioned`, closed. The release-flow clauses are in `CLAUDE.md` — its opening paragraph
 and its release flow — and notes stand beside O309 and O310.
+
+**Noted 2026-10-12 by O326's build.** The ruling's "fails silently if … a mutable-tag action holding the workflow-level write token is compromised (O326)" no longer describes the tree: no workflow grants a write at the workflow level, every third-party action is pinned by commit, and a job holding a write keeps its token out of every `env:` block but its step's, out of any step that runs cargo, and out of `.git/config`. The line stays as the record of what the ruling weighed. What remains of that route is an action pinned at a compromised commit, which a pin cannot see, and a hostile build script in a job that holds the grant, which O325's separate upload jobs close.
 
 ### O340 — CLOSED 2026-10-08 by the maintainer's ruling: O234's 10% read budget is a per-unit landing gate, with the cumulative figure reported beside it in every unit's record
 

@@ -31,7 +31,16 @@ docker build -t undercroft .    # runtime image
 ```
 
 If you prefer a local toolchain, `cargo test --workspace` works too, but CI
-and reviews are based on the Docker flow. ONNX embedder/reranker and telemetry
+and reviews are based on the Docker flow. rustup builds with the version
+`rust-toolchain.toml` pins — the one the Docker images carry and the release
+binaries are built with — and fetches it on first use; bump it together with
+the images, which the `supply chain is pinned` preflight in
+`tests/battery.sh` checks. A toolchain whose std carries another Unicode
+version does not compile `undercroft-core` at all: the hash embedder's tokens
+read those tables, so moving them is an identity decision (ROADMAP O421,
+O422), not a toolchain bump. A third-party action in `.github/workflows/` is
+named by its full commit SHA with its version in a comment, and a workflow
+grants a write permission only to the job that needs it. ONNX embedder/reranker and telemetry
 are feature-gated (`--features onnx` / `--features telemetry`); the `onnx-build`
 and `e2e-telemetry` compose services compile-check them.
 
