@@ -442,7 +442,7 @@ impl VaultStore {
     /// die together, while an orphaned tag is what makes the deletion of the
     /// value itself an integrity failure. The tag costs one HMAC per push
     /// and one per read, and it is re-keyed by a rotation like every other.
-    fn record_pushed_embedder(&self) -> Result<(), StoreError> {
+    pub(crate) fn record_pushed_embedder(&self) -> Result<(), StoreError> {
         let name = self.embedder.model_name().to_string();
         let tx = self.conn.unchecked_transaction()?;
         let mut up = tx.prepare(

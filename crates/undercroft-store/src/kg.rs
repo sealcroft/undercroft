@@ -2099,6 +2099,11 @@ impl VaultStore {
                  confidence is a probability"
             )));
         }
+        // ROADMAP O419: the database returns a stored `-0.0` as `+0.0`, so a
+        // tag over the `-0.0` written failed on its next read — in either
+        // tag format, since a version-1 tag must stay the released bytes. The
+        // value is stored as it will be read, and tagged as stored.
+        let confidence = stored_confidence(confidence);
         // ROADMAP O406 item 10: a validity bound is a date (MCP documents
         // both as "ISO date"), so an EMPTY one or one holding a control byte
         // is refused here, at the graph's one write path. An empty `valid_to`
@@ -2570,6 +2575,7 @@ impl VaultStore {
     /// record over such a holder is refused — `kg_set_authority` owns that
     /// row, in both directions.
     pub fn kg_import(&mut self, exp: &TripleExport) -> Result<String, StoreError> {
+        // `confidence` is normalised as `kg_add_inner` does (ROADMAP O419).
         let secret = self.kg_secret()?;
         let t = &exp.triple;
         undercroft_core::validate_name(&t.subject, "subject")
@@ -2679,7 +2685,7 @@ impl VaultStore {
                 object: &object_rest,
                 valid_from: t.valid_from.as_deref().map(str::as_bytes),
                 valid_to: t.valid_to.as_deref().map(str::as_bytes),
-                confidence: t.confidence,
+                confidence: stored_confidence(t.confidence),
                 support: support_rest.as_deref(),
                 authority_class: t.authority_class.as_deref().map(str::as_bytes),
                 review_state: t.review_state.as_deref().map(str::as_bytes),
@@ -2771,7 +2777,7 @@ impl VaultStore {
                 object_rest,
                 t.valid_from,
                 t.valid_to,
-                t.confidence,
+                stored_confidence(t.confidence),
                 t.source_drawer_id,
                 tag.as_slice(),
                 // extracted_at is provenance from the source vault, kept.
@@ -4137,6 +4143,17 @@ impl TripleRow {
 /// SHA-256 of the name. Test-only, and named rather than inlined because
 /// two tests plant pre-A10 rows and both must plant the same shape — the
 /// shape whose oracle A10 exists to close.
+/// A fact's `confidence` as the database will return it: SQLite reads a
+/// stored `-0.0` back as `+0.0`, so both write doors store and tag `+0.0`
+/// (ROADMAP O419). Every other value is returned unchanged.
+pub(crate) fn stored_confidence(c: f64) -> f64 {
+    if c == 0.0 {
+        0.0
+    } else {
+        c
+    }
+}
+
 #[cfg(test)]
 fn legacy_entity_id(name: &str) -> String {
     hex::encode(&Sha256::digest(name.as_bytes())[..16])

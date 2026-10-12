@@ -167,13 +167,28 @@ impl VaultStore {
         if self.row_format() == RowFormat::V2 {
             return Ok(());
         }
-        if let Some(reason) = self.walk_precondition()? {
-            self.note_walk(reason);
-            return Ok(());
+        match self.walk_precondition() {
+            Ok(None) => {}
+            Ok(Some(reason)) => {
+                self.note_walk(reason);
+                return Ok(());
+            }
+            Err(e) => {
+                self.note_walk(format!("its preconditions could not be read ({e})"));
+                return Ok(());
+            }
         }
         // Warmed outside the hold: on a vault that has none, its first use
-        // writes one.
-        self.kg_secret()?;
+        // writes one. A secret that does not open is a finding `verify`
+        // names, and the walk's own reason to wait — never the open's
+        // failure, or one byte flipped offline in `meta` would make every
+        // writable open of an unwalked vault refuse (review of O406).
+        if let Err(e) = self.kg_secret() {
+            self.note_walk(format!(
+                "the knowledge-graph secret could not be read ({e})"
+            ));
+            return Ok(());
+        }
         let at = crate::manage::now_rfc3339();
         let walked = self.walk_held(&at);
         self.prove_released();

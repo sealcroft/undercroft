@@ -2798,7 +2798,7 @@ file's bytes). `UPGRADING.md` carries the entry: a vault with such damage, which
 verified, now fails `verify` and stops `backup create` and `vault rotate`; `config check` opens no vault
 database, and the new binary's `verify --read-only` is the pre-flight.
 
-### Row tags have one reading: a table-domained, length-prefixed canonical under a key of their own (O406)
+### Row tags have one reading: a table-domained, length-prefixed canonical under a key of their own (O406, O419)
 
 Every row tag — drawers, supersession receipts, facts, fact receipts, entities, tunnels, trust and
 retention policies, the mirror marker — was an HMAC over its fields joined by a separator byte, with no
@@ -2829,7 +2829,9 @@ being the canonical answer.
   fact or entity field that does not open is O269's `UNREADABLE`.
 - **`kg add` and `undercroft_kg_add` refuse an empty `valid_from` or `valid_to` and one holding a control
   character**; an absent bound is the open window it always was, and `refine` writes a fact open where its
-  note's own date would be refused. A re-add or an import now stores the `valid_from` its tag covers.
+  note's own date would be refused. A re-add or an import now stores the `valid_from` its tag covers,
+  and a `-0.0` confidence is stored and tagged as the `+0.0` the database reads back, so it no longer
+  fails its own tag — on a vault not yet switched, a walk blocker an MCP agent could write (O419).
 
 Measured on the LoCoMo feed mined into 64 wings by 1.6.1 (5,445 records), one contended run per level: the
 switching open took 858 ms sealed and 966 ms hmac-only against a rotation's 1,349 and 821 ms, the database
@@ -2838,7 +2840,7 @@ file did not grow, the next open took 74 and 48 ms, and `verify` stayed `VERIFY 
 table at both levels with every reader after it; withheld over each moved row and beside a holder; the crash
 after the raise; a version-1 manifest beside the commitment; a receipt and a witness from before the walk;
 the encoder over every byte value; ids and labels byte-identical and every tag changed across the walk — and
-nine `e2e` checks; counterfactuals for the boundary withheld from the policy scans, the walk without its
+eight `e2e` checks; counterfactuals for the boundary withheld from the policy scans, the walk without its
 verify-first and version 2 inside `Vault::tag` each turn a test red. Released 1.6.0 and 1.6.1, built from
 their tags, refuse a walked vault before any byte moves, a deferred promote and the crash after the raise
 included; raising after the COMMIT instead — the order the ruling rejected — let both write.

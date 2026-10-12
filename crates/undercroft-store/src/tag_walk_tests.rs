@@ -458,6 +458,82 @@ fn p15k_the_walk_withholds_over_each_moved_row_and_names_it() {
     ));
 }
 
+/// **The walk never fails the open** (review of O406): a `kg_blind_secret`
+/// flipped offline in `meta` made the walk's warm-up return `CorruptRow`
+/// through EVERY writable open of an unwalked vault. It withholds, says why,
+/// and the vault opens on version 1, where `verify` can name the damage.
+#[test]
+fn a_secret_that_does_not_open_withholds_the_walk_and_never_fails_the_open() {
+    let dir = legacy(SecurityLevel::Sealed);
+    let root = dir.path();
+    {
+        let c = rusqlite::Connection::open(vdir(root).join("vault.db")).unwrap();
+        let n = c
+            .execute(
+                "UPDATE meta SET value = CASE WHEN substr(value, 1, 1) = '0' THEN '1' ELSE '0' \
+                 END || substr(value, 2) WHERE key = 'kg_blind_secret'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(n, 1, "premise: the vault holds a secret");
+    }
+    let s = VaultStore::open(mgr(root).unlock(VAULT).unwrap()).expect("the open is not refused");
+    assert_eq!(s.row_format(), RowFormat::V1);
+    assert!(
+        s.unhealed()
+            .iter()
+            .any(|n| n.contains("WITHHELD") && n.contains("knowledge-graph secret")),
+        "{:?}",
+        s.unhealed()
+    );
+    assert_eq!(commitments(&s), 0, "nothing appended");
+}
+
+/// **ROADMAP O419**: a `-0.0` confidence is stored as the `+0.0` the
+/// database reads back, and tagged as stored, at both write doors — so on a
+/// vault still on version 1, whose tags must stay the released bytes, the
+/// fact verifies, and a rotation completes. It failed its own tag there, and
+/// an MCP agent could keep a vault's walk withheld with one such fact.
+#[test]
+fn o419_a_negative_zero_confidence_is_stored_as_read_and_verifies() {
+    let dir = TempDir::new().unwrap();
+    let vault = mgr(dir.path())
+        .create(VAULT, SecurityLevel::HmacOnly)
+        .unwrap();
+    crate::retag_pause::keep_on_v1(vault.dir());
+    let mut s = VaultStore::open(vault).unwrap();
+    assert_eq!(s.row_format(), RowFormat::V1, "premise: version 1");
+    let id = s.kg_add("s", "p", "o", None, None, -0.0, None).unwrap();
+    let mut exp = s
+        .kg_export(Read::Internal(InternalRead::ExportAudited))
+        .unwrap()
+        .into_iter()
+        .find(|e| e.triple.id == id)
+        .unwrap();
+    let r = s.verify().unwrap();
+    assert!(r.ok(), "the add: {r:?}");
+    // The import door, over the same row: its upsert stores the payload's.
+    exp.triple.confidence = -0.0;
+    assert_eq!(s.kg_import(&exp).unwrap(), id);
+    {
+        let fact = &id;
+        let q: String = s
+            .conn
+            .query_row(
+                "SELECT quote(confidence) FROM kg_triples WHERE id = ?1",
+                [fact],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(q, "0.0", "stored as it reads back");
+    }
+    let r = s.verify().unwrap();
+    assert!(r.ok(), "{r:?}");
+    let m = mgr(dir.path());
+    s.rotate_keys(m.rotation_candidate(VAULT).unwrap())
+        .expect("a rotation completes");
+}
+
 /// **ROADMAP O406 item 10**: an empty date, or one holding a control
 /// character, is refused at the graph's one write path, on both bounds; an
 /// absent one is an open window; and a re-add that spells a stored date

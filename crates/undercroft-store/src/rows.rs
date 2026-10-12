@@ -6,9 +6,12 @@
 //! call site goes through it — `rotate.rs` and the tag walk included — and
 //! each takes the [`RowFormat`] it builds in as a REQUIRED argument, so no
 //! call site can tag in a format it did not state. The version-1 recipes are
-//! private to this module: a row tag computed any other way does not compile,
-//! because [`undercroft_vault::Vault::row_tag`] takes a [`RowCanonical`] and
-//! only these functions make one.
+//! private to this module, and [`undercroft_vault::Vault::row_tag`] takes a
+//! [`RowCanonical`]; in this crate only these functions make one, which
+//! `only_this_module_makes_a_row_canonical` counts against the production
+//! source (`RowEncoder::new(` and `RowCanonical::v1(`, both `pub` in the
+//! vault crate). `Vault::tag` takes bare bytes and stays the record-only
+//! canonicals' door; nothing but review keeps a row off it.
 //!
 //! **Version 1** is byte for byte what every tag before O406 covered: fields
 //! joined by 0x1f (0x1b–0x1e before the fact and entity extensions), no
@@ -357,6 +360,45 @@ mod v1 {
 
 #[cfg(test)]
 mod tests {
+    /// **The one-module claim, counted** (review of O406): no production
+    /// file of this crate but this one builds a row canonical by hand. The
+    /// needles are the two `pub` constructors the vault crate exports; the
+    /// premise is that this module itself holds both.
+    #[test]
+    fn only_this_module_makes_a_row_canonical() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let needles = [
+            concat!("RowEncoder", "::new("),
+            concat!("RowCanonical", "::v1("),
+        ];
+        let me = std::fs::read_to_string(src.join("rows.rs")).unwrap();
+        for n in needles {
+            assert!(me.contains(n), "premise: this module makes one with {n}");
+        }
+        let mut sites = Vec::new();
+        for entry in std::fs::read_dir(&src).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if !name.ends_with(".rs") || name == "rows.rs" || name.ends_with("_tests.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let prod = text
+                .split(concat!("#[cfg(test)]\n", "mod tests"))
+                .next()
+                .unwrap();
+            for n in needles {
+                if prod.contains(n) {
+                    sites.push(format!("{name}: {n}"));
+                }
+            }
+        }
+        assert!(
+            sites.is_empty(),
+            "a row canonical built outside rows.rs: {sites:?}"
+        );
+    }
+
     use super::*;
 
     fn fact_with(

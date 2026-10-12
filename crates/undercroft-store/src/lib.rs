@@ -1023,8 +1023,9 @@ pub(crate) fn is_busy(e: &rusqlite::Error) -> bool {
 /// What an open says when another process holds the vault exclusively.
 pub(crate) const OPEN_HELD: &str =
     "another process holds this vault exclusively — a key rotation, a backup restore, a \
-     vault delete, or another open renaming its pre-1.5.0 palace.db is running. Nothing was \
-     read or written; retry once it finishes (ROADMAP O257, O281, O291)";
+     vault delete, another open switching its row tags to version 2 or checking with \
+     `verify` whether it can, or another open renaming its pre-1.5.0 palace.db is running. \
+     Nothing was read or written; retry once it finishes (ROADMAP O257, O281, O291, O406)";
 
 /// What a refused vault delete says (ROADMAP O291).
 pub(crate) const DELETE_HELD: &str =
@@ -3596,7 +3597,7 @@ impl serde::Serialize for BadRecord {
     }
 }
 
-/// The whole verdict, ten legs: record HMACs (with the drawers whose HMAC verifies over covered meta that does not parse, O231, and the rows a column of which no read takes, O269), the chain replay, the label commitment, supersession receipts, fact receipts, orphan labels, mirror drift, policy drift, version replay and storage (O269). Hand-projected on four renderers (`parity::HAND_PROJECTED`), so a new leg must reach all of them.
+/// The whole verdict, twelve legs: record HMACs (with the drawers whose HMAC verifies over covered meta that does not parse, O231, and the rows a column of which no read takes, O269), the chain replay, the label commitment, supersession receipts, fact receipts, orphan labels, mirror drift, policy drift, version replay, storage (O269), and identity and field shapes (O406). Hand-projected on four renderers (`parity::HAND_PROJECTED`), so a new leg must reach all of them.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VerifyReport {
     /// How many records had their HMAC checked.
@@ -11827,7 +11828,9 @@ impl VaultStore {
     /// the covered meta, re-tag every declared policy row, and match every
     /// tagged row to the chain record that last wrote it, and — FIRST —
     /// check the file those rows live in with SQLite's `integrity_check`
-    /// (`storage`, ROADMAP O269). **All TEN legs
+    /// (`storage`, ROADMAP O269), and name what a moved field boundary or a
+    /// tag carried between tables moves (`identity`, `shapes`, ROADMAP O406).
+    /// **All TWELVE legs
     /// are in the one report** — it was three until 2026-08-06, and each
     /// addition is there because it covers a mutation the others structurally
     /// cannot see (`label_commitment`: the labels a chain held when it

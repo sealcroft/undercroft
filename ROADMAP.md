@@ -19699,8 +19699,8 @@ a search and `trust list` served. A rotation for comparison: 1,349 ms and 821 ms
 size the switching open costs the order of a rotation, as `UPGRADING.md` says.
 
 **Surfaces.** CLI `verify` prints `identity:` and `field shapes:`, MCP `undercroft_verify` counts
-both, `/v1` carries `identity` and `shapes`, the admin console renders both; nine `e2e` checks were
-added and NOT run as a suite (the battery is the integrator's) — the seven CLI and MCP ones were
+both, `/v1` carries `identity` and `shapes`, the admin console renders both; eight `e2e` checks were
+added and NOT run as a suite (the battery is the integrator's) — the six CLI and MCP ones were
 exercised by hand against this build's release binary and print what they match; the two `/v1` ones
 were not. Tests added: 17 in `undercroft-store`'s lib, 6 in
 `undercroft-vault`'s, 1 in the CLI's binary target and 1 in `tests/cli.rs`; one removed from
@@ -19710,8 +19710,33 @@ were not. Tests added: 17 in `undercroft-store`'s lib, 6 in
 local stack were running throughout) — together with the accelerator item 5 allows for a withheld
 vault, which this build did not build: a withheld writable open pays one full `verify`
 (O-NEW-O406-1); and the two Mermaid renders under `docs/diagrams/` whose canonical blocks this
-build moved (O-NEW-O406-2). P15h and P15j stay with O417 and O419, whose notes say what this build
-changed for each.
+build moved (O-NEW-O406-2). P15h stays with O417, whose note says what this build changed; O419 was
+closed with this build, at the write door.
+
+### O419 — CLOSED 2026-10-13: a `-0.0` confidence was tagged as written and read back as `+0.0`, so the fact failed its own tag
+
+**Filed 2026-10-12 by O406's ruling (its item 13 (iv)); read, not measured — probe P15j owed.** The
+database returns a stored `-0.0` as `+0.0`, while the fact's tag was computed over `-0.0` as written, so a
+fact added or imported with `confidence: -0.0` fails its tag on the next read: an agent-reachable tamper
+verdict and rotation blocker, until a re-add of the same four id components re-tags it (the ruling's
+refuted claim 11).
+
+**Shape**: canonicalise `confidence` before tagging so the tag covers the value as the database returns
+it (O406's ruling, item 1). **Gate**: P15j — `"confidence": -0.0` over MCP, `kg add --confidence -0` and a
+`-0.0` import payload; record `typeof(confidence), quote(confidence)`, `verify`'s exit code and `vault
+rotate`; after the fix, `verify` OK and the rotation completes.
+
+#### BUILT 2026-10-13 with O406, on this entry's own shape
+
+Both write doors now store and tag `stored_confidence(c)` — `+0.0` for `-0.0`, every other value
+unchanged — so the tag covers the value as the database returns it in BOTH tag formats: the version-2
+canonical already did (O406 item 1), and a vault still on version 1, whose tags must stay the released
+bytes, was the half left. It mattered beyond the one fact: on version 1 the `TagFailed` it produced is a
+walk blocker, so an MCP agent could keep a vault's O406 switch withheld indefinitely with one write. Gate:
+`o419_a_negative_zero_confidence_is_stored_as_read_and_verifies` — on a version-1 hmac-only vault, a
+`-0.0` through `kg_add` and through `kg_import` reads back `quote(confidence) = 0.0`, `verify` passes
+and a rotation completes; red before the fix. P15j's surface arms (MCP, `kg add --confidence -0`) reach
+`kg_add_inner` and were not driven separately.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -53523,25 +53548,6 @@ length-prefixed version 2 for documents minted after it — ruled per document. 
 bundle and a witness minted before the change verify after it; a version-2 document whose field boundary is
 moved fails its signature.
 
-### O419 — a `-0.0` confidence is tagged as written and read back as `+0.0`, so the fact fails its own tag
-
-**Filed 2026-10-12 by O406's ruling (its item 13 (iv)); read, not measured — probe P15j owed.** The
-database returns a stored `-0.0` as `+0.0`, while the fact's tag was computed over `-0.0` as written, so a
-fact added or imported with `confidence: -0.0` fails its tag on the next read: an agent-reachable tamper
-verdict and rotation blocker, until a re-add of the same four id components re-tags it (the ruling's
-refuted claim 11).
-
-**Shape**: canonicalise `confidence` before tagging so the tag covers the value as the database returns
-it (O406's ruling, item 1). **Gate**: P15j — `"confidence": -0.0` over MCP, `kg add --confidence -0` and a
-`-0.0` import payload; record `typeof(confidence), quote(confidence)`, `verify`'s exit code and `vault
-rotate`; after the fix, `verify` OK and the rotation completes.
-
-**Noted 2026-10-13 by O406's build — P15j was not run.** The version-2 fact canonical encodes
-`confidence` as the database returns it (`-0.0` as `+0.0`, O406 item 1), so on a walked vault a `-0.0`
-fact verifies. A vault still on the version-1 regime — one whose walk is withheld — keeps the defect,
-because its tags must stay the released bytes. Storing the canonical value at the write door would close
-both regimes, and is this entry's to rule.
-
 ### O420 — a fact's `valid_from` and `valid_to` are unscreened, unbounded and not validated as dates
 
 **Filed 2026-10-12 by O406's ruling (its item 13 (v)); read.** The MCP schema documents both as "ISO
@@ -53573,8 +53579,13 @@ records, where the switching open cost the order of a rotation and the WAL's pea
 Item 5 of the ruling lets the build remember a withheld verdict against the committed head and height —
 an accelerator that can only withhold. It was not built, so a vault withheld by a finding pays one full
 `verify`, the storage leg included (4.0–4.5 s at 102,000 sealed drawers by O269's measurement), on every
-writable open until the finding is cleared. A holder costs nothing: the exclusive hold refuses before the
-verify.
+writable open until the finding is cleared — and it runs UNDER the exclusive hold, so for those seconds
+every other open of the vault, on any posture, is refused with `OPEN_HELD`, whose text now names the walk
+(found by O406's review; this paragraph said "a holder costs nothing", true only of the open that finds
+another process already holding the vault, which the hold refuses before any verify). One agent-reachable
+way to keep a vault withheld existed: a `-0.0` confidence written over MCP failed its own version-1 tag,
+a walk blocker; O419 closed it at the write door with O406. No other value an agent writes is known to
+make a finding the walk blocks on.
 
 **Shape**: run P15f as the ruling words it, the WAL's peak read during the open rather than after it;
 if a withheld open's cost is material at 10⁵, build the accelerator — a verdict remembered against the

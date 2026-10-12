@@ -2738,6 +2738,16 @@ mod tests {
                 "retention",
                 tags("SELECT tag FROM retention_policy ORDER BY wing, room"),
             ),
+            (
+                "pushed-embedder marker",
+                s.conn
+                    .prepare("SELECT value FROM meta WHERE key = 'index_pushed_embedder_tag'")
+                    .unwrap()
+                    .query_map([], |r| r.get::<_, String>(0))
+                    .unwrap()
+                    .map(|v| hex::decode(v.unwrap()).unwrap())
+                    .collect(),
+            ),
         ]
     }
 
@@ -2787,6 +2797,7 @@ mod tests {
         );
         store.set_wing_trust("wing", "trusted").unwrap();
         store.set_retention("wing", Some("room"), 3650).unwrap();
+        store.record_pushed_embedder().unwrap();
         let before = references(&store);
         let tags_before = row_tags(&store);
         assert!(before.verified.iter().all(|v| v.ends_with(":ok")));
@@ -2830,5 +2841,9 @@ mod tests {
             }
         }
         assert!(store.verify().unwrap().ok());
+        assert!(matches!(
+            store.pushed_marker().unwrap(),
+            crate::remote::PushedMarker::Recorded(_)
+        ));
     }
 }
