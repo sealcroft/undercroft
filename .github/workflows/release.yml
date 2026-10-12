@@ -7,18 +7,34 @@
 # target (`--features onnx,ort`, job `binaries-ort`) and a `:tag-ort`
 # multi-arch image (`docker-ort` per arch, merged by `manifest-ort`), the
 # binary and each per-arch image smoke-probed for the feature.
+#
+# Every binary is built by the toolchain `rust-toolchain.toml` pins — the one
+# the Docker images carry and every suite runs — installed through
+# `.github/scripts/pinned-toolchain.sh` (ROADMAP O294). Until then each was
+# built by its runner image's own stable: Rust 1.97.1 or 1.98.x across the
+# v1.* releases, two compilers inside one release from v1.2.0 to v1.5.1.
+#
+# Permissions are granted per job, at the least each needs (ROADMAP O326):
+# the workflow reads, the binary jobs write `contents` to create and upload
+# their assets, the image jobs write `packages`. A job holding a write checks
+# out with `persist-credentials: false` and hands `GH_TOKEN` to its upload
+# step alone: `cargo build` runs every crate's build script, and until O326 it
+# ran with a `contents: write` token in its environment and in `.git/config`.
+# Third-party actions are pinned by commit, their version in a comment. The
+# `supply chain is pinned` preflight in tests/battery.sh holds all of it.
 name: release
 on:
   push:
     tags: ['v*']
 
 permissions:
-  contents: write # create/upload release assets
-  packages: write # push ghcr.io images
+  contents: read
 
 jobs:
   binaries:
     name: Binaries (${{ matrix.target }})
+    permissions:
+      contents: write # create the release and upload its assets
     strategy:
       fail-fast: false
       matrix:
@@ -38,14 +54,16 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
-    env:
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: The pinned toolchain (rust-toolchain.toml, ROADMAP O294)
+        shell: bash
+        run: bash .github/scripts/pinned-toolchain.sh "${{ matrix.target }}"
       - name: Build
         shell: bash
         run: |
-          rustup target add "${{ matrix.target }}"
           cargo build --release --target "${{ matrix.target }}" \
             -p undercroft-cli -p undercroft-orchestrator
       - name: Package
@@ -73,6 +91,8 @@ jobs:
           echo "ARCHIVE=dist/${ARCHIVE}" >> "$GITHUB_ENV"
       - name: Upload to the release
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF_NAME}"
           # The release may not exist yet (it is normally created right
@@ -95,6 +115,8 @@ jobs:
   # packaged-layout smoke proves the pair works from a fresh directory.
   binaries-ort:
     name: Binaries (${{ matrix.target }}, ort)
+    permissions:
+      contents: write # create the release and upload its assets
     strategy:
       fail-fast: false
       matrix:
@@ -113,14 +135,16 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
-    env:
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: The pinned toolchain (rust-toolchain.toml, ROADMAP O294)
+        shell: bash
+        run: bash .github/scripts/pinned-toolchain.sh "${{ matrix.target }}"
       - name: Build with the in-process embedder features
         shell: bash
         run: |
-          rustup target add "${{ matrix.target }}"
           cargo build --release --target "${{ matrix.target }}" \
             -p undercroft-cli --features onnx,ort
       - name: Package
@@ -174,6 +198,8 @@ jobs:
             echo "wrong failure shape — is the ort feature actually compiled in?"; exit 1; }
       - name: Upload to the release
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF_NAME}"
           cd dist
@@ -194,6 +220,9 @@ jobs:
   # per-arch images into a single multi-arch manifest.
   docker:
     name: GHCR image (${{ matrix.arch }})
+    permissions:
+      contents: read
+      packages: write # push the per-arch image
     strategy:
       fail-fast: false
       matrix:
@@ -205,13 +234,15 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
@@ -228,6 +259,9 @@ jobs:
   # pushed image natively before the manifest exists.
   docker-ort:
     name: GHCR image (${{ matrix.arch }}, ort)
+    permissions:
+      contents: read
+      packages: write # push the per-arch image
     strategy:
       fail-fast: false
       matrix:
@@ -239,13 +273,15 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
@@ -274,9 +310,11 @@ jobs:
   manifest-ort:
     name: Multi-arch manifest (ort)
     needs: docker-ort
+    permissions:
+      packages: write # write the multi-arch index
     runs-on: ubuntu-latest
     steps:
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -296,9 +334,11 @@ jobs:
   manifest:
     name: Multi-arch manifest
     needs: docker
+    permissions:
+      packages: write # write the multi-arch index
     runs-on: ubuntu-latest
     steps:
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

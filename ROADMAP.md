@@ -14122,6 +14122,212 @@ orchestrator likewise answers `/healthz`.
 C++ logger in a model build) is not a Rust print and is not counted; a telemetry build's JSON log
 layer writes STDOUT, which is O333's.
 
+### O294 — CLOSED 2026-10-08: every build uses one toolchain — `rust-toolchain.toml` pins 1.90.0, the toolchain the images carry, CI installs it by name and fails unless `rustc` is it, and a preflight holds the images and every workflow to it
+
+**Filed 2026-09-28 by O289's ruling (its engineering lens, confirmed by the refuter).** The
+Docker images pin `rust:1.90-slim-bookworm`, so every suite, the lint and the Linux images build
+on 1.90. `release.yml`'s binary targets build with whatever stable toolchain each runner has
+installed (it only adds the target), and `windows-check` takes `dtolnay/rust-toolchain@stable` —
+so the Windows, macOS and native Linux artifacts are built by a compiler no suite ran, and a claim
+about "Rust 1.90's std" (O289's Windows reading) is not a claim about what ships.
+
+**Shape**: one pinned toolchain for every build — a `rust-toolchain.toml`, or the version named in
+both workflows — with a gate that the Dockerfile's image and the pin agree.
+
+**Gate**: a preflight comparing the Dockerfile's `rust:` tag with the workflows' toolchain, both
+directions.
+
+**Noted 2026-10-08 from O166's ruling of that day (its item 5), recorded here because this entry
+closes in the same pass.** The hash identity's token space depends on std's Unicode tables
+(`is_alphanumeric` in `segment`, `to_lowercase` in `search_key`), so two native release artifacts
+built on different stable toolchains could tokenize a newly assigned codepoint differently under one
+name; that ruling's golden-vector assertion runs in the Docker toolchain alone. With the pin, the
+native builds and the images carry one toolchain's tables, so the assertion's toolchain is the one
+that builds what ships.
+
+#### BUILT 2026-10-08, with O326 and O327 — the filed shape, the pin in a file because O168's ruling needs it to cover legs not yet written
+
+**Why the file and not the version named in each workflow** (the entry offered both). O168's ruling
+of 2026-10-08 (item 5) requires this pin to cover the ten `windows-check` legs it rules, each run with
+"the release's mechanism". A version written into each workflow is a copy those legs would each have
+to repeat and a gate would have to hold; `rust-toolchain.toml` is obeyed by rustup for every cargo call
+in the checkout, so a leg written later is pinned by construction. Determined by that ruling and the
+one-implementation rule, not chosen.
+
+**What landed.** `rust-toolchain.toml` at the root: `channel = "1.90.0"`, `profile = "minimal"`, and
+nothing else, because a `components` or `targets` line would make rustup fetch inside the offline
+images. The channel is the full version on purpose: rustup inside `rust:1.90-slim-bookworm` resolves
+`1.90.0` to the installed toolchain offline and goes to the network for `1.90` (measured with
+`--network none`: `rustc 1.90.0` against `could not download … channel-rust-1.90.toml.sha256`). The
+Dockerfile's builder and CI's lint container now name `rust:1.90.0-slim-bookworm` — the same index
+digest as the minor tag (`sha256:64232e65…`, read from Docker Hub and pulled; no 1.90.1 exists), so
+nothing that is built moves, while a minor-only tag would follow a point release silently. A new
+script, `.github/scripts/pinned-toolchain.sh`, is the one installer: it holds the file whole (three
+lines besides comments), installs the channel by name with `--profile minimal --no-self-update`, adds
+the job's target, and fails unless `rustc` in the checkout reports that exact version — the check is
+what rustc answers, because a `RUSTUP_TOOLCHAIN` or a directory override outranks the file. Its
+`--channel` mode prints the pin and touches nothing; the preflight reads the pin through it, so the
+file has one reader. `release.yml`'s `binaries` and `binaries-ort` call it with their target in place
+of `rustup target add`; `windows-check` calls it in place of `dtolnay/rust-toolchain@stable` (O168's
+ruling item 4 takes that action out of the job too); `audit` calls it before `cargo audit`, which the
+file would otherwise make rustup install implicitly. `CONTRIBUTING.md`, `README.md` and
+`docs/getting-started.md` say a native build uses the pin, and `UPGRADING.md` carries the one
+consequence a source builder can meet: a host whose rustup lacks 1.90.0 fetches it, and offline cannot.
+
+**Measured.** P2 of O166's ruling — the Rust every `Binaries` job of every v1.* release built with,
+read from the runner image the job logged and that image's own readme (the jobs ran `rustup target
+add` alone, which installs no toolchain): v1.0.0, v1.1.0 and v1.1.1 on 1.97.1, ten jobs of ten; v1.2.0
+to v1.5.1 on 1.97.1 and 1.98.0 mixed inside a release (four and six, three and seven, four and six,
+four and six, one and nine, then v1.5.0 all ten on 1.98.0 and v1.5.1 one and nine); v1.5.2, v1.6.0
+and v1.6.1 on 1.98.1, ten of ten. No v1.* binary was built by 1.90.0. Every package in the resolved
+graph, all platforms (`cargo metadata` under 1.90.0: 401 packages, 46 of them compiled only off Linux
+x86_64): the highest declared `rust-version` is 1.88 (`time` 0.3.53), and no off-Linux crate declares
+above 1.85 (`security-framework` 3.7.0, `wit-bindgen` 0.57.1). The script: with no network in
+`rust:1.90-slim-bookworm`, `--channel` printed `1.90.0`; with network it installed the pin and added a
+target (`pinned toolchain: rustc 1.90.0 (1159e78c4 2025-09-14), target x86_64-unknown-linux-musl`); in
+`rust:1.92`, whose default is 1.92, it installed 1.90.0 and `cargo -V` in the checkout then reported
+1.90.0 — the runner's case; a `rustc` first on `PATH` reporting 1.98.1 was refused, exit 1. The CLI, built with no network in `rust:1.90.0-slim-bookworm` over the checkout with this file in it (`rustup show active-toolchain`: `1.90.0-x86_64-unknown-linux-gnu (overridden by '/src/rust-toolchain.toml')`, nothing fetched), driven through the LoCoMo feed mined into three wings of a sealed vault: 255 drawers, audit height 256, a wing-scoped search in 43 ms, `verify` OK in 17 ms. And
+actionlint (`rhysd/actionlint`, digest `b1934ee5…`) over the four workflows found nothing new: the
+same five SC2193 notes it finds on `main`'s files.
+
+**Gate**: the `supply chain is pinned` preflight's toolchain arm (O326's record below has the
+whole preflight): every `rust:` image in a Dockerfile, a compose file or a workflow names exactly the
+pin; no workflow, Dockerfile or compose file names a toolchain another way (`dtolnay/rust-toolchain`,
+`actions-rs/toolchain`, `rustup default|override|toolchain|install|update|target|set`,
+`RUSTUP_TOOLCHAIN`, `cargo +` or `rustc +`); every job that runs cargo outside a container calls the
+script before its first cargo line; and the pin's reader refuses a `stable` channel, an extra line
+and an absent file, on copies of itself. Counterfactual, `main`'s files: the missing pin, both
+minor-only images, three mechanisms (`dtolnay/rust-toolchain@stable` and `rustup target add` twice)
+and four jobs running cargo without the pin. On the built tree, one at a time: `dtolnay` put back in
+`windows-check` fires the actions, mechanism and native-cargo readers at once; a minor-only tag in
+the Dockerfile, one refusal; the pin file removed, the pin failure and both images.
+
+**What stays outside it, stated.** No native compile under the pin runs before the tag except
+`windows-check` (Windows, default features, `check`), first on the pull request that carries this:
+macOS, arm64 Linux and the Windows `-ort` build first meet 1.90.0 at the next release, and O168's
+legs, ruled and not built, are what will compile them on a pull request. The declared
+`rust-version`s say the lock supports 1.90.0; an undeclared use of a newer std API in an off-Linux
+crate would surface only there. The pin moves by hand: a bump is one change to the file and both image
+references, which the preflight requires, and nothing reports when one is due (O-NEW-o294-2). The
+builder image is pinned by version, not digest (O-NEW-o294-1).
+
+**O168 and O275, noted.** O168's ruling of 2026-10-08 gives that entry and this one, and O326, a
+declared relation through `windows-check`'s toolchain step, and O275's of the same day sequences that
+entry after this one; with this entry built, each is a note beside its partner rather than a
+`Relations:` line (the `roadmap_relations` arm requires both partners open).
+
+### O326 — CLOSED 2026-10-08: every third-party action is pinned by its commit SHA with its version beside it, every workflow reads by default, a write token is granted per job, kept out of every `env:` block and never persisted by a checkout
+
+**Filed 2026-10-06 by O313's ruling (its refuter).** Every third-party action is referenced by a tag that
+can move: `docker/setup-buildx-action@v4`, `docker/login-action@v4` and `docker/build-push-action@v7` in
+`release.yml` and `republish-ort-image.yml`; `aquasecurity/trivy-action@v0.36.0`,
+`dtolnay/rust-toolchain@stable` (O294's unpinned toolchain) and `taiki-e/install-action@v2` in `ci.yml`;
+`peaceiris/actions-mdbook@v2` in `ci.yml` and `pages.yml`. `release.yml` grants `contents: write` and
+`packages: write` at WORKFLOW level (15-17), so jobs that need only packages hand a contents-write token
+to third-party code — the moved-tag class O313 is about, pointed inward, and a route by which assets
+could be replaced with no tag moving.
+
+**Shape**: pin every third-party action by commit SHA, its version in a comment, and move permissions to
+each job at least privilege. **Gate**: a host-side preflight refusing a `uses:` without a 40-hex SHA
+outside `actions/*` (or with a reasoned allowlist), and refusing workflow-level write permissions in
+`release.yml`; counterfactual, today's files.
+
+#### BUILT 2026-10-08, in O294's unit — the filed shape, with the token's exposure inside a job closed beside it
+
+**The pins, each read from the API on 2026-10-08** (the tag's ref, dereferenced through an annotated
+tag where there is one, then the exact version tag that shares the commit; the release's `immutable`
+flag; the commit's signature):
+
+| action | was | pinned to | release | commit |
+|---|---|---|---|---|
+| `docker/setup-buildx-action` | `@v4` | `f87e5991a6d7451dcb8d9637bfbc97413f497069` (v4.4.1) | immutable | verified |
+| `docker/login-action` | `@v4` | `dbcb813823bdd20940b903addbd779551569679f` (v4.6.0) | immutable | verified |
+| `docker/build-push-action` | `@v7` | `c3c9e263c25d99ce0380d002d59b67737d91b0dc` (v7.4.0) | immutable | verified |
+| `aquasecurity/trivy-action` | `@v0.36.0` | `ed142fd0673e97e23eac54620cfb913e5ce36c25` (v0.36.0, annotated tag `a9c7b0f0…`) | immutable | verified |
+| `taiki-e/install-action` | `@v2` | `f7e5d7c961414b23f5b25b2da9294395d08513ad` (v2.87.26) | immutable | unsigned |
+| `peaceiris/actions-mdbook` | `@v2` | `ee69d230fe19748b7abf22df32acaa93833fad08` (v2.0.0, annotated tag `062dc9e3…`) | not immutable | verified |
+| `dtolnay/rust-toolchain` | `@stable` (a branch) | removed (O294) | — | — |
+
+`install-action` resolves `tool: cargo-audit` from its own `manifests/cargo-audit.json`, which at that
+commit names 0.22.2 with a sha256 per platform, so the SHA pins the tool and its checksum too.
+`actions/*` stay on version tags, as filed: GitHub runs the runner and mints the token such an action
+could steal, so a moved `actions/` tag is a compromise of the party every job already trusts in full;
+a branch there is refused.
+
+**Permissions.** Every workflow states `permissions: contents: read` at the top. Per job:
+`release.yml`'s `binaries` and `binaries-ort` take `contents: write` (they create and upload the
+release's assets), `docker` and `docker-ort` take `contents: read` and `packages: write`, the two
+manifest jobs `packages: write` alone; `republish-ort-image.yml` the same two image grants, which it
+had at the workflow level; `pages.yml`'s `build` takes `contents: read` and `pages: read` (for
+`configure-pages`) and its `deploy` alone takes `pages: write` and `id-token: write` — the build job
+runs the third-party mdBook action, and with the OIDC grant beside it that action could have minted
+the token a Pages deployment authenticates with. `ci.yml` already read by default and grants nothing.
+**And the token's exposure inside a job**, which per-job permissions alone leave open: the binary jobs
+held `GH_TOKEN` in a job-level `env:`, so `cargo build` — every crate's build script — ran with a
+`contents: write` token in its environment, and their checkout persisted the token into
+`.git/config`. `GH_TOKEN` is now the upload step's alone, and every checkout in a job holding a write
+grant passes `persist-credentials: false`.
+
+**Gate: the `supply chain is pinned` preflight** (`tests/battery.sh`), placed before the first
+preflight that launches a container. Its actions arm refuses any `uses:` that is not a local path, an
+`actions/*` action by version tag or SHA, a `docker://` image by digest, or a third-party action by a
+40-hex SHA with a `# v…` comment, and refuses a line it cannot parse; its permissions arm refuses a
+workflow with no top-level `permissions:` or with a write there, a workflow-level or job-level `env:`
+carrying the token, and a job holding a write whose checkout persists credentials. Each is driven on
+planted input both ways before the real files are believed (five refs and five grants it must refuse,
+a clean set of each it must pass). Counterfactual: over `main`'s files the actions reader prints 18 third-party refs by tag and the permissions reader 7 grants — five workflow-level writes (two in `release.yml`, two in `pages.yml`, one in `republish-ort-image.yml`) and the token in both binary jobs' `env:`. On the built tree, one at a time: the token put back in the binary jobs' `env:` (two refusals), their `persist-credentials: false` dropped (two), trivy back on its tag (two), Pages' writes back at the workflow level (two), each refused by name.
+
+**What stays outside it, stated.** A pinned action can still fetch at run time — trivy's database,
+cargo-audit's advisory database, the mdBook release tarball (no checksum) — so the pin fixes the
+code, not its downloads. The arm reads `uses:` lines in `.github/workflows/`; it does not see an
+action a pinned action calls in turn (a composite action's own `uses:`), which is the pinned commit's
+content and moves only with it. Pins move only by a reviewed change, and nothing reports a pinned
+action's advisory: filed as O-NEW-o294-2. `release.yml` and `pages.yml` run only at a tag and on
+`main`, so the new permissions are first exercised there; what was verified here is the YAML, every
+SHA against its tag, and the preflight.
+
+**O310, O313 and O325, noted.** O313's ruling lists "a mutable-tag action holding the workflow-level
+write token is compromised (O326)" among what fails silently; that route is closed by this build, its
+line kept as the record. O310's `guard` job and O325's `draft`, upload, `verify` and publication jobs,
+ruled 2026-10-08 and not yet built, take their permissions per job as their rulings say, which is
+this build's layout; a third-party action either adds must be pinned by SHA, which the preflight
+refuses otherwise.
+
+### O327 — CLOSED 2026-10-08: the former-name scan runs `python:3.14-slim` by its index digest, with the checkout mounted read-only and no network, and the preflight that holds the supply chain refuses any launch that is not
+
+**Filed 2026-10-06 by O314's ruling of that day (its refuter).** `tests/battery.sh` (791, 808-810,
+817-818) runs the no-trace scan in `python:3-slim`, unpinned by digest, with the working tree mounted
+read-write (`-v "$(pwd):/r"`, no `:ro`). The tag moves upstream routinely, and on the maintainer's host a
+replaced image runs with write access to the checkout, `.git/hooks` included, while `verify.py` only
+reads.
+
+**Shape**: pin the image by digest and mount the tree `:ro`, as O189 and O314 pin what they bring in.
+**Gate**: the preflight's own source check refuses an unpinned image or a writable mount, with a premise
+that the scan still runs and fires on its known positive.
+
+#### BUILT 2026-10-08, in O294's unit — the filed shape, with the network removed beside it
+
+`tests/battery.sh`'s `NOTRACE_IMG` is `python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2`
+— the multi-arch index `python:3-slim` resolved to on 2026-10-08, which Docker Hub dates
+2026-10-06 (read from the Hub, pulled, and `imagetools inspect` reporting an OCI image index; Python
+3.14.8), so the scan runs the image it ran the day before, and no other. Both launches mount the
+checkout `:ro` and pass `--network none`: the scan reads the tracked list from stdin and writes only
+into the container's own temporary directory, and a preflight is offline (O65), while the mount
+exposes the whole working tree, gitignored files included, to whatever the image runs.
+
+**Gate: the containers arm of the `supply chain is pinned` preflight**, which runs before the
+former-name trace so a launch it refuses never happens: every container this script launches names
+its image through a `*_IMG` variable assigned once, by digest, mounts read-only and gets no network.
+It joins continuation lines and skips comments and heredoc bodies, and is driven both ways first —
+five planted defects it must refuse, and a clean launch it must pass beside a heredoc and a comment
+that each name a bad one. The former-name preflight's own premise — the planted known-positive must be
+caught — still fires through the read-only, offline launch: on this host the trace answered `ok`, 415 files scanned (the 413 before and the two this unit adds) and 127 PDF streams, its planted known-positive caught first. Counterfactual: the launches as `main` has them (`python:3-slim`, a writable mount, network) print six refusals, three per launch.
+
+**What stays outside it, stated.** The arm reads `tests/battery.sh` alone: the compose suites' images
+live in the compose files (the builder and lint images are pinned by tag, filed as O-NEW-o294-1), and
+`tests/tls-pins.sh`, a host-side suite, launches its own. The digest fixes the image; a newer Python is
+a deliberate edit to it.
+
 ## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
@@ -32449,6 +32655,15 @@ branch adding `#[cfg(windows)] compile_error!("probe");` inside
 both Apple legs and `#[cfg(all(target_os = "linux", target_arch = "aarch64"))]`
 the arm64 leg, each while every job CI runs today stays green.
 
+**Noted 2026-10-08 by O294's build.** `windows-check` no longer takes `dtolnay/rust-toolchain@stable`:
+its step after the checkout is `bash .github/scripts/pinned-toolchain.sh`, the installer `release.yml`'s
+binary jobs now call with their target in place of `rustup target add`. So the toolchain a leg built to
+this entry checks with is the one `rust-toolchain.toml` pins (1.90.0, the battery's), installed the
+release's way — the script with the leg's target — and the leg names no version itself. The job holds
+no third-party action now (O326 pinned the rest by commit), and the `supply chain is pinned` preflight
+refuses a job that runs cargo outside a container without the script first. The declared relations
+this entry's ruling of 2026-10-08 gives it with O294 and O326 are notes now, both being built.
+
 ### O174 — how many rows at rest carry a degraded zero vector has no surface, so a restart hides every hole
 
 **Filed 2026-09-14, from a residual O122 stated and nothing filed; O171 rules
@@ -34213,6 +34428,12 @@ re-opens the current file, run by name on a `windows-latest` runner. Until it ru
 Windows would be a false exit 2 — loud, where the fall-back it replaced was a silent `VERIFY OK`
 over a manifest that was gone.
 
+**Noted 2026-10-08 by O294's build.** The Windows binary `release.yml` ships is built from 1.7.0 on with
+the toolchain the battery runs (`rust-toolchain.toml`, 1.90.0). Every v1.* Windows asset was built with
+the runner image's own stable, 1.97.1 or 1.98.x, so a reading of 1.90's `std` above describes what
+ships from the next release on, not what shipped before it. Its ruling of 2026-10-08 sequences this
+entry after O294; that is a note now, O294 being built.
+
 **Noted 2026-09-29 by O291's ruling.** A vault delete on Windows takes the hold, renames the
 vault directory under it, and on a refusal releases the hold and retries the rename ONCE
 (try-first). Unmeasured: whether NTFS refuses to rename a directory holding a file SQLite opened
@@ -34346,21 +34567,6 @@ gate admits no read of a manifest file outside the guarded read.
 **Amended 2026-09-29 by O290's ruling.** The store's open no longer reaches `promote`'s bare read of `vault.json`: its promote is licensed by the manifest rule's guarded reads, and the body that writes reads no `vault.json`. The rotation alone still makes that read, under its exclusive hold, where a FIFO would hold the fence; its ruled miss stays the rotation's heal, and an unreadable file must stay `Io`, never "not current, so write". The bare `staged_on_disk` read inside `remove_staged_if_unchanged` is still reached under the write lock on the licence's promoted-since branch, so a FIFO at `.next` there still blocks — this entry's, with how an unreadable `.next` beside a verified `vault.json` answers. Sequenced after O290 deliberately: a guarded `promote` read refusing a missing file, landed first, would have closed two of O290's arms on its own and let its counterfactual pass.
 
 **Noted 2026-09-29 by O291's ruling.** Restore's hold on a FIFO at `vault.db` answers a raw SQLite `SystemIoFailure` ("disk I/O error") in 78 µs — no hang, but no named refusal either (O291's PR5). O291's delete refuses any entry that is not a regular file before its hold opens anything; restore's door surveys no entries, so this stays here with its other bare reads.
-
-### O294 — the native release targets build on an unpinned toolchain
-
-**Filed 2026-09-28 by O289's ruling (its engineering lens, confirmed by the refuter).** The
-Docker images pin `rust:1.90-slim-bookworm`, so every suite, the lint and the Linux images build
-on 1.90. `release.yml`'s binary targets build with whatever stable toolchain each runner has
-installed (it only adds the target), and `windows-check` takes `dtolnay/rust-toolchain@stable` —
-so the Windows, macOS and native Linux artifacts are built by a compiler no suite ran, and a claim
-about "Rust 1.90's std" (O289's Windows reading) is not a claim about what ships.
-
-**Shape**: one pinned toolchain for every build — a `rust-toolchain.toml`, or the version named in
-both workflows — with a gate that the Dockerfile's image and the pin agree.
-
-**Gate**: a preflight comparing the Dockerfile's `rust:` tag with the workflows' toolchain, both
-directions.
 
 ### O295 — the rotation's own promote overwrites a `vault.json` edited inside its fence, and reports nothing
 
@@ -34568,6 +34774,12 @@ even for a lower version, so the guard also checks that the tag's version is abo
 before `:latest` moves. And once O313's ruleset is applied, "deleted and re-cut at no cost" first needs
 the maintainer to lift the ruleset for one recorded deletion — applied 2026-10-06 (O313), so this
 holds now.
+
+**Noted 2026-10-08 by O326's build.** `release.yml` now reads at the workflow level and grants each job
+its write — the binary jobs `contents: write`, the image jobs `packages: write` — with
+`persist-credentials: false` on every checkout in a write job. The guard job this entry adds takes
+`contents: read` in that layout, and a third-party action it uses must be pinned by commit with its
+version beside it: the `supply chain is pinned` preflight refuses any other.
 
 ### O311 — O171's status reader takes the FIRST word of a heading, while its ruling says a heading that CARRIES a finished status
 
@@ -34785,33 +34997,12 @@ repository), the release flow in `CLAUDE.md` following; O310's pre-publish guard
 **Gate**: a dry run in a throwaway repository publishes no release without its assets, and with Immutable
 Releases on, `--clobber` is refused.
 
-### O326 — the workflows run third-party actions by mutable tag, and `release.yml` hands every job a token that can write the repository and its packages
-
-**Filed 2026-10-06 by O313's ruling (its refuter).** Every third-party action is referenced by a tag that
-can move: `docker/setup-buildx-action@v4`, `docker/login-action@v4` and `docker/build-push-action@v7` in
-`release.yml` and `republish-ort-image.yml`; `aquasecurity/trivy-action@v0.36.0`,
-`dtolnay/rust-toolchain@stable` (O294's unpinned toolchain) and `taiki-e/install-action@v2` in `ci.yml`;
-`peaceiris/actions-mdbook@v2` in `ci.yml` and `pages.yml`. `release.yml` grants `contents: write` and
-`packages: write` at WORKFLOW level (15-17), so jobs that need only packages hand a contents-write token
-to third-party code — the moved-tag class O313 is about, pointed inward, and a route by which assets
-could be replaced with no tag moving.
-
-**Shape**: pin every third-party action by commit SHA, its version in a comment, and move permissions to
-each job at least privilege. **Gate**: a host-side preflight refusing a `uses:` without a 40-hex SHA
-outside `actions/*` (or with a reasoned allowlist), and refusing workflow-level write permissions in
-`release.yml`; counterfactual, today's files.
-
-### O327 — the former-name preflight runs an unpinned `python:3-slim` with the checkout mounted read-write
-
-**Filed 2026-10-06 by O314's ruling of that day (its refuter).** `tests/battery.sh` (791, 808-810,
-817-818) runs the no-trace scan in `python:3-slim`, unpinned by digest, with the working tree mounted
-read-write (`-v "$(pwd):/r"`, no `:ro`). The tag moves upstream routinely, and on the maintainer's host a
-replaced image runs with write access to the checkout, `.git/hooks` included, while `verify.py` only
-reads.
-
-**Shape**: pin the image by digest and mount the tree `:ro`, as O189 and O314 pin what they bring in.
-**Gate**: the preflight's own source check refuses an unpinned image or a writable mount, with a premise
-that the scan still runs and fires on its known positive.
+**Noted 2026-10-08 by O326's build.** The placeholder `gh release create` and the `--clobber` uploads
+cited above (78-82, 188-190) sit at 100-102 and 214-216 of `release.yml` now, in the binary jobs' upload
+steps, which alone hold `GH_TOKEN`; those jobs take `contents: write` per job, the image jobs
+`packages: write`, and the workflow reads. The draft, upload, `verify` and publication jobs this entry
+adds take their grants in that layout, and a third-party action they use must be pinned by commit: the
+`supply chain is pinned` preflight refuses any other.
 
 ### O329 — an exit-2 verdict on a telemetry build skips the flush of its spans and metrics
 
@@ -34966,6 +35157,41 @@ gains a writer arm that sees a tracing fmt layer with no `with_writer` or a stdo
 telemetry build under `UNDERCROFT_LOG_FORMAT=json`, `serve-mcp`'s stdout carries the JSON-RPC frames
 alone and an export's stdout is the payload alone (e2e-telemetry), each with the premise that the log
 line is emitted; counterfactual, today's layer.
+
+### O-NEW-o294-1 — the image that compiles every shipped Linux binary is named by a tag, not a digest
+
+**Filed 2026-10-08 by O294's build.** The Dockerfile's builder stage, `FROM rust:1.90.0-slim-bookworm`,
+compiles the Linux binaries inside both GHCR images, and CI's `lint` job runs in the same image; both
+name it by a tag Docker Hub can move. O327 pinned the former-name preflight's `python` image by digest
+because a replaced image ran beside the checkout; the image that compiles what ships is the same class
+with more at stake. O159 left the builder untouched deliberately, as "a supply-chain question with a
+different shape", and filed nothing. Read 2026-10-08: the tag resolves to the index
+`sha256:64232e656c058f4468e8d024e990acff04f0fd5a5c0a88a574dc37773d7325c9`, last rebuilt 2025-10-21, so
+a pin moves nothing that is built today. The runtime stage's `debian:bookworm-slim` stays a tag by
+O159's ruling (its security updates are the point), and the compose suites' service images (Caddy,
+Alpine, the vector databases) are test infrastructure that builds nothing shipped.
+
+**Shape**: the builder and the lint container named `rust:<version>-slim-bookworm@sha256:<index
+digest>`, and the toolchain arm of the `supply chain is pinned` preflight requiring the digest beside
+the version. **Gate**: that arm refuses a `rust:` image without `@sha256:`; counterfactual, today's
+Dockerfile.
+
+### O-NEW-o294-2 — nothing reports that a pinned action, or the pinned toolchain, has a fix the pin does not carry
+
+**Filed 2026-10-08 by O326's build.** Since O294 and O326, every third-party action runs at a commit
+named in the workflow and every build at the version `rust-toolchain.toml` names. That is the point of
+a pin, and it has a cost nothing here states: a security release of a pinned action, or a Rust point
+release, reaches CI only when someone edits the pin, and nothing in the tree or in CI says one exists.
+GitHub's Dependabot reads workflow `uses:` lines, keeps a `# vX.Y.Z` comment beside a SHA it bumps, and
+raises alerts for actions with published advisories; whether to turn it on is a repository setting
+and a `.github/dependabot.yml`, the maintainer's, as O313's settings were.
+
+**Shape**: escalated to the maintainer — Dependabot for the `github-actions` ecosystem (alerts, and
+optionally version updates opening SHA-bump pull requests that the preflight already accepts), or a
+stated decision that pins move only when a person reviews a release. The toolchain pin has no such
+feed either way; a bump is one change across the file and the image references, which the preflight
+holds. **Gate**: on enabling, a deliberately stale pin on a scratch branch draws an alert or a pull
+request; on a decision not to, the decision is recorded here with its argument.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
@@ -36863,6 +37089,13 @@ stated residual; P4 is O324's and P5 is O325's.
 entry leaves `## Unversioned` through the battery's roster" was my own wording, and wrong: a roster entry
 stays under `## Unversioned`, closed. The release-flow clauses are in `CLAUDE.md` — its opening paragraph
 and its release flow — and notes stand beside O309 and O310.
+
+**Noted 2026-10-08 by O326's build.** The ruling's "fails silently if … a mutable-tag action holding the
+workflow-level write token is compromised (O326)" no longer describes the tree: no workflow grants a write
+at the workflow level, every third-party action is pinned by commit, and a job holding a write keeps its
+token out of every `env:` block but its step's and out of `.git/config`. The line stays as the record of
+what the ruling weighed. What remains of that route is an action pinned at a compromised commit, which a
+pin cannot see.
 
 ## Beyond 2.0.0 — the competitive track
 

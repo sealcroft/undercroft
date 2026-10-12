@@ -452,6 +452,26 @@ reader left": it is not a failed run to retry, because a retry of a write that
 committed files it again. `undercroft config check` cannot detect this:
 nothing in an environment predicts a reader closing.
 
+### a native source build with rustup uses Rust 1.90.0, and fetches it the first time (O294)
+
+**Symptom:** `cargo build --release` in a checkout, on a host whose rustup does
+not hold 1.90.0, first prints `info: syncing channel updates for
+'1.90.0-<host>'` and installs it; with no network it fails with a download
+error from `static.rust-lang.org` instead of building. Before 1.7.0 the same
+command built with whatever toolchain the host's rustup defaulted to.
+
+**Cause:** `rust-toolchain.toml` now pins the toolchain every build uses — the
+one the Docker images carry and every suite runs — and rustup obeys it for
+every cargo call in the checkout (ROADMAP O294). The release binaries are built
+with it from 1.7.0 on; each one before was built with its runner image's own
+stable, 1.97.1 or 1.98.x, a compiler no suite ran.
+
+**Fix:** install it once while online, `rustup toolchain install 1.90.0`. A
+`cargo` that is not rustup's proxy ignores the file. `cargo +<toolchain> build`
+still builds with another toolchain, into a binary the battery did not test.
+The prebuilt binaries, the GHCR images and a `docker build` are unaffected.
+`undercroft config check` cannot detect this: it is a build, not a declaration.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

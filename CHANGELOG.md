@@ -1757,6 +1757,84 @@ PATCH inside the unreleased 1.7.0, by the 2026-09-08 versioning ruling: the defe
 undefined panic status, and the new class reports a condition that was undefined; 0, 1 and 2 keep
 their meanings. `UPGRADING.md` carries the entry; `config check` cannot detect it.
 
+### The shipped binaries are built by the compiler every suite runs, third-party actions are pinned by commit, and a write token reaches only the step that needs it (O294, O326, O327)
+
+Three gaps of one class: something CI runs, or something that builds what ships, named by a
+reference that can move. **The toolchain (O294).** Every suite, the lint and the Linux images
+build in `rust:1.90-slim-bookworm`, while `release.yml`'s ten binaries were built by whatever stable
+each runner image carried and `windows-check` took `dtolnay/rust-toolchain@stable`. Read from the
+runner image every `Binaries` job logged and that image's own readme: all ten of v1.6.1's binaries
+were built by Rust 1.98.1, eight minor versions past the 1.90.0 every suite ran, and no v1.* binary
+was built by 1.90.0 — 1.97.1 through v1.1.1, 1.97.1 and 1.98.0 mixed inside each release from v1.2.0
+to v1.5.1 (all ten on 1.98.0 in v1.5.0), 1.98.1 from v1.5.2. **The actions
+(O326).** Every third-party action was referenced by a tag its owner can move —
+`docker/setup-buildx-action@v4`, `docker/login-action@v4`, `docker/build-push-action@v7`,
+`aquasecurity/trivy-action@v0.36.0`, `taiki-e/install-action@v2`, `peaceiris/actions-mdbook@v2`,
+`dtolnay/rust-toolchain@stable` — and `release.yml` granted `contents: write` and `packages: write`
+to every job at the workflow level, with the token in the binary jobs' job-level `env:` and
+persisted into `.git/config` by their checkout: every crate's build script ran beside a token that
+could replace the release's assets with no tag moving. `pages.yml` handed `pages: write` and
+`id-token: write` to the job that runs the third-party mdBook action, and
+`republish-ort-image.yml` granted `packages: write` at the workflow level. **The scan's image
+(O327).** The former-name preflight ran `python:3-slim`, unpinned, with the checkout — `.git/hooks`
+included — mounted read-write.
+
+Now `rust-toolchain.toml` pins `1.90.0`, the toolchain the images carry (`rust:1.90-slim-bookworm`
+and `rust:1.90.0-slim-bookworm` are one image, the same digest; the Dockerfile and CI's lint
+container now name the full version, because a minor-only tag follows a point release silently).
+rustup obeys the file for every cargo call in the checkout, and a new script,
+`.github/scripts/pinned-toolchain.sh`, is the one way CI installs it: it reads the pin, installs it
+by name, adds the job's target, and fails unless `rustc` in the checkout reports exactly that
+version — the check is what rustc answers, because a `RUSTUP_TOOLCHAIN` or a directory override
+outranks the file. `release.yml`'s two binary matrices, `windows-check` and `audit` call it before
+their first cargo line. Every third-party action is pinned by its full commit SHA with the version it
+resolved from in a comment — `setup-buildx-action` v4.4.1, `login-action` v4.6.0,
+`build-push-action` v7.4.0, `trivy-action` v0.36.0, `install-action` v2.87.26 (which carries
+cargo-audit 0.22.2 and its sha256 in its own manifest, so the SHA pins the tool too) and
+`actions-mdbook` v2.0.0 — each checked against its tag through the API, five of the six on a GitHub
+immutable release, every commit but install-action's signature-verified. `dtolnay/rust-toolchain`
+is gone. Every workflow states `permissions: contents: read` at the top and grants a write only to
+the job that needs it: the binary jobs `contents: write`, the image jobs `packages: write`, Pages'
+deploy job `pages: write` and `id-token: write`; the binary jobs check out with
+`persist-credentials: false` and give `GH_TOKEN` to the upload step alone. The former-name scan runs
+`python:3.14-slim` by its index digest, with the checkout mounted `:ro` and `--network none`.
+
+**One new host-side preflight holds all of it, and it runs before the first preflight that launches
+a container**, so a launch it refuses never happens: every `uses:` names a local path, a GitHub-owned
+`actions/*` action by version tag or SHA, a `docker://` image by digest, or a third-party action by a
+40-hex SHA with a `# v…` comment; every workflow states top-level permissions with nothing above read,
+a job holding a write checks out with `persist-credentials: false`, and no workflow-level or
+job-level `env:` carries the token; every `rust:` image in a Dockerfile, a compose file or a workflow
+names exactly the pinned version, no workflow or Dockerfile names a toolchain any other way, and
+every job running cargo outside a container calls the script before its first cargo line; and every
+container this script launches names its image through a `*_IMG` variable assigned once, by digest,
+mounts read-only and gets no network. The pin has one reader — the script's `--channel` — which the
+preflight and CI both use. GitHub-owned `actions/*` stay on version tags, as O326 filed it: GitHub
+runs the runner and mints the token such an action could steal; a branch there is refused.
+
+Gates: each of the preflight's six readers is driven on planted input both ways before the real files
+are believed — five refs it must refuse and a clean set it must pass, five grants, two images, four
+toolchain mechanisms, two native cargo jobs, five container defects (a heredoc holding a bad launch
+and a comment naming one, both ignored, are part of the clean sample), and the pin's reader on
+copies of itself over a `stable` channel, an extra `components` line, no file and a well-formed one.
+Counterfactual: over `main`'s workflows, Dockerfile and former-name launch the preflight prints forty refusals across all six readers — eighteen third-party refs by tag, five workflow-level writes and two job-level tokens, two minor-only rust images, three toolchain mechanisms (`dtolnay/rust-toolchain@stable` and `rustup target add` twice), four jobs running cargo without the pin and six container defects — beside the missing pin. On the built tree, one regression at a time, each refused by name: `dtolnay` put back in `windows-check` (three readers fire), the token back in a binary job's `env:` (two), a write job's checkout persisting its credentials (two), a minor-only image tag (one), trivy back on its tag (two), Pages' writes back at the workflow level (two), the scan's launches as they were (six) and the pin file removed. The preflight runs green under Debian 12's mawk 1.3.4 20200120 and gawk 5.2.1, and actionlint finds nothing new in the four workflows. The script: with no network in `rust:1.90-slim-bookworm`, `--channel` printed `1.90.0`; with network it installed the pin and added a target; in `rust:1.92`, whose default is 1.92, it installed 1.90.0 and `cargo -V` in the checkout then reported 1.90.0 — the runner's case; and a `rustc` first on `PATH` reporting 1.98.1 was refused, exit 1. The CLI built with no network in `rust:1.90.0-slim-bookworm` over the checkout (the file resolved to the installed toolchain, nothing fetched) and, through the LoCoMo feed mined into three wings of a sealed vault, filed 255 drawers, searched a wing in 43 ms and verified clean.
+
+What it cannot see, stated. A pinned action still FETCHES at run time — trivy's vulnerability
+database, cargo-audit's advisory database, the mdBook tarball (no checksum) — so the pin fixes the
+code, not its downloads. The preflight reads definitions; whether a runner really ran the pinned
+compiler is the script's own check, in the run. `release.yml` runs only at a tag, so its new shape
+is first exercised by the next release: what could be verified here is its YAML, every pinned SHA
+against its tag, the script on the pinned image, and the preflight; `windows-check` on this pull
+request is the first native compile under the pin, and no macOS, arm64 Linux or Windows `-ort`
+build runs under it before the tag (O168's legs, ruled and not built). Under the pin, no package in
+the lock declares a `rust-version` above 1.88. `pages.yml`'s split permissions are first exercised by
+the next push to `main`. Filed: O-NEW-o294-1 (the image that compiles every shipped Linux binary is named by tag, not digest) and O-NEW-o294-2 (nothing reports that a pinned action or the pinned toolchain has a fix the pin lacks, escalated to the maintainer as a repository setting).
+
+PATCH inside the unreleased 1.7.0: CI, release and test tooling. Nothing an operator runs changes. A
+native source build changes, so `UPGRADING.md` carries an entry: rustup now builds with 1.90.0 and
+fetches it on first use, which an offline build host without it cannot do; `config check` cannot see
+a build.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

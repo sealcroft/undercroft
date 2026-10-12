@@ -312,7 +312,9 @@ No Docker? **Prebuilt binaries** for Linux (x86_64 + arm64), macOS (Intel +
 Apple Silicon), and Windows are attached to every
 [release](https://github.com/sealcroft/undercroft/releases/latest)
 (`undercroft` + `undercroft-orchestrator`, SHA-256 checksums included).
-Or build natively: `cargo build --release` → `target/release/undercroft`.
+Or build natively: `cargo build --release` → `target/release/undercroft`
+(rustup builds it with the toolchain `rust-toolchain.toml` pins — the one the
+release binaries are built with — and fetches it on first use).
 
 ## CLI
 
