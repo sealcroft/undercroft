@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and forty-five fixes. The witness
+MINOR: one new capability, backward compatible, and forty-seven fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Fourteen fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -34,8 +34,9 @@ stable now refuses every open (which `config check` pre-flights), O255's note th
 a destruction now holds the write lock for as long as it runs, O256's that an
 archive taken by an older release beside a writer may be torn, O303's that a
 vault whose `chain_meta` has lost its committed head or its height is refused
-instead of adopted, and O236's that a repeated tunnel create, or an import, over a
-tunnel row edited offline exits 2. (This line said "one fix" while O243 and
+instead of adopted, O236's that a repeated tunnel create, or an import, over a
+tunnel row edited offline exits 2, and O259's and O260's that a source delete and an
+allow now change everything or nothing, a failure part-way changing nothing. (This line said "one fix" while O243 and
 O246 were both below it; corrected with O247. It said "nine" until O268,
 "ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
 until O279, which closed four entries, "seventeen" until O281, "eighteen" until O284,
@@ -46,7 +47,8 @@ by counting the entries — "twenty-seven" until O305, "twenty-eight" until O309
 until O314, "thirty" until O212, "thirty-one" until O287, which closed two entries, and
 "thirty-three" until train 1's integration, which closed six — O331, O199, O200, O177,
 O236 and O262 — "thirty-nine" until O231, and "forty" until the units of O273, O211 and O210,
-which closed five — O273, O301, O211, O210 and O321; it said "Three fixes change what a deployment must do" until O283 made
+which closed five — O273, O301, O211, O210 and O321, and "forty-five" until O259's unit closed O259 and
+O260; it said "Three fixes change what a deployment must do" until O283 made
 it four, "Four" until O291 made it five, "Five" until O212 made it six, "Six"
 until O287 made it seven, "Seven" until train 1 made it nine (O200, O262), "Nine" until O231 made it ten, and "Ten" until those units made it fourteen (O273, O301,
 O321, O210). O303's
@@ -435,7 +437,7 @@ failure with `sqlite3` and race CLI denies against `/v1` allows; and on the
 LoCoMo feed mined into seven wings beside a `/v1` writer. The one behaviour a
 script can notice is in `UPGRADING.md`. Filed beside it: `/v1` hands most query
 values to the store still percent-encoded, so a source path a URL must encode
-answers `deleted: 0` (O-NEW-o259-1). PATCH-class inside the unreleased 1.7.0.
+answers `deleted: 0` (O415). PATCH-class inside the unreleased 1.7.0.
 
 ### A backup is exactly the state its verify judged (O256), and pruning one vault's backups never touches another's (O265)
 
