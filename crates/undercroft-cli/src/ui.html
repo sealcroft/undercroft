@@ -1447,7 +1447,10 @@ async function loadAdmission() {
     const r = await api("GET", opsPath("admission"), { vault: v });
     const rows = (r.pending || []).map(p => {
       const sig = (p.signals || []).map(s => esc(s.code) + "@" + s.offset).join(" ");
-      return "<tr><td class='kv'>" + esc(p.id) + "<br>" + esc(p.source_file) + "#" + esc(String(p.chunk_index)) + "</td>" +
+      // A clear column that disagrees with the covered copy (ROADMAP O221):
+      // a flip a ruling would erase the only trace of. Escaped like every cell.
+      const drift = (p.mirror_drift || []).map(m => "<br><span style='color:var(--red)'>MIRROR " + esc(m) + "</span>").join("");
+      return "<tr><td class='kv'>" + esc(p.id) + "<br>" + esc(p.source_file) + "#" + esc(String(p.chunk_index)) + drift + "</td>" +
         "<td><span class='pill wing'>" + esc(p.intended_wing) + "</span>/" + esc(p.intended_room) + "</td>" +
         "<td class='kv'>" + sig + "</td><td class='kv'>" + esc(p.filed_at) + "</td>" +
         // Whether an allow would proceed (ROADMAP O224). ALLOW stays enabled:
@@ -1456,6 +1459,23 @@ async function loadAdmission() {
         "<td><button class='ctl' data-adm-allow='" + esc(p.id) + "'>✓ ALLOW</button> " +
         "<button class='ctl danger' data-adm-deny='" + esc(p.id) + "'>✕ DENY</button></td></tr>";
     });
+    // The rows the queue holds that do not verify (ROADMAP O221): named by
+    // `seq`, the id only when the server sends one (it never sends a
+    // malformed id, only its length), and NO rule buttons — no ruling door
+    // can act on them.
+    for (const u of r.unverifiable || []) {
+      const name = u.id != null ? esc(u.id) : "malformed id, " + esc(String(u.malformed_id_bytes)) + " bytes";
+      rows.push("<tr><td class='kv'>seq " + esc(String(u.seq)) + "<br>" + name + "</td>" +
+        "<td colspan=4 class='kv'><span style='color:var(--red)'>UNVERIFIABLE — " + esc(u.reason) + "</span>; " +
+        (u.fenced ? "the destruction fence holds it" : "the destruction fence does not hold it") +
+        ". To repair: re-import its genuine exported queue record with UNDERCROFT_ADMISSION=quarantine " +
+        "declared, or restore a backup older than the tampering</td><td class='kv'>no ruling</td></tr>");
+    }
+    // A 200 carrying `ok: false` is an integrity verdict, not a clean queue.
+    if (r.ok === false) {
+      rows.unshift("<tr><td colspan=6 style='color:var(--red)'>NOT CLEAN — rows below do not verify or carry " +
+        "mirror drift; run verify</td></tr>");
+    }
     // Say WHY the queue is empty: with screening off, "no pending" is a
     // configuration fact, not a clean bill of health.
     $("admRows").innerHTML = rows.join("") || "<tr><td colspan=6 class='kv'>" +

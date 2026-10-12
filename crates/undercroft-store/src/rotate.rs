@@ -2369,7 +2369,7 @@ mod tests {
             again.id, second.id,
             "the version slot re-derives to the same row after the rotation"
         );
-        assert_eq!(store.admission_pending().unwrap().len(), 2);
+        assert_eq!(store.admission_pending().unwrap().pending.len(), 2);
         assert!(store.verify().unwrap().ok());
     }
 
@@ -2403,6 +2403,7 @@ mod tests {
             let q = store
                 .admission_pending()
                 .unwrap()
+                .pending
                 .into_iter()
                 .find(|p| p.destination_id == d.id)
                 .unwrap()
@@ -2417,6 +2418,7 @@ mod tests {
         let state = |s: &VaultStore, q: &str| {
             s.admission_pending()
                 .unwrap()
+                .pending
                 .into_iter()
                 .find(|p| p.id == q)
                 .unwrap()

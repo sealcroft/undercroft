@@ -1351,7 +1351,19 @@ Consequences that are binding, not advisory:
   distinct text now takes its own slot, `ids::quarantine_version_id` keyed
   with the STORED `kg_secret` (never a vault key, never unkeyed), chosen at
   the door with a batch-local map and backstopped inside the write
-  transaction, and equal text converges; **an allow never replaces or
+  transaction, and equal text converges — **carrying the pending row's
+  whole covered declaration (O226)**, its signals the one field that grows
+  (`admission::converged_meta`, at the door, in the batch's taken map, and
+  checked by the backstop's `carries`), so a converger cannot back-date
+  `filed_at` or attach a `kind` or `supersedes` the reviewer never saw;
+  **"pending" is the HMAC-covered wing (O221)** — ONE predicate,
+  `queue_standing`, reads the covered wing where the row verifies and the
+  clear column only where it does not, for every destruction and write
+  fence (both dedup doors included), the read fences refuse on EITHER
+  copy over their own probe, and `admission list` walks the vault by the
+  same rule and reports a row it cannot verify beside the rest (`ok`
+  false, by `seq`, a malformed id only by its length) instead of failing
+  on it; **an allow never replaces or
   re-creates what the screen never saw (O224)** — it re-filed over whatever
   the destination held, so a flagged update an agent parked over MCP before
   a clean one reverted the drawer when allowed, and a drawer forgotten in

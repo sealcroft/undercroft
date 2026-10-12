@@ -436,7 +436,7 @@ mod tests {
             .upsert(&Drawer::new("ops", "r", POISON.into(), None, 1, "test"))
             .unwrap();
         assert_eq!(
-            store.admission_pending().unwrap().len(),
+            store.admission_pending().unwrap().pending.len(),
             1,
             "premise: the screen diverted the poison into the queue"
         );

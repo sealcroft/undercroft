@@ -866,6 +866,43 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-cli/src/ui.html",
         "async function loadAdmission()",
     ),
+    // ROADMAP O221: the queue reports the rows it cannot verify BESIDE the
+    // readable ones, and `ok` is the verdict. The CLI and the console project
+    // all three by hand, and `/v1` builds its reply object field by field —
+    // a fourth key added to the struct would reach none of them silently.
+    (
+        "undercroft-store/src/admission.rs",
+        "AdmissionQueue",
+        "undercroft-cli/src/main.rs",
+        "AdmissionAction::List",
+    ),
+    (
+        "undercroft-store/src/admission.rs",
+        "AdmissionQueue",
+        "undercroft-cli/src/tenant.rs",
+        "fn admission_list(&mut self",
+    ),
+    (
+        "undercroft-store/src/admission.rs",
+        "AdmissionQueue",
+        "undercroft-cli/src/ui.html",
+        "async function loadAdmission()",
+    ),
+    // Each unverifiable row, on the two renderers that print it by hand
+    // (`/v1` serializes it whole). Its `id` travels only when it has a
+    // derived id's shape, so both renderers name the other arm by its length.
+    (
+        "undercroft-store/src/admission.rs",
+        "UnverifiableQueueRow",
+        "undercroft-cli/src/main.rs",
+        "AdmissionAction::List",
+    ),
+    (
+        "undercroft-store/src/admission.rs",
+        "UnverifiableQueueRow",
+        "undercroft-cli/src/ui.html",
+        "async function loadAdmission()",
+    ),
     (
         "undercroft-store/src/retention.rs",
         "RetentionPolicy",

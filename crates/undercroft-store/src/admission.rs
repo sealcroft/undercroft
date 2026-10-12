@@ -33,7 +33,7 @@
 //!   the text was queued ([`QueuedAgainst`]), and the allow is refused when
 //!   the destination has been written or deleted since.
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use undercroft_core::{Drawer, QueuedAgainst};
@@ -57,10 +57,12 @@ pub struct PendingAdmission {
     pub intended_room: String,
     /// The closed-vocabulary signal codes that tripped the screen, with offsets and never content.
     pub signals: Vec<undercroft_core::admission::AdmissionSignal>,
-    /// The drawer's own `filed_at` (RFC 3339) — NOT the time it was
-    /// diverted: an update diversion keeps the updated drawer's original
-    /// filing time, a re-mine carries when its `Drawer` was built, and an
-    /// import carries the payload's. Arrival order is the list's order.
+    /// The filing time the FIRST submission of this text carried (RFC 3339)
+    /// — NOT the time it was diverted, and not the time of a later
+    /// submission that converged onto this row, which keeps the row's whole
+    /// declaration (ROADMAP O226). For an update, the updated drawer's
+    /// original filing time; for a re-mine, when its `Drawer` was built; for
+    /// an import, the payload's value. Arrival order is the list's order.
     pub filed_at: String,
     /// The source the write was filed from (`(direct)` for an API save) —
     /// with `chunk_index`, the FILING, so a reviewer can see which rows are
@@ -75,6 +77,182 @@ pub struct PendingAdmission {
     /// was queued (ROADMAP O224) — whether an `allow` would proceed, before
     /// anyone rules. Advisory: the allow decides again, inside its write.
     pub destination: DestinationState,
+    /// Each clear mirror column (`wing`, `room`, `kind`, `supersedes`) that
+    /// disagrees with this row's HMAC-covered meta, in `verify`'s wording
+    /// (ROADMAP O221). A row whose clear `wing` was flipped AWAY from the
+    /// review queue is still listed — the covered copy decides — and shows
+    /// its flip here, because a ruling or a destruction that rewrites the row
+    /// erases the only trace of it. Non-empty makes the list's `ok` false.
+    pub mirror_drift: Vec<String>,
+}
+
+/// The review queue as `admission list` reports it (ROADMAP O221 ruling,
+/// part (a)): the rows awaiting a ruling that verify, and BESIDE them every
+/// row the queue holds that does not — never a list that fails on one row.
+///
+/// `#[must_use]`, and no convenience wrapper hands back the readable rows
+/// alone: a caller that drops `unverifiable` drops the only report of the
+/// rows a ruling cannot reach.
+#[must_use]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AdmissionQueue {
+    /// Every row awaiting a ruling whose tag verifies, oldest first — the
+    /// rows whose HMAC-covered wing is the reserved one.
+    pub pending: Vec<PendingAdmission>,
+    /// Every row EITHER copy places in the queue — the clear `wing` column or
+    /// the row's own `meta_json` claim — that does not verify, oldest first.
+    /// None of the row's own claims travel: once its tag fails they are the
+    /// writer's strings.
+    pub unverifiable: Vec<UnverifiableQueueRow>,
+    /// False while `unverifiable` is non-empty or any listed row carries
+    /// mirror drift — an integrity verdict: the CLI exits 2, `/v1` answers
+    /// 200 with `ok: false`, which the ops plane reads as one.
+    pub ok: bool,
+}
+
+/// One review-queue row that does not verify (ROADMAP O221 ruling item 7).
+///
+/// Named by its `seq`, the one handle on it the writer did not choose: the
+/// `id` column is an unconstrained `TEXT`, so on exactly these rows it is the
+/// writer's, and it travels only when it has a derived id's shape.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UnverifiableQueueRow {
+    /// The row's storage sequence number.
+    pub seq: i64,
+    /// The row's id, only when it is a derived drawer id (32 lowercase hex).
+    pub id: Option<String>,
+    /// The id's length in bytes when it is NOT shown; `None` when `id` is.
+    pub malformed_id_bytes: Option<usize>,
+    /// Why it does not verify, from a closed vocabulary.
+    pub reason: UnverifiableReason,
+    /// Whether the destruction fence holds the row: its clear `wing` column
+    /// (or, for a row whose tag verifies and whose content does not decrypt,
+    /// its covered wing) names the review queue. A row the fence does not
+    /// hold is deletable as any unverifiable row is.
+    pub fenced: bool,
+}
+
+impl UnverifiableQueueRow {
+    fn new(seq: i64, id: &str, reason: UnverifiableReason, fenced: bool) -> Self {
+        let shown = crate::is_drawer_id(id);
+        Self {
+            seq,
+            id: shown.then(|| id.to_string()),
+            malformed_id_bytes: (!shown).then_some(id.len()),
+            reason,
+            fenced,
+        }
+    }
+}
+
+/// Why a review-queue row does not verify — a closed vocabulary, so a
+/// renderer never prints a string the row chose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UnverifiableReason {
+    /// The record HMAC does not verify.
+    TagFails,
+    /// The tag verifies and the covered meta does not parse.
+    MetaUnparseable,
+    /// The tag verifies, the meta parses, and the content does not decrypt.
+    ContentUndecryptable,
+}
+
+impl UnverifiableReason {
+    /// The reason's name, as every renderer spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnverifiableReason::TagFails => "tag-fails",
+            UnverifiableReason::MetaUnparseable => "meta-unparseable",
+            UnverifiableReason::ContentUndecryptable => "content-undecryptable",
+        }
+    }
+}
+
+/// The remedies for a queue row no ruling door can act on, named by the
+/// list and by every fence that refuses one (ROADMAP O221 ruling item 8).
+pub const UNVERIFIABLE_REMEDIES: &str =
+    "re-import its genuine exported queue record with UNDERCROFT_ADMISSION=quarantine \
+     declared, which repairs it through the screen, or `backup restore` an archive older \
+     than the tampering";
+
+/// Where a row stands with respect to the review queue — the answer of the
+/// ONE predicate every destruction and write fence asks (ROADMAP O221 ruling,
+/// part (b)), [`VaultStore::queue_standing`].
+///
+/// It reads the HMAC-covered `meta.wing` wherever the row's tag verifies and
+/// its covered meta parses, and the clear `wing` column only where it does
+/// not. The clear column decided everywhere until O221, so a pending row
+/// whose column was flipped offline to an ordinary wing was destroyed by
+/// `drawer delete`, `forget`, `dedup --apply` and a dedup save, each of which
+/// also erased the drift that was its only trace; and an ordinary row whose
+/// column was flipped INTO the queue was refused with advice to use the
+/// ruling doors, neither of which could act on it.
+///
+/// READ fences do not ask this (ruling item 3): they decide by EITHER copy,
+/// over an explicit clear-column probe of their own, because a mirror may
+/// narrow a read and must never lift an exclusion (A28).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QueueStanding {
+    /// The row verifies and its covered wing is the reserved one: pending
+    /// review evidence, which only `admission allow`/`deny` may act on.
+    Pending,
+    /// The row does not verify and its clear `wing` names the queue: no
+    /// ruling door can act on it, and nothing may destroy it as housekeeping.
+    PendingUnverifiable,
+    /// Absent, or verified with an ordinary covered wing, or unverifiable
+    /// with an ordinary clear wing.
+    NotPending,
+}
+
+impl QueueStanding {
+    /// The decision on a row whose covered meta verified and parsed.
+    pub(crate) fn of_covered(meta: &undercroft_core::DrawerMeta) -> Self {
+        if meta.wing == QUARANTINE_WING {
+            QueueStanding::Pending
+        } else {
+            QueueStanding::NotPending
+        }
+    }
+
+    /// The decision on one row as the covered walk reads it.
+    pub(crate) fn of_row(row: &crate::CoveredRow) -> Self {
+        match row {
+            crate::CoveredRow::Verified { meta, .. } => Self::of_covered(meta),
+            crate::CoveredRow::TagFailed { clear_wing, .. }
+            | crate::CoveredRow::MetaUnparseable { clear_wing, .. } => {
+                if clear_wing == QUARANTINE_WING {
+                    QueueStanding::PendingUnverifiable
+                } else {
+                    QueueStanding::NotPending
+                }
+            }
+        }
+    }
+}
+
+/// How a row is named in a refusal: its id when it has a derived id's shape,
+/// its length otherwise — the id column is unconstrained, and a fence that
+/// refuses an unverifiable row is the one place a planted id would reach a
+/// terminal verbatim.
+pub(crate) fn shown_id(id: &str) -> String {
+    if crate::is_drawer_id(id) {
+        id.to_string()
+    } else {
+        format!("a row whose id is malformed ({} bytes)", id.len())
+    }
+}
+
+/// The integrity refusal for a [`QueueStanding::PendingUnverifiable`] row,
+/// naming the remedies (ROADMAP O221 ruling item 5). `act` says what was
+/// refused ("deleted", "forgotten").
+pub(crate) fn unverifiable_pending_refusal(id: &str, act: &str) -> StoreError {
+    StoreError::IntegrityFinding(format!(
+        "{} sits in the admission review queue and does not verify: no ruling door can \
+         act on it, and review evidence is not {act} as housekeeping. Nothing was \
+         changed. To repair it: {UNVERIFIABLE_REMEDIES}",
+        shown_id(id)
+    ))
 }
 
 /// What a queue row's destination holds now, against what the row recorded
@@ -289,9 +467,77 @@ pub(crate) struct Slot {
     /// The queue id.
     pub(crate) id: String,
     /// `Some` when the landing converges onto a pending row holding the same
-    /// text: what that row recorded of its destination, which the landing
-    /// carries verbatim (ROADMAP O224). `None` for a fresh slot.
-    pub(crate) converged: Option<Option<QueuedAgainst>>,
+    /// text: that row's whole covered meta, as stored, which the landing
+    /// carries ([`converged_meta`], ROADMAP O226) — its record of its
+    /// destination included (O224). `None` for a fresh slot.
+    pub(crate) converged: Option<undercroft_core::DrawerMeta>,
+}
+
+/// Two signals are one when their code and offset are (ROADMAP O226).
+fn same_signal(
+    a: &undercroft_core::admission::AdmissionSignal,
+    b: &undercroft_core::admission::AdmissionSignal,
+) -> bool {
+    a.code == b.code && a.offset == b.offset
+}
+
+/// What a convergence writes (ROADMAP O226): the pending row's WHOLE covered
+/// meta, verbatim, with one exception — its signals become the stored ones
+/// followed by any `raised` by the current screen that are not already there,
+/// deduplicated by code and offset, stored order first.
+///
+/// **A pending row's covered declaration changes only by a ruling, as its
+/// text already does.** The write replaced `meta_json` wholesale, so a
+/// converger holding the text and the filing could back-date `filed_at` (the
+/// allowed drawer then swept at once), move `content_date` into a date window,
+/// or attach a `supersedes` link or a `kind` the reviewer never saw — and the
+/// allow restores every one of them. The convergence still WRITES (O215,
+/// O220), so the chain records every re-submission.
+///
+/// The signals are the exception because they are the screen's own output
+/// (O31), the allow clears them, so they cannot widen what is released, and a
+/// re-submission's own signal — a rate anomaly, an advisor verdict — is
+/// evidence a reviewer should keep. The union only grows.
+///
+/// It clones and replaces one field; it enumerates none, so a field added to
+/// `DrawerMeta` later is CARRIED — the fail-closed direction — with no second
+/// inventory to keep in step. One function, three call sites: the door, the
+/// batch's taken-slot map, and (through [`carries`]) the write boundary.
+pub(crate) fn converged_meta(
+    stored: &undercroft_core::DrawerMeta,
+    raised: &[undercroft_core::admission::AdmissionSignal],
+) -> undercroft_core::DrawerMeta {
+    let mut meta = stored.clone();
+    for s in raised {
+        if !meta.admission_signals.iter().any(|t| same_signal(t, s)) {
+            meta.admission_signals.push(s.clone());
+        }
+    }
+    meta
+}
+
+/// Whether a write of `candidate` onto a pending row holding `stored` (the
+/// same text) carries that row's declaration (ROADMAP O226) — the boundary's
+/// half of [`converged_meta`]. True when every covered field but the signals
+/// is equal in the stored form, and every stored signal is among the
+/// candidate's. Anything else is a convergence another writer raced: the door
+/// carried what it read and the row has changed since, so the write is
+/// refused and a retry converges and carries.
+pub(crate) fn carries(
+    stored: &undercroft_core::DrawerMeta,
+    candidate: &undercroft_core::DrawerMeta,
+) -> bool {
+    let mut stored = stored.at_rest();
+    let mut candidate = candidate.at_rest();
+    let kept = stored.admission_signals.iter().all(|s| {
+        candidate
+            .admission_signals
+            .iter()
+            .any(|c| same_signal(c, s))
+    });
+    stored.admission_signals.clear();
+    candidate.admission_signals.clear();
+    kept && stored == candidate
 }
 
 /// A declared supersession link may not name the queue slot the write lands
@@ -753,20 +999,29 @@ impl VaultStore {
                 // takes its own version slot rather than replacing it.
                 let slot = self.queue_slot(&diverted)?;
                 diverted.id = slot.id;
-                // And what its destination holds, which is the precondition an
-                // allow checks (ROADMAP O224). Always assigned here, so a value
-                // arriving on the candidate never survives — except the replay
-                // marker the import unwrap sets, which only ever narrows what
-                // an allow may do.
-                diverted.meta.queued_against = match slot.converged {
-                    // A convergence CARRIES what the row recorded, a stored
-                    // none included. It is the text the reviewer sees, and so
-                    // is its precondition: a restore of the vault's own backup
-                    // converges every pending row, and recomputing here would
-                    // turn a destination written since into "unchanged".
-                    Some(recorded) => recorded,
-                    None => Some(self.record_destination(drawer, &diverted)?),
-                };
+                match slot.converged {
+                    // A convergence CARRIES the row's whole covered
+                    // declaration (ROADMAP O226), with the signals the
+                    // only field that grows — its record of its destination
+                    // included, a stored none too (O224). That record is the
+                    // text the reviewer sees, and so is its precondition: a
+                    // restore of the vault's own backup converges every
+                    // pending row, and recomputing here would turn a
+                    // destination written since into "unchanged".
+                    Some(stored) => {
+                        diverted.meta = converged_meta(&stored, &diverted.meta.admission_signals);
+                    }
+                    // And what its destination holds, which is the
+                    // precondition an allow checks (ROADMAP O224). Always
+                    // assigned for a fresh slot, so a value arriving on the
+                    // candidate never survives — except the replay marker the
+                    // import unwrap sets, which only ever narrows what an
+                    // allow may do.
+                    None => {
+                        diverted.meta.queued_against =
+                            Some(self.record_destination(drawer, &diverted)?);
+                    }
+                }
                 refuse_self_supersession_of_slot(drawer, &diverted)?;
                 Ok(Some(diverted))
             }
@@ -792,14 +1047,15 @@ impl VaultStore {
     /// signals and `added_by` legitimately differ between re-mines.
     ///
     /// When the slot is a pending row holding this same text, the landing
-    /// CONVERGES, and [`Slot::converged`] carries what that row recorded of
-    /// its destination (ROADMAP O224) — read in the same `get` that judged it.
+    /// CONVERGES, and [`Slot::converged`] carries that row's whole covered
+    /// meta (ROADMAP O226; its destination record, O224) — read in the same
+    /// `get` that judged it.
     pub(crate) fn queue_slot(&self, diverted: &Drawer) -> Result<Slot, StoreError> {
         let version = self.version_slot(diverted)?;
-        if let (QueueRow::SameText, recorded) = self.read_queue_row(&version, &diverted.content)? {
+        if let (QueueRow::SameText, stored) = self.read_queue_row(&version, &diverted.content)? {
             return Ok(Slot {
                 id: version,
-                converged: Some(recorded),
+                converged: stored,
             });
         }
         let filing = filing_ids(diverted).quarantine;
@@ -808,9 +1064,9 @@ impl VaultStore {
                 id: version,
                 converged: None,
             },
-            (QueueRow::SameText, recorded) => Slot {
+            (QueueRow::SameText, stored) => Slot {
                 id: filing,
-                converged: Some(recorded),
+                converged: stored,
             },
             _ => Slot {
                 id: filing,
@@ -946,20 +1202,21 @@ impl VaultStore {
     }
 
     /// [`Self::queue_row`], and — for a pending row holding this same text —
-    /// what that row recorded of its destination (ROADMAP O224; `None`
-    /// otherwise, and for a row queued before the field existed).
+    /// that row's whole covered meta as stored (ROADMAP O226, which a
+    /// convergence carries; its destination record is O224's). `None`
+    /// otherwise.
     pub(crate) fn read_queue_row(
         &self,
         id: &str,
         content: &str,
-    ) -> Result<(QueueRow, Option<QueuedAgainst>), StoreError> {
+    ) -> Result<(QueueRow, Option<undercroft_core::DrawerMeta>), StoreError> {
         match self.get(
             id,
             crate::Read::Internal(crate::InternalRead::WritePathLookup),
         ) {
             Ok(None) => Ok((QueueRow::Free, None)),
             Ok(Some(d)) if d.meta.wing != QUARANTINE_WING => Ok((QueueRow::NotPending, None)),
-            Ok(Some(d)) if d.content == content => Ok((QueueRow::SameText, d.meta.queued_against)),
+            Ok(Some(d)) if d.content == content => Ok((QueueRow::SameText, Some(d.meta))),
             Ok(Some(_)) => Ok((QueueRow::DifferentText, None)),
             Err(StoreError::Integrity(_)) | Err(StoreError::CorruptRow { .. }) => {
                 Ok((QueueRow::Unreadable, None))
@@ -1217,18 +1474,124 @@ impl VaultStore {
             || !undercroft_core::admission::screen(&drawer.meta.room).is_empty()
     }
 
-    /// Every drawer awaiting an admission ruling, oldest first.
-    pub fn admission_pending(&self) -> Result<Vec<PendingAdmission>, StoreError> {
-        let ids: Vec<String> = self
-            .conn
-            .prepare("SELECT id FROM drawers WHERE wing = ?1 ORDER BY seq")?
-            .query_map(params![QUARANTINE_WING], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
-        let mut out = Vec::with_capacity(ids.len());
-        for id in ids {
-            let Some(d) = self.get(&id, crate::Read::Internal(crate::InternalRead::BulkMember))?
-            else {
-                continue;
+    /// Where row `id` stands with respect to the review queue — the ONE
+    /// predicate every destruction and write fence asks (ROADMAP O221 ruling,
+    /// part (b); see [`QueueStanding`]). It reads the row through
+    /// [`VaultStore::covered_one`] — the tag checked over the at-rest bytes,
+    /// nothing decrypted — on `conn`, the caller's own connection, which is
+    /// inside the destruction lock wherever the caller holds one. Any error
+    /// other than "the row does not verify" propagates: a fence that cannot
+    /// answer refuses, it never reads as "not pending".
+    ///
+    /// A separate function, rather than folded into a destruction body, so a
+    /// witness that a fence was asked can be built on it.
+    pub(crate) fn queue_standing(
+        &self,
+        conn: &rusqlite::Connection,
+        id: &str,
+    ) -> Result<QueueStanding, StoreError> {
+        Ok(match self.covered_one(conn, id)? {
+            None => QueueStanding::NotPending,
+            Some(row) => QueueStanding::of_row(&row),
+        })
+    }
+
+    /// The review queue (ROADMAP O221 ruling, part (a)): every row awaiting a
+    /// ruling that verifies, oldest first, and beside them every row the
+    /// queue holds that does not.
+    ///
+    /// **It enumerates by the destruction fence's own rule**, through ONE walk
+    /// of every row ([`VaultStore::walk_covered`]: the tag checked over the
+    /// at-rest bytes, nothing decrypted), and lists exactly the rows
+    /// [`QueueStanding`] calls `Pending` — so the fence and the queue can never
+    /// disagree about what is pending. It enumerated the clear `wing` index
+    /// and `get` each row with `?`, so one row whose tag failed failed the
+    /// whole queue on every surface (O216's P3), a pending row flipped away
+    /// from the reserved wing was not listed while nothing protected it, and
+    /// an ordinary row flipped INTO it was listed with an allow that refuses.
+    ///
+    /// The cost moved from an indexed lookup to one pass over the corpus: the
+    /// walk's per-row cost (O206 measured about 1.8 µs a drawer), then a
+    /// verified read of each pending row as before.
+    ///
+    /// The unverifiable report's scope is every row EITHER copy places in the
+    /// queue (O206 ruling 2's reason: a report scoped by one copy reinstates
+    /// the escape). A row whose tag fails AND whose clear column and
+    /// `meta_json` were BOTH moved away is outside it — O216's stated
+    /// residual; `verify`'s `bad_records` names it.
+    pub fn admission_pending(&self) -> Result<AdmissionQueue, StoreError> {
+        let claims = |clear: &str, claimed: &Option<String>| {
+            clear == QUARANTINE_WING || claimed.as_deref() == Some(QUARANTINE_WING)
+        };
+        let mut listed: Vec<(String, Vec<String>)> = Vec::new();
+        let mut unverifiable: Vec<UnverifiableQueueRow> = Vec::new();
+        self.walk_covered(|row| {
+            let standing = QueueStanding::of_row(&row);
+            match row {
+                crate::CoveredRow::Verified { id, drift, .. } => {
+                    if standing == QueueStanding::Pending {
+                        listed.push((id, drift));
+                    }
+                }
+                crate::CoveredRow::TagFailed {
+                    id,
+                    seq,
+                    clear_wing,
+                    claimed_wing,
+                } => {
+                    if claims(&clear_wing, &claimed_wing) {
+                        unverifiable.push(UnverifiableQueueRow::new(
+                            seq,
+                            &id,
+                            UnverifiableReason::TagFails,
+                            standing == QueueStanding::PendingUnverifiable,
+                        ));
+                    }
+                }
+                crate::CoveredRow::MetaUnparseable {
+                    id,
+                    seq,
+                    clear_wing,
+                    claimed_wing,
+                } => {
+                    if claims(&clear_wing, &claimed_wing) {
+                        unverifiable.push(UnverifiableQueueRow::new(
+                            seq,
+                            &id,
+                            UnverifiableReason::MetaUnparseable,
+                            standing == QueueStanding::PendingUnverifiable,
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        let mut out = Vec::with_capacity(listed.len());
+        for (id, mirror_drift) in listed {
+            let d = match self.get(&id, crate::Read::Internal(crate::InternalRead::BulkMember)) {
+                Ok(Some(d)) => d,
+                Ok(None) => continue,
+                // The walk verified the tag and parsed the meta; what failed
+                // here is the content. Reported, never fatal: one row must not
+                // deny review of the queue.
+                Err(StoreError::Integrity(_)) | Err(StoreError::CorruptRow { .. }) => {
+                    let seq: Option<i64> = self
+                        .conn
+                        .query_row("SELECT seq FROM drawers WHERE id = ?1", params![id], |r| {
+                            r.get(0)
+                        })
+                        .optional()?;
+                    if let Some(seq) = seq {
+                        unverifiable.push(UnverifiableQueueRow::new(
+                            seq,
+                            &id,
+                            UnverifiableReason::ContentUndecryptable,
+                            true,
+                        ));
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e),
             };
             // Whether an allow would proceed, shown before anyone rules
             // (ROADMAP O224), through the comparison the allow itself runs.
@@ -1253,17 +1616,25 @@ impl VaultStore {
                 chunk_index: d.meta.chunk_index,
                 destination_id,
                 destination,
+                mirror_drift,
             });
         }
+        unverifiable.sort_by_key(|u| u.seq);
+        let ok = unverifiable.is_empty() && out.iter().all(|p| p.mirror_drift.is_empty());
         // ROADMAP O50: one record for this door, through the one recording
-        // door — `record_read` owns the "does this get written" decision.
+        // door — `record_read` owns the "does this get written" decision. It
+        // counts the READABLE rows: an unverifiable one returned no content.
         self.record_read(
             crate::Read::Returned(crate::ReadOp::AdmissionList),
             "",
             crate::ReadScope::none(),
             out.len(),
         )?;
-        Ok(out)
+        Ok(AdmissionQueue {
+            pending: out,
+            unverifiable,
+            ok,
+        })
     }
 
     /// Allow a quarantined drawer: re-file it where it was headed (the

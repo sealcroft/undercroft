@@ -311,10 +311,12 @@ impl VaultStore {
     ///   dated. This arm used to FAIL the sweep, which kept "never destroy
     ///   what cannot be dated, never skip it silently" at the price of one
     ///   legacy row stopping every policy; naming it keeps both halves;
-    /// * a covered member the pending-evidence fence refuses, which is a
-    ///   drawer whose clear `wing` was flipped INTO the review queue: the
-    ///   fence reads that column on purpose, and handing the row to the
-    ///   destruction would refuse the whole call.
+    /// * a covered member the pending-evidence fence refuses — one that
+    ///   became review evidence after the decision — since handing it to the
+    ///   destruction would refuse the whole call. A drawer whose clear `wing`
+    ///   was merely flipped INTO the review queue is no longer one: since
+    ///   ROADMAP O221 the fence reads the covered copy where the row
+    ///   verifies, so it is destroyed and its drift reported.
     ///
     /// A policy row that fails its own tag still refuses the whole sweep: a
     /// tampered lifespan must never drive a destruction.
@@ -329,8 +331,8 @@ impl VaultStore {
     /// rows are the same declarations. Then each member is re-classified
     /// through the walk's own per-row decision and the fence, inside the lock:
     /// one that vanished, or that the policy no longer expires, is dropped;
-    /// one whose tag now fails is unverifiable; one flipped into the review
-    /// queue is withheld; the rest are destroyed, fingerprinted from what the
+    /// one whose tag now fails is unverifiable; one the pending-evidence
+    /// fence refuses is withheld; the rest are destroyed, fingerprinted from what the
     /// lock read. It used to decide on four states and destroy on a fifth, so
     /// a `retention set 36500` committed meanwhile was ignored and the drawers
     /// it kept were destroyed (measured: 58 of 64 sweeps). When the rows
@@ -464,16 +466,30 @@ impl VaultStore {
                     },
                 },
             };
-            // The pending-evidence fence decides here, through the function
-            // the destruction itself calls — never a copy of it — so this
-            // split cannot disagree with the refusal it exists to avoid.
-            if self.is_quarantine_pending(&m.id)? {
+            // The pending-evidence fence decides here, through the predicate
+            // the destruction itself asks — never a copy of it (O206 ruling
+            // 3) — on this lock's own connection, so this split cannot
+            // disagree with the refusal it exists to avoid.
+            //
+            // Since ROADMAP O221 the fence reads the HMAC-covered wing where
+            // the row verifies, so a member the walk decided answers
+            // `NotPending`: a drawer whose clear `wing` was flipped INTO the
+            // queue is destroyed like any member, its drift reported — O206's
+            // own "destroy" split. The arm stays (O221 ruling item 6) for a
+            // member that became review evidence between the decision and
+            // this check; handed to `attest_in`, its fence would refuse the
+            // whole sweep. By reading, each settle path decides the member in
+            // the state it fences it in (the recheck re-classifies it out of
+            // scope first), so this is a backstop, not a door.
+            if self.queue_standing(snap.conn(), &m.id)?
+                != crate::admission::QueueStanding::NotPending
+            {
                 withheld.push(RetentionWithheld {
                     reason: format!(
-                        "its clear `wing` column names the review queue ({QUARANTINE_WING}) \
-                         while its HMAC-covered meta files it under {}; the \
-                         pending-evidence fence reads that column, so no sweep can destroy \
-                         it. Re-save its own content with `drawer update` and sweep again",
+                        "it became review evidence in the admission queue ({QUARANTINE_WING}) \
+                         after this sweep decided it was a member of a policy on {}; the \
+                         pending-evidence fence refuses it, so no sweep destroys it. Rule \
+                         on it with `admission allow`/`deny`, then sweep again",
                         m.wing
                     ),
                     id: m.id.clone(),
@@ -804,7 +820,7 @@ fn classify(
     cutoffs: &[OffsetDateTime],
 ) -> Member {
     let (id, meta, drift) = match row {
-        crate::CoveredRow::TagFailed { id } => {
+        crate::CoveredRow::TagFailed { id, .. } => {
             return Member::Unverifiable(RetentionUnverifiable {
                 id,
                 reason: "its record HMAC does not verify, so neither copy of its scope or its \
@@ -812,7 +828,7 @@ fn classify(
                     .into(),
             });
         }
-        crate::CoveredRow::MetaUnparseable { id } => {
+        crate::CoveredRow::MetaUnparseable { id, .. } => {
             return Member::Unverifiable(RetentionUnverifiable {
                 id,
                 reason: "its HMAC-covered meta does not parse".into(),
@@ -1244,15 +1260,18 @@ mod tests {
     }
 
     /// A drawer its covered copy files under a policy, whose clear `wing`
-    /// was flipped INTO the review queue. The walk makes it a member; the
-    /// pending-evidence fence reads the clear column and refuses it, and
-    /// handed to `forget_with_proof` it would refuse the WHOLE sweep. So it
-    /// is withheld and named with the exit that works, the rest is swept,
-    /// and after `drawer update` re-saves its own content the mirror is
-    /// healed, its covered `filed_at` is unchanged, and the next sweep
-    /// destroys it.
+    /// was flipped INTO the review queue. **Inverted by ROADMAP O221**: this
+    /// test asserted "withheld", because the pending-evidence fence read the
+    /// clear column and would have refused the WHOLE sweep. The fence reads
+    /// the HMAC-covered wing wherever the row verifies now, the row's tag
+    /// proves it ordinary, and no ruling door could ever act on it — so it is
+    /// destroyed like any expired member, beside the rest, and its drift is
+    /// reported, which keeps the sweep's `ok` false (O206's "destroy" split).
+    ///
+    /// Counterfactual: on the clear-column fence the premise arm below fails
+    /// (`forget` refuses the row) and the sweep withholds it.
     #[test]
-    fn a_member_flipped_into_the_review_queue_is_withheld_and_the_rest_is_swept() {
+    fn a_member_flipped_into_the_review_queue_is_destroyed_and_its_drift_reported() {
         let (_d, mut store) = sealed_store();
         let flipped = old("w1", "r", "an old note parked in the review queue", 0);
         let clean = old("w1", "r", "an old note that expires", 1);
@@ -1267,45 +1286,37 @@ mod tests {
                 [crate::admission::QUARANTINE_WING, flipped.id.as_str()],
             )
             .unwrap();
-        // PREMISE: the fence refuses this row on the destruction path.
-        assert!(store.is_quarantine_pending(&flipped.id).unwrap());
-        assert!(store
-            .forget_with_proof(std::slice::from_ref(&flipped.id))
-            .is_err());
+        // PREMISE: the destruction fence no longer holds this row — its tag
+        // proves it ordinary — while the read fence still does (either copy).
+        assert_eq!(
+            store.queue_standing(&store.conn, &flipped.id).unwrap(),
+            crate::admission::QueueStanding::NotPending
+        );
+        assert!(store.is_quarantine_pending_for_read(&flipped.id).unwrap());
+
+        let sweep = store.retention_sweep(true).unwrap();
+        assert!(
+            sweep.policies[0].expired.contains(&flipped.id),
+            "the preview names it as a member: {sweep:?}"
+        );
+        assert!(sweep.withheld.is_empty(), "{sweep:?}");
 
         let sweep = store.retention_sweep(false).unwrap();
-        assert_eq!(sweep.destroyed, 1, "{sweep:?}");
+        assert_eq!(sweep.destroyed, 2, "{sweep:?}");
         assert!(!present(&store, &clean.id));
-        assert!(present(&store, &flipped.id));
-        assert_eq!(sweep.withheld.len(), 1, "{sweep:?}");
-        let w = &sweep.withheld[0];
-        assert_eq!(
-            (w.id.as_str(), w.wing.as_str()),
-            (flipped.id.as_str(), "w1")
-        );
-        assert!(w.reason.contains("drawer update"), "{}", w.reason);
-        assert!(!sweep.policies[0].expired.contains(&flipped.id));
-        assert!(sweep.mirror_drift[0].starts_with(&flipped.id));
-        assert!(!sweep.ok);
-
-        // The exit the reason names.
-        let outcome = store
-            .update_drawer(&flipped.id, &flipped.content, "cli")
-            .unwrap();
-        assert!(
-            matches!(outcome, crate::manage::UpdateOutcome::Updated),
-            "{outcome:?}"
-        );
-        assert!(!store.is_quarantine_pending(&flipped.id).unwrap());
-        let healed = store
-            .get(&flipped.id, Read::Internal(InternalRead::Verification))
-            .unwrap()
-            .unwrap();
-        assert_eq!(healed.meta.filed_at, "2020-01-01T00:00:00Z");
-        let again = store.retention_sweep(false).unwrap();
-        assert_eq!(again.destroyed, 1, "{again:?}");
-        assert!(again.ok, "{again:?}");
         assert!(!present(&store, &flipped.id));
+        assert!(sweep.withheld.is_empty(), "{sweep:?}");
+        assert!(sweep.policies[0].expired.contains(&flipped.id));
+        assert_eq!(sweep.mirror_drift.len(), 1, "{sweep:?}");
+        assert!(sweep.mirror_drift[0].starts_with(&flipped.id));
+        assert!(!sweep.ok, "the drift keeps the sweep's verdict false");
+        // The receipt names both, and verifies.
+        let att = sweep.attestation.as_ref().expect("a receipt");
+        assert_eq!(att.drawers.len(), 2);
+        assert!(matches!(
+            store.verify_forget_attestation(att).unwrap(),
+            crate::forget::AttestationVerdict::Verified
+        ));
     }
 
     /// A member whose covered `filed_at` does not parse cannot be dated. The

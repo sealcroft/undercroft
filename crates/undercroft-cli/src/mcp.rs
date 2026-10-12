@@ -1366,7 +1366,7 @@ mod tests {
         assert!(!err && text.contains("quarantined"), "premise: {text}");
         let (err, text) = update(&mut h, &mut store, "the heron moved to the upper pool");
         assert!(!err && text.contains("updated"), "premise: {text}");
-        let pending = store.admission_pending().unwrap();
+        let pending = store.admission_pending().unwrap().pending;
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].destination_id, id);
         assert_eq!(
@@ -1404,7 +1404,7 @@ mod tests {
             json!({ "content": poison, "wing": "notes", "room": "r" }),
         );
         assert!(!err && text.contains("quarantined"), "premise: {text}");
-        let queued = store.admission_pending().unwrap().len();
+        let queued = store.admission_pending().unwrap().pending.len();
         for content in [poison, "the standup moved to nine"] {
             let idx = store.next_append_index().unwrap() as u32;
             let own = undercroft_core::ids::drawer_id("notes", "r", "(direct)", idx);
@@ -1422,7 +1422,7 @@ mod tests {
             assert!(!text.contains("quarantined"), "{content:?}: {text}");
         }
         assert_eq!(
-            store.admission_pending().unwrap().len(),
+            store.admission_pending().unwrap().pending.len(),
             queued,
             "a refused declaration must not reach the review queue"
         );
@@ -1454,7 +1454,7 @@ mod tests {
         store
             .upsert(&Drawer::new("notes", "r", poison.into(), None, 1, "test"))
             .unwrap();
-        let qid = store.admission_pending().unwrap()[0].id.clone();
+        let qid = store.admission_pending().unwrap().pending[0].id.clone();
 
         // Premise: these tools work on an ordinary drawer in an ordinary
         // wing, so the refusals below are about quarantine.
@@ -1557,7 +1557,7 @@ mod tests {
         assert!(!err, "an ordinary fact still writes: {text}");
 
         // Nothing above disturbed the queue.
-        assert_eq!(store.admission_pending().unwrap().len(), 1);
+        assert_eq!(store.admission_pending().unwrap().pending.len(), 1);
     }
 
     fn plain_store() -> (TempDir, VaultStore) {

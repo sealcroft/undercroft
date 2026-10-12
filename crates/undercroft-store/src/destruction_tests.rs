@@ -997,6 +997,7 @@ fn o255_a_deny_beside_a_writer_rules_just_before_its_interval() {
         s.upsert(&d).unwrap();
         s.admission_pending()
             .unwrap()
+            .pending
             .into_iter()
             .map(|p| p.id)
             .next()
