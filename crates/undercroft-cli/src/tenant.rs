@@ -1521,6 +1521,9 @@ impl Tenancy {
         json!({
             "ok": report.ok(),
             "records_checked": report.records_checked,
+            // One string per record: a bare id for a failed HMAC, as before,
+            // and `"<id>: <reason>"` otherwise — since ROADMAP O231, a drawer
+            // whose HMAC verifies over covered meta that does not parse.
             "bad_records": report.bad_records,
             "chain_ok": report.chain_ok,
             // ROADMAP O233: `pending` (the chain has not switched), `intact`,

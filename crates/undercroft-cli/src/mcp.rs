@@ -853,10 +853,24 @@ fn call_tool(store: &mut VaultStore, name: &str, args: &Value) -> Result<String>
                     report.tampered_receipts()
                 )
             };
+            // ROADMAP O231: `bad_records` by COUNT, split the way the CLI
+            // splits it — a failed HMAC, and a drawer whose HMAC verifies over
+            // covered meta that does not parse — with no `_`, so a new reason
+            // is placed before it compiles. Counts only, as every leg on this
+            // transport is; the named lines are the CLI's and `/v1`'s.
+            let hmac_failures = report
+                .bad_records
+                .iter()
+                .filter(|b| match b.reason {
+                    undercroft_store::BadReason::TagFailed => true,
+                    undercroft_store::BadReason::MetaUnparseable => false,
+                })
+                .count();
             let text = format!(
-                "records checked: {}\nhmac failures: {}\naudit chain: {}\naudit labels: {}\norphan labels: {}\nmirror drift: {}\npolicy drift: {}\nversion replay: {}{}{}\nresult: {}",
+                "records checked: {}\nhmac failures: {}\nunreadable: {}\naudit chain: {}\naudit labels: {}\norphan labels: {}\nmirror drift: {}\npolicy drift: {}\nversion replay: {}{}{}\nresult: {}",
                 report.records_checked,
-                report.bad_records.len(),
+                hmac_failures,
+                report.bad_records.len() - hmac_failures,
                 if report.chain_ok { "ok" } else { "BROKEN" },
                 report.label_commitment.as_str(),
                 report.orphan_labels.len(),

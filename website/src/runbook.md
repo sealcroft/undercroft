@@ -59,6 +59,7 @@ undercroft verify --vault <vault>
 # records checked: 1284
 # hmac failures:   1
 #   TAMPERED: 5a2fc91d…
+# unreadable:      0
 # audit chain:     ok
 # orphan labels:   0
 # mirror drift:    0
@@ -73,6 +74,14 @@ tags against the committed head and the manifest anchor, so editing the
 tampered record's bytes does not move it. `audit chain: BROKEN` is a separate
 finding — the audit trail itself was edited or truncated, or the database was
 rolled back relative to the anchor.
+
+`unreadable:` counts drawers whose HMAC VERIFIES while their covered meta does
+not parse (ROADMAP O231), each named `UNREADABLE: <id>: …`. No read can return
+one, it fails the verdict, and `backup create` refuses while it stands — but a
+key rotation is not refused over it, since a rotation cannot launder it. It can
+be made without the key (ROADMAP O406), so treat it as evidence:
+preserve the directory first, then restore an archive that holds the drawer
+intact, or `drawer delete` it if its content is not needed.
 
 **A broken chain also stops work before you get here, and that is deliberate
 (ROADMAP O237).** Every read that DECIDES from an audit label — a

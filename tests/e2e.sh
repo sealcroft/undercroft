@@ -1974,6 +1974,85 @@ else
   echo "FAIL  O232: /v1 refuses the rotation"; echo "$O232_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
 
+# ── ROADMAP O231: a drawer whose HMAC verifies over unparseable covered meta ─
+# `verify` counted such a row and reported it in no leg, so it answered OK over
+# a drawer every read refuses, and `backup create` archived it. The row needs
+# NO key: the drawer canonical joins id, meta and content with a 0x1f
+# separator, and moving the meta/content boundary to a 0x1f inside the content
+# leaves the tag verifying. On an hmac-only vault content at rest is the
+# plaintext; the 0x1f arrives by `import`, which carries content as exported
+# (the save surfaces strip control characters). The move is plain SQL.
+O231_HOME="$(mktemp -d)"; O231_DIR="$(mktemp -d)"
+o231() { env UNDERCROFT_HOME="$O231_HOME" "$BIN" "$@"; }
+o231 init >/dev/null 2>&1
+o231 vault create plain --level hmac-only >/dev/null 2>&1
+o231 remember "the sluice opens at dawn" --vault plain --wing canal --room gates >/dev/null 2>&1
+o231 remember "the weir was rebuilt in may" --vault plain --wing canal --room gates >/dev/null 2>&1
+O231_EXP="$(o231 export --vault plain 2>/dev/null)"
+grep -F '"drawer"' <<<"$O231_EXP" | grep -F 'the sluice opens' \
+  | sed 's/the sluice opens/the sluice\\u001fopens/' > "$O231_DIR/one.jsonl"
+o231 import "$O231_DIR/one.jsonl" --vault plain >/dev/null 2>&1
+O231_DB="$O231_HOME/vaults/plain/vault.db"
+O231_ID="$(sqlite3 "$O231_DB" "SELECT id FROM drawers WHERE instr(content, x'1f') > 0")"
+O231_TAG="$(sqlite3 "$O231_DB" "SELECT hex(tag) FROM drawers WHERE id = '$O231_ID'")"
+sqlite3 "$O231_DB" "UPDATE drawers SET meta_json = meta_json || char(31) || \
+  CAST(substr(content, 1, instr(content, x'1f') - 1) AS TEXT), \
+  content = substr(content, instr(content, x'1f') + 1) WHERE id = '$O231_ID'"
+if [ -n "$O231_ID" ] \
+   && [ "$(sqlite3 "$O231_DB" "SELECT hex(tag) FROM drawers WHERE id = '$O231_ID'")" = "$O231_TAG" ] \
+   && [ "$(sqlite3 "$O231_DB" "SELECT CAST(content AS TEXT) FROM drawers WHERE id = '$O231_ID'")" = "opens at dawn" ]; then
+  echo "ok    O231: premise — the boundary moved, the tag never written"; PASS=$((PASS+1))
+else
+  echo "FAIL  O231: premise — the boundary moved, the tag never written (id '$O231_ID')"; FAIL=$((FAIL+1))
+fi
+check "O231: premise — every read refuses the drawer" 1 "corrupt row $O231_ID" -- \
+  env UNDERCROFT_HOME="$O231_HOME" "$BIN" drawer get "$O231_ID" --vault plain
+check "O231: verify names it and fails, exit 2" 2 "UNREADABLE: $O231_ID: its HMAC verifies" -- \
+  env UNDERCROFT_HOME="$O231_HOME" "$BIN" verify --vault plain
+check "O231: and does not call it an HMAC failure" 2 "hmac failures:   0" -- \
+  env UNDERCROFT_HOME="$O231_HOME" "$BIN" verify --vault plain
+check "O231: backup create refuses it, exit 2" 2 "refusing to back up vault 'plain'" -- \
+  env UNDERCROFT_HOME="$O231_HOME" "$BIN" backup create --vault plain
+O231_MCP="$(printf '%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"undercroft_verify","arguments":{}}}' \
+  | env UNDERCROFT_HOME="$O231_HOME" "$BIN" serve-mcp --vault plain 2>/dev/null)"
+if grep -qF '"isError":true' <<<"$O231_MCP" && grep -qF 'unreadable: 1' <<<"$O231_MCP" \
+   && grep -qF 'hmac failures: 0' <<<"$O231_MCP"; then
+  echo "ok    O231: MCP verify is isError:true and counts it unreadable"; PASS=$((PASS+1))
+else
+  echo "FAIL  O231: MCP verify is isError:true and counts it unreadable"
+  echo "$O231_MCP" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+UNDERCROFT_HOME="$O231_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18871 >/dev/null 2>&1 &
+O231_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18871/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O231_V="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18871/v1/vaults/plain/verify)"
+O231_B="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18871/v1/vaults/plain/backups)"
+kill "$O231_PID" 2>/dev/null; wait "$O231_PID" 2>/dev/null
+if [ "$(tail -1 <<<"$O231_V")" = 200 ] && grep -qF '"ok":false' <<<"$O231_V" \
+   && grep -qF "\"bad_records\":[\"$O231_ID: its HMAC verifies and its covered meta does not parse" <<<"$O231_V"; then
+  echo "ok    O231: /v1 verify answers ok:false and names it with its reason"; PASS=$((PASS+1))
+else
+  echo "FAIL  O231: /v1 verify answers ok:false and names it"; echo "$O231_V" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+if [ "$(tail -1 <<<"$O231_B")" = 409 ] && grep -qF '"class":"integrity"' <<<"$O231_B"; then
+  echo "ok    O231: /v1 refuses the backup, 409 class integrity"; PASS=$((PASS+1))
+else
+  echo "FAIL  O231: /v1 refuses the backup"; echo "$O231_B" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# O232's ruling: a rotation is never refused over such a row — it re-tags the
+# same bytes without parsing them — and the row stays exactly as detectable.
+check "O231: a rotation is not refused over it" 0 "Rotated vault 'plain'" -- \
+  env UNDERCROFT_HOME="$O231_HOME" "$BIN" vault rotate plain
+check "O231: and verify still names it afterwards" 2 "UNREADABLE: $O231_ID" -- \
+  env UNDERCROFT_HOME="$O231_HOME" "$BIN" verify --vault plain
+# The remedy `UPGRADING.md` names when no archive holds the drawer intact.
+check "O231: drawer delete removes it" 0 "Deleted drawer" -- \
+  env UNDERCROFT_HOME="$O231_HOME" "$BIN" drawer delete "$O231_ID" --vault plain
+check "O231: and the vault verifies again" 0 "VERIFY OK" -- \
+  env UNDERCROFT_HOME="$O231_HOME" "$BIN" verify --vault plain
+
 # ── ROADMAP O255: a destruction beside a writer in ANOTHER process ─────────
 # Each drawer used to be destroyed in its own transaction, so another
 # writer's commit landed inside a receipt's interval — the receipt then never

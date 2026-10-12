@@ -2877,9 +2877,23 @@ fn run(cli: Cli) -> Result<()> {
             let store = open_store(&cli, vault)?;
             let report = store.verify()?;
             outln!("records checked: {}", report.records_checked);
-            outln!("hmac failures:   {}", report.bad_records.len());
-            for id in &report.bad_records {
-                outln!("  TAMPERED: {id}");
+            // ROADMAP O231: one list, printed as two lines because only one
+            // of its reasons is a failed HMAC. A drawer whose HMAC verifies
+            // over covered meta that does not parse is refused by every read,
+            // and counting it as an HMAC failure would misname it. Matched
+            // with no `_`, so a new reason is placed here before it compiles.
+            let (hmac, unreadable): (Vec<_>, Vec<_>) =
+                report.bad_records.iter().partition(|b| match b.reason {
+                    undercroft_store::BadReason::TagFailed => true,
+                    undercroft_store::BadReason::MetaUnparseable => false,
+                });
+            outln!("hmac failures:   {}", hmac.len());
+            for b in &hmac {
+                outln!("  TAMPERED: {}", b.record);
+            }
+            outln!("unreadable:      {}", unreadable.len());
+            for b in &unreadable {
+                outln!("  UNREADABLE: {b}");
             }
             outln!(
                 "audit chain:     {}",

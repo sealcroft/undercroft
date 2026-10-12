@@ -78,6 +78,8 @@ mod snapshot_tests;
 mod sweep_pause;
 #[cfg(test)]
 mod unlock_state_tests;
+#[cfg(test)]
+mod unparseable_meta_tests;
 mod vault_db;
 pub mod witness;
 
@@ -3082,7 +3084,9 @@ pub(crate) enum CoveredRow {
     /// The record HMAC does not verify, so neither copy of the row's scope,
     /// clock or content is authentic.
     TagFailed { id: String },
-    /// The tag verified but the covered meta does not parse.
+    /// The tag verified but the covered meta does not parse — a
+    /// [`BadReason::MetaUnparseable`] finding in `verify` (ROADMAP O231) and
+    /// an `unverifiable` row in the retention sweep.
     MetaUnparseable { id: String },
 }
 
@@ -3112,13 +3116,101 @@ impl LabelCommitment {
     }
 }
 
-/// The whole verdict, eight legs: record HMACs, the chain replay, the label commitment, supersession receipts, fact receipts, orphan labels, mirror drift and policy drift. Hand-projected on four renderers (`parity::HAND_PROJECTED`), so a new leg must reach all of them.
+/// Why a record is in [`VerifyReport::bad_records`] (ROADMAP O231).
+///
+/// **Matched exhaustively, never with `_`**, by
+/// [`VerifyReport::rotation_blockers`] and by every renderer that splits the
+/// list, so a new reason does not compile until someone rules whether a
+/// rotation would launder it — ROADMAP O269's undecodable rows are the next
+/// reasons its ruling places here, and its item 2 rules them blockers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BadReason {
+    /// The record's HMAC does not verify under the vault key: neither its
+    /// covered meta nor its content is authentic. A rotation blocker — a
+    /// rotation would recompute the tag over the edited columns (O232).
+    TagFailed,
+    /// A drawer whose HMAC VERIFIES and whose covered `meta_json` does not
+    /// parse as a drawer's meta (ROADMAP O231). Every read refuses it as a
+    /// corrupt row, and `verify` used to count it and report it nowhere, so
+    /// it answered OK over a drawer nothing could read — and `backup create`
+    /// gates on that verdict.
+    ///
+    /// **Not a rotation blocker, by O232's ruling** ("never on … an O231
+    /// row"): a rotation re-tags the row over the bytes it holds without
+    /// parsing them, so the row is exactly as detectable afterwards — and on
+    /// a sealed vault whose content was moved, the re-seal itself refuses.
+    ///
+    /// **It needs no key.** The drawer canonical joins id, meta and content
+    /// with a 0x1f separator, and valid JSON never holds a raw 0x1f while
+    /// at-rest content may, so a writer without the key can move the
+    /// meta/content boundary to a 0x1f in the content and the tag still
+    /// verifies. The entry that filed this said the row needed the vault
+    /// key; it does not. **This reason covers only the moves that leave
+    /// `meta_json` valid UTF-8** (a 0x1f behind a UTF-8 prefix, such as the
+    /// first content byte): a move to a later 0x1f in ciphertext leaves bytes
+    /// that are not UTF-8, `covered_row` fails reading them before the tag is
+    /// checked, and `verify` returns that error without naming the row —
+    /// ROADMAP O269 item 2's arm, recorded under O406.
+    MetaUnparseable,
+}
+
+/// One record `verify` could not take as written: which record, and why.
+///
+/// **Serialized, and printed, as ONE string**: a bare record id when its
+/// HMAC failed — byte for byte what `bad_records` carried before O231, so a
+/// client reading the list as ids is unchanged for that case — and
+/// `"<id>: <reason>"` for every other reason, the shape the drift legs'
+/// lines already take.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BadRecord {
+    /// The record's id in the namespace its own chain record uses: a drawer
+    /// id, `kg/{id}`, `kg-entity/{id}` or `tunnel/{id}`.
+    pub record: String,
+    /// Why it is here.
+    pub reason: BadReason,
+}
+
+impl BadRecord {
+    /// A record whose HMAC does not verify.
+    pub(crate) fn tag_failed(record: impl Into<String>) -> Self {
+        Self {
+            record: record.into(),
+            reason: BadReason::TagFailed,
+        }
+    }
+}
+
+impl std::fmt::Display for BadRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.reason {
+            BadReason::TagFailed => f.write_str(&self.record),
+            BadReason::MetaUnparseable => write!(
+                f,
+                "{}: its HMAC verifies and its covered meta does not parse, so every read \
+                 refuses it",
+                self.record
+            ),
+        }
+    }
+}
+
+impl serde::Serialize for BadRecord {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+/// The whole verdict, nine legs: record HMACs (with the drawers whose HMAC verifies over covered meta that does not parse, O231), the chain replay, the label commitment, supersession receipts, fact receipts, orphan labels, mirror drift, policy drift and version replay. Hand-projected on four renderers (`parity::HAND_PROJECTED`), so a new leg must reach all of them.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VerifyReport {
     /// How many records had their HMAC checked.
     pub records_checked: u64,
-    /// Ids whose HMAC failed.
-    pub bad_records: Vec<String>,
+    /// Records `verify` could not take as written, each with its
+    /// [`BadReason`]: a failed HMAC (a drawer, a fact, an entity or a
+    /// tunnel), or a drawer whose HMAC verifies over covered meta that does
+    /// not parse (ROADMAP O231). Every entry fails [`VerifyReport::ok`];
+    /// only the first kind blocks a rotation.
+    pub bad_records: Vec<BadRecord>,
     /// Whether replaying the audit trail reproduces the committed head and
     /// passes through the manifest anchor.
     ///
@@ -3373,9 +3465,14 @@ impl VerifyReport {
     /// stays exactly as detectable. That is the reason, and the only one: this
     /// comment used to add that an orphan label "has no remedy", which is
     /// false — restoring the deleted row from a backup is one (ROADMAP O233).
+    /// Nor is a drawer whose HMAC verifies over unparseable covered meta
+    /// (ROADMAP O231, [`BadReason::MetaUnparseable`]): its tag already
+    /// verifies, a rotation re-tags the same bytes, and O232's ruling names
+    /// it ("never on … an O231 row").
     ///
-    /// **Destructured with no `..`**: a new leg does not compile until
-    /// someone rules whether a rotation rewrites it.
+    /// **Destructured with no `..`, and every [`BadReason`] matched with no
+    /// `_`**: a new leg or a new reason does not compile until someone rules
+    /// whether a rotation rewrites it.
     pub fn rotation_blockers(&self) -> Vec<String> {
         let VerifyReport {
             records_checked: _,
@@ -3397,7 +3494,15 @@ impl VerifyReport {
         let tampered = crate::kg::ReceiptVerdict::Tampered;
         let mut out: Vec<String> = bad_records
             .iter()
-            .map(|id| format!("record {id}: its HMAC does not verify"))
+            .filter_map(|b| match b.reason {
+                BadReason::TagFailed => {
+                    Some(format!("record {}: its HMAC does not verify", b.record))
+                }
+                // ROADMAP O232's ruling, read at its own reason: the tag
+                // already verifies, and a rotation re-tags the same bytes
+                // without parsing them, so it launders nothing here.
+                BadReason::MetaUnparseable => None,
+            })
             .collect();
         if !chain_ok {
             out.push("audit chain: replaying it does not reproduce the committed head".to_string());
@@ -10755,11 +10860,13 @@ impl VaultStore {
         Ok(CoveredRow::Verified { id, meta, drift })
     }
 
-    /// Walk every record verifying its HMAC, replay the audit chain
-    /// against the manifest head, check the label commitment, check every
-    /// drawer supersession receipt and every graph fact receipt, resolve
-    /// every graph audit label, compare every mirror column against the
-    /// covered meta, and re-tag every declared policy row. **All EIGHT legs
+    /// Walk every record verifying its HMAC (and naming a drawer whose HMAC
+    /// verifies over covered meta that does not parse, ROADMAP O231), replay
+    /// the audit chain against the manifest head, check the label commitment,
+    /// check every drawer supersession receipt and every graph fact receipt,
+    /// resolve every graph audit label, compare every mirror column against
+    /// the covered meta, re-tag every declared policy row, and match every
+    /// tagged row to the chain record that last wrote it. **All NINE legs
     /// are in the one report** — it was three until 2026-08-06, and each
     /// addition is there because it covers a mutation the others structurally
     /// cannot see (`label_commitment`: the labels a chain held when it
@@ -10807,27 +10914,50 @@ impl VaultStore {
         // The first two legs ride the covered-copy walk, which the retention
         // sweep shares (ROADMAP O206): one implementation of "which rows
         // verify, and where does a mirror disagree with the covered meta".
-        // An unparseable covered meta is counted and reported by neither
-        // leg here, as before, on the argument that the decode path reports
-        // it as a corrupt row on every read — which leaves `verify` answering
-        // OK over it. That silence is filed as ROADMAP O231.
+        //
+        // **An unparseable covered meta is a finding (ROADMAP O231).** It was
+        // counted here and reported in no leg, on the argument that the
+        // decode path reports it as a corrupt row on every read — so `verify`
+        // answered OK over a drawer nothing could read, and `backup create`
+        // archived it as clean. A keyed claim no read can take is exactly
+        // what a leg exists for. It goes in `bad_records` with its own
+        // reason, because its HMAC verifies and calling it a failed one would
+        // misname what happened — and so the rotation, which blocks on a
+        // failed HMAC, can tell the two apart (O232's ruling exempts this
+        // one).
         let mut bad = Vec::new();
         let mut mirror_drift = Vec::new();
         let mut checked = 0u64;
         self.walk_covered(|row| {
             checked += 1;
             match row {
-                CoveredRow::TagFailed { id } => bad.push(id),
-                CoveredRow::MetaUnparseable { .. } => {}
+                CoveredRow::TagFailed { id } => bad.push(BadRecord::tag_failed(id)),
+                CoveredRow::MetaUnparseable { id } => bad.push(BadRecord {
+                    record: id,
+                    reason: BadReason::MetaUnparseable,
+                }),
                 CoveredRow::Verified { drift, .. } => mirror_drift.extend(drift),
             }
             Ok(())
         })?;
         // Knowledge-graph and tunnel rows are integrity-tagged too.
         checked += self.kg_count()?;
-        bad.extend(self.kg_verify()?);
+        bad.extend(self.kg_verify()?.into_iter().map(BadRecord::tag_failed));
         checked += self.tunnel_count()?;
-        bad.extend(self.tunnels_verify()?);
+        bad.extend(
+            self.tunnels_verify()?
+                .into_iter()
+                .map(BadRecord::tag_failed),
+        );
+        // The two receipt legs below read the cited drawer through `get`,
+        // which refuses a row whose HMAC fails, and they swallow that refusal
+        // only while such a row is already reported. **"Reported" means a
+        // FAILED HMAC, not any entry here** (ROADMAP O231): an unparseable
+        // meta does not block a rotation, so letting it license the swallow
+        // could empty a leg whose tampered receipt DOES block one, and the
+        // rotation would re-key the forgery. Before O231 every entry was a
+        // failed HMAC and the two conditions were one.
+        let tag_failed = bad.iter().any(|b| b.reason == BadReason::TagFailed);
         // Two-part chain check. (1) The audit rows must reproduce exactly
         // the committed head in chain_meta — they advanced in the same
         // transactions, so any mismatch is corruption, not timing — which
@@ -10855,9 +10985,21 @@ impl VaultStore {
         // this function exists to prevent (`backup create` and
         // `/v1/verify` both read the verdict, not the error). The swallow
         // is conditional on the alarm already standing.
+        //
+        // An unparseable drawer that a link cites was never swallowed and is
+        // not now: `get` refuses it as `CorruptRow`, which the `Integrity`
+        // arm below does not match, so `verify` returns that error rather
+        // than a verdict — never OK, and turning it into a verdict is ROADMAP
+        // O269's "no row aborts `verify`". That is also why
+        // `o231_a_link_citing_the_row_answers_an_error_never_ok` cannot
+        // exercise the `tag_failed` condition: it pins the error, not the
+        // swallow. The condition is unobservable today — the only `Integrity`
+        // these legs raise is a `get` over a row the walk already named as a
+        // failed HMAC — and it is kept so that no future reason in
+        // `bad_records` that blocks no rotation can license emptying a leg.
         let supersessions = match self.verify_supersessions() {
             Ok(links) => links,
-            Err(StoreError::Integrity(_)) if !bad.is_empty() => Vec::new(),
+            Err(StoreError::Integrity(_)) if tag_failed => Vec::new(),
             Err(e) => return Err(e),
         };
         // The KG-receipt leg, on the same terms as the supersession leg
@@ -10872,7 +11014,7 @@ impl VaultStore {
         // failure this function exists to prevent.
         let receipts = match self.kg_verify_receipts() {
             Ok(rs) => rs,
-            Err(StoreError::Integrity(_)) if !bad.is_empty() => Vec::new(),
+            Err(StoreError::Integrity(_)) if tag_failed => Vec::new(),
             Err(e) => return Err(e),
         };
         // The fourth leg: every graph label resolves to a live record. See
@@ -22215,7 +22357,10 @@ mod tests {
         let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
         let report = s.verify().unwrap();
         assert!(!report.ok());
-        assert_eq!(report.bad_records, vec![dr.id.clone()]);
+        assert_eq!(
+            report.bad_records,
+            vec![BadRecord::tag_failed(dr.id.clone())]
+        );
         // Reads of the tampered record must refuse, not return forged data.
         assert!(matches!(
             s.get(&dr.id, Read::Internal(InternalRead::Verification)),
@@ -24320,7 +24465,9 @@ mod tests {
         // reachable, which it would not be if open had failed.
         let report = s.verify().unwrap();
         assert!(
-            report.bad_records.contains(&victim),
+            report
+                .bad_records
+                .contains(&BadRecord::tag_failed(victim.clone())),
             "verify should still name the damaged drawer"
         );
         // Note: `search` remains intolerant of a corrupt row (the candidate
