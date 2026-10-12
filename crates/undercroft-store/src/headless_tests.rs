@@ -537,7 +537,8 @@ fn o303_only_the_empty_chain_is_adopted() {
         s.upsert(&drawer("first", 0)).unwrap();
         assert!(s.verify().unwrap().ok(), "{level:?}");
         drop(s);
-        assert_eq!(writable(root).unwrap().chain_state().unwrap().1, 2);
+        // The switch commitment (O233), the row-tag walk's (O406), the drawer.
+        assert_eq!(writable(root).unwrap().chain_state().unwrap().1, 3);
 
         for table in [false, true] {
             let dir = TempDir::new().unwrap();

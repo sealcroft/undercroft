@@ -280,9 +280,11 @@ impl VaultStore {
         Ok(out)
     }
 
-    /// `max(the last rotation, the chain switch)`, or `None` on a chain that
-    /// has not switched — see arm 1 in this module's own documentation for
-    /// why the switch is half of it.
+    /// `max(the last rotation, the version-2 tag commitment, the chain
+    /// switch)`, or `None` on a chain that has not switched — see arm 1 in
+    /// this module's own documentation for why the switch is part of it, and
+    /// [`VaultStore::rewrite_boundary`] for the commitment (ROADMAP O406 item
+    /// 9): the tag walk re-tags every row under one record, as a rotation does.
     fn version_boundary(
         &self,
         snap: &chain::Snapshot<'_>,
@@ -292,7 +294,7 @@ impl VaultStore {
             chain::Regime::V1 => return Ok(None),
             chain::Regime::V2 { switch_seq } => switch_seq,
         };
-        let rotate = self.rotation_boundary(snap, on)?.unwrap_or(switch);
+        let rotate = self.rewrite_boundary(snap, on)?.unwrap_or(switch);
         Ok(Some(switch.max(rotate)))
     }
 
@@ -890,8 +892,13 @@ mod tests {
         // a fresh `created_at`, so a tag no row holds, above the switch.
         {
             let at = "2099-01-01T00:00:00Z";
-            let surplus = s.vault.tag(&crate::manage::tunnel_canonical(
-                &id, "wing", "other", "see also", at,
+            let surplus = s.vault.row_tag(&crate::rows::tunnel(
+                s.row_format(),
+                &id,
+                "wing",
+                "other",
+                "see also",
+                at,
             ));
             let tx = s.conn.transaction().unwrap();
             crate::chain_append(&tx, &s.vault, Namespace::Tunnel, &id, &surplus, at).unwrap();
@@ -1418,7 +1425,7 @@ mod tests {
 
         // PREMISE: the scan reads real source and its needle is findable —
         // an empty result and a clean tree must not look the same.
-        let verifies = production_sites("lib.rs", "verify_tag(&canonical(");
+        let verifies = production_sites("lib.rs", "rows::verify_drawer(");
         assert_eq!(
             verifies.len(),
             6,

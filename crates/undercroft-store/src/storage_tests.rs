@@ -60,6 +60,13 @@ fn open_ro(root: &Path) -> Result<VaultStore, StoreError> {
 /// retention policy — its WAL folded into the main file, verified clean.
 fn corpus(level: SecurityLevel, n: usize) -> TempDir {
     let dir = TempDir::new().unwrap();
+    corpus_into(&dir, level, n);
+    dir
+}
+
+/// [`corpus`] into a directory a test prepared — one kept on the version-1
+/// row-tag regime, say (ROADMAP O406).
+fn corpus_into(dir: &TempDir, level: SecurityLevel, n: usize) {
     let mut s = VaultStore::open(mgr(dir.path()).create(VAULT, level).unwrap()).unwrap();
     let batch: Vec<Drawer> = (0..n)
         .map(|i| {
@@ -104,7 +111,6 @@ fn corpus(level: SecurityLevel, n: usize) -> TempDir {
         !vdir(dir.path()).join("vault.db-wal").exists(),
         "premise: the close folded the WAL"
     );
-    dir
 }
 
 /// A copy of the whole installation at `src` (key file and vault), for damaging.
@@ -974,47 +980,67 @@ fn o427_two_retyped_rows_are_named_by_verify_and_held_by_the_sweep() {
 /// format (O406's warning).
 #[test]
 fn o269_the_byte_level_builders_are_byte_for_byte_the_old_ones() {
+    // The version-1 recipes, which every row written before ROADMAP O406's
+    // walk is still verified under.
+    const V1: undercroft_vault::RowFormat = undercroft_vault::RowFormat::V1;
     assert_eq!(
-        crate::manage::wing_trust_canonical("w1", "standard", "2026-01-01T00:00:00Z"),
+        crate::rows::wing_trust(V1, "w1", "standard", "2026-01-01T00:00:00Z")
+            .bytes()
+            .to_vec(),
         b"wingtrust\x1fw1\x1fstandard\x1f2026-01-01T00:00:00Z".to_vec()
     );
     assert_eq!(
-        crate::manage::tunnel_canonical("id", "a", "b", "lab el", "t"),
+        crate::rows::tunnel(V1, "id", "a", "b", "lab el", "t")
+            .bytes()
+            .to_vec(),
         b"tunnel\x1fid\x1fa\x1fb\x1flab el\x1ft".to_vec()
     );
     assert_eq!(
-        crate::retention::retention_canonical("w", "", 30, "t"),
+        crate::rows::retention(V1, "w", "", 30, "t")
+            .bytes()
+            .to_vec(),
         b"retention\x1fw\x1f\x1f30\x1ft".to_vec()
     );
     assert_eq!(
-        crate::kg::entity_canonical("id", "n", "unknown", "t", None),
+        crate::rows::entity(V1, "id", "n", "unknown", "t", None)
+            .bytes()
+            .to_vec(),
         b"id\x1fn\x1funknown\x1ft".to_vec()
     );
     assert_eq!(
-        crate::kg::entity_canonical("id", "n", "e", "t", Some(b"R".as_slice())),
+        crate::rows::entity(V1, "id", "n", "e", "t", Some(b"R".as_slice()))
+            .bytes()
+            .to_vec(),
         b"id\x1fn\x1fe\x1ft\x1bR".to_vec()
     );
     let mut fact = b"i\x1fs\x1fp\x1ff\x1f\x1f".to_vec();
     fact.extend_from_slice(&0.5f64.to_le_bytes());
     fact.extend_from_slice(b"\x1fOBJ\x1fSUP\x1e\x1fa\x1fr\x1fk\x1d\x1fx\x1cT");
     assert_eq!(
-        crate::kg::triple_canonical(
-            "i",
-            "s",
-            "p",
-            b"OBJ",
-            &Some("f".into()),
-            &None,
-            0.5,
-            Some(b"SUP".as_slice()),
-            crate::kg::authority_ext(Some("a"), Some("r"), Some("k")).as_deref(),
-            crate::kg::extractor_ext(Some("x")).as_deref(),
-            Some(b"T".as_slice()),
-        ),
+        crate::rows::fact(
+            V1,
+            &crate::rows::FactFields {
+                id: b"i",
+                subject: b"s",
+                predicate: b"p",
+                object: b"OBJ",
+                valid_from: Some(b"f"),
+                valid_to: None,
+                confidence: 0.5,
+                support: Some(b"SUP"),
+                authority_class: Some(b"a"),
+                review_state: Some(b"r"),
+                canonical_key: Some(b"k"),
+                extractor: Some(b"x"),
+                terms: Some(b"T"),
+            },
+        )
+        .bytes()
+        .to_vec(),
         fact
     );
     assert_eq!(
-        crate::canonical("id", b"{}", b"c"),
+        crate::rows::drawer(V1, "id", b"{}", b"c").bytes().to_vec(),
         b"id\x1f{}\x1fc".to_vec()
     );
 }
@@ -1176,62 +1202,77 @@ fn o269_an_index_hidden_policy_replay_fails_verify_and_the_rotation_refuses() {
 /// `Undecodable` now, named, and a rotation blocker, which O231's
 /// `MetaUnparseable` is not: the rotation reads `meta_json` by its type and
 /// could not re-tag the row at all.
+///
+/// **And on a vault ROADMAP O406's walk has reached, the move fails its
+/// tag**: the version-2 drawer canonical length-prefixes the meta and the
+/// content, so moving bytes between them changes the canonical. Both arms
+/// are run: the version-1 one is every vault the walk has not reached.
 #[test]
 fn o269_o406s_later_separator_move_is_named_and_blocks_a_rotation() {
-    let dir = corpus(SecurityLevel::Sealed, 60);
-    let root = dir.path();
-    let c = raw(root);
-    // A drawer whose ciphertext holds a 0x1f whose prefix is not UTF-8.
-    let rows: Vec<(String, String, Vec<u8>)> = c
-        .prepare("SELECT id, meta_json, content FROM drawers ORDER BY seq")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let (id, meta, content, at) = rows
-        .into_iter()
-        .find_map(|(id, meta, content)| {
-            let at = content
-                .iter()
-                .enumerate()
-                .skip(1)
-                .filter(|(_, b)| **b == 0x1f)
-                .map(|(i, _)| i)
-                .find(|&i| std::str::from_utf8(&content[..i]).is_err())?;
-            Some((id, meta, content, at))
-        })
-        .expect("premise: a sealed drawer holds a later 0x1f behind non-UTF-8 bytes");
-    let mut new_meta = meta.into_bytes();
-    new_meta.push(0x1f);
-    new_meta.extend_from_slice(&content[..at]);
-    assert_eq!(
-        c.execute(
-            "UPDATE drawers SET meta_json = CAST(?1 AS TEXT), content = ?2 WHERE id = ?3",
-            rusqlite::params![new_meta, &content[at + 1..], id],
-        )
-        .unwrap(),
-        1
-    );
-    drop(c);
-    let s = open_rw(root).unwrap();
-    let r = s.verify().expect("a verdict, never a conversion error");
-    assert_eq!(
-        r.bad_records,
-        vec![crate::BadRecord::undecodable(
-            id.clone(),
-            "column meta_json holds TEXT that is not UTF-8"
-        )],
-        "{r:?}"
-    );
-    assert!(
-        r.rotation_blockers().iter().any(|b| b.contains(&id)),
-        "{:?}",
-        r.rotation_blockers()
-    );
-    match s.backup(&root.join("backups")).unwrap() {
-        BackupOutcome::Refused(_) => {}
-        BackupOutcome::Created(r) => panic!("archived it: {r:?}"),
+    for fmt in [
+        undercroft_vault::RowFormat::V1,
+        undercroft_vault::RowFormat::V2,
+    ] {
+        let dir = TempDir::new().unwrap();
+        if fmt == undercroft_vault::RowFormat::V1 {
+            crate::retag_pause::keep_on_v1(&vdir(dir.path()));
+        }
+        corpus_into(&dir, SecurityLevel::Sealed, 60);
+        let root = dir.path();
+        let c = raw(root);
+        // A drawer whose ciphertext holds a 0x1f whose prefix is not UTF-8.
+        let rows: Vec<(String, String, Vec<u8>)> = c
+            .prepare("SELECT id, meta_json, content FROM drawers ORDER BY seq")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let (id, meta, content, at) = rows
+            .into_iter()
+            .find_map(|(id, meta, content)| {
+                let at = content
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .filter(|(_, b)| **b == 0x1f)
+                    .map(|(i, _)| i)
+                    .find(|&i| std::str::from_utf8(&content[..i]).is_err())?;
+                Some((id, meta, content, at))
+            })
+            .expect("premise: a sealed drawer holds a later 0x1f behind non-UTF-8 bytes");
+        let mut new_meta = meta.into_bytes();
+        new_meta.push(0x1f);
+        new_meta.extend_from_slice(&content[..at]);
+        assert_eq!(
+            c.execute(
+                "UPDATE drawers SET meta_json = CAST(?1 AS TEXT), content = ?2 WHERE id = ?3",
+                rusqlite::params![new_meta, &content[at + 1..], id],
+            )
+            .unwrap(),
+            1
+        );
+        drop(c);
+        let s = open_rw(root).unwrap();
+        assert_eq!(s.row_format(), fmt, "premise: the regime the arm is about");
+        let r = s.verify().expect("a verdict, never a conversion error");
+        let want = match fmt {
+            undercroft_vault::RowFormat::V1 => crate::BadRecord::undecodable(
+                id.clone(),
+                "column meta_json holds TEXT that is not UTF-8",
+            ),
+            undercroft_vault::RowFormat::V2 => crate::BadRecord::tag_failed(id.clone()),
+        };
+        assert_eq!(r.bad_records, vec![want], "{fmt:?}: {r:?}");
+        assert!(
+            r.rotation_blockers().iter().any(|b| b.contains(&id)),
+            "{:?}",
+            r.rotation_blockers()
+        );
+        match s.backup(&root.join("backups")).unwrap() {
+            BackupOutcome::Refused(_) => {}
+            BackupOutcome::Created(r) => panic!("archived it: {r:?}"),
+        }
     }
 }
 

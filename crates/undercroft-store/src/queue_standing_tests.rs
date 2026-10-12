@@ -287,9 +287,12 @@ mod cases {
             .unwrap();
         let last = content.len() - 1;
         content[last] ^= 0xff;
-        let tag = s
-            .vault
-            .tag(&crate::canonical(&q0, meta.as_bytes(), &content));
+        let tag = s.vault.row_tag(&crate::rows::drawer(
+            s.row_format(),
+            &q0,
+            meta.as_bytes(),
+            &content,
+        ));
         s.conn
             .execute(
                 "UPDATE drawers SET content = ?1, tag = ?2 WHERE id = ?3",
@@ -625,9 +628,12 @@ mod cases {
             .unwrap();
         let last = content.len() - 1;
         content[last] ^= 0xff;
-        let tag = s
-            .vault
-            .tag(&crate::canonical(&q0, meta.as_bytes(), &content));
+        let tag = s.vault.row_tag(&crate::rows::drawer(
+            s.row_format(),
+            &q0,
+            meta.as_bytes(),
+            &content,
+        ));
         s.conn
             .execute(
                 "UPDATE drawers SET content = ?1, tag = ?2 WHERE id = ?3",

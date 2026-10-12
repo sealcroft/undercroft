@@ -1200,6 +1200,11 @@ async function runVerify() {
     // table by whatever name the file's writer chose, which is why this whole
     // block goes through `textContent` and never through markup.
     const storage = r.storage || [];
+    // ROADMAP O406 item 8: rows whose tag verifies and whose own fields
+    // contradict their identity or shape — a fact whose id its fields do not
+    // derive, one id in two tables, a field no write shapes that way.
+    const identity = r.identity || [];
+    const shapes = r.shapes || [];
     // `bad_records` lines name their own reason (ROADMAP O231): a bare id is
     // a failed HMAC, and "<id>: …" a drawer whose HMAC verifies over covered
     // meta that does not parse, or a row a column of which no read takes
@@ -1216,6 +1221,8 @@ async function runVerify() {
       "\npolicy drift:    " + (policy.length ? "\n  POLICY: " + policy.join("\n  POLICY: ") : "none") +
       "\nversion replay:  " + (replay.length ? "\n  REPLAYED: " + replay.join("\n  REPLAYED: ") : "none") +
       "\nstorage:         " + (storage.length ? "\n  STORAGE: " + storage.join("\n  STORAGE: ") : "ok") +
+      "\nidentity:        " + (identity.length ? "\n  IDENTITY: " + identity.join("\n  IDENTITY: ") : "none") +
+      "\nfield shapes:    " + (shapes.length ? "\n  SHAPE: " + shapes.join("\n  SHAPE: ") : "none") +
       (sup ? "\nsupersessions:   " + (s.verified || 0) + " verified · " + (s.source_changed || 0) +
              " source-changed · " + (s.dangling || 0) + " dangling · " + (s.unreceipted || 0) +
              " unreceipted · " + (s.tampered || 0) + " tampered" +

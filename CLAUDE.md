@@ -462,7 +462,16 @@ Consequences that are binding, not advisory:
   cached, never the decision about which key file applies. `open_as` keeps
   deriving per call for library callers; a CLI source gate counts the
   binary's one open and its three holds;
-  seal.rs: AEAD + HMAC; lib.rs: VaultManager/Vault + manifest-as-rollback-
+  seal.rs: AEAD + HMAC + **the version-2 row encoder (ROADMAP O406)** —
+  `RowEncoder`, `RowCanonical`, `RowFormat`: a row tag is computed by
+  `Vault::row_tag` over a canonical that carries its own format, version 1
+  under `mac` byte for byte, version 2 (`undercroft.row.v2/<table>`,
+  length-prefixed fields, numbered TLV optionals where absent is not empty)
+  under a sixth HKDF subkey, `row`; `Vault::tag` stays the record-only
+  canonicals' key, so every erasure receipt still replays; the manifest MAC
+  canonical dispatches on `version` (2 since O406, a length-prefixed shape
+  1.6.0 cannot reproduce), and an anchor raises the version to what the
+  handle's regime needs and never lowers it; lib.rs: VaultManager/Vault + manifest-as-rollback-
   anchor + pure chain arithmetic + key rotation primitives
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
   vault.json.next staging, keycheck marker) + **the one manifest file
@@ -798,7 +807,21 @@ Consequences that are binding, not advisory:
   `drawer_fde` + `fde_meta`; opt-in inverted tier via
   `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept
   default-off by its measured containment gate), experimental in-memory
-  HNSW (hnsw.rs, `hnsw` feature), transactional audit chain (`chain_meta` + `chain_append`,
+  HNSW (hnsw.rs, `hnsw` feature), **every row tag's canonical in ONE module
+  (rows.rs, ROADMAP O406)** — one builder per tagged table, each taking the
+  `RowFormat` it builds in as a required argument, the version-1 recipes
+  private to it, so a row tag computed any other way does not compile —
+  **the tag regime and its one walk (retag.rs)**: a vault's row tags are in
+  the format its `migrate/tag-v2` commitment says (exact label, `MIN(seq)`,
+  O233's shape), read once per handle; a writable open walks a version-1
+  vault ONCE, after A10, U12 and O233's switch, under O257's exclusive hold,
+  verify-first on `walk_blockers()` (any finding or error withholds, never
+  fails the open, and says why on `unhealed`), then raises `vault.json` to
+  version 2 BEFORE one transaction re-tags every row through the per-table
+  re-tag the rotation shares (`retag_rows`/`apply_retagged`) and appends the
+  commitment; one rewrite boundary, `max(this key's rotation, the
+  commitment)`, feeds O234's arms and both O230 policy scans — and **the exact
+  legs (exact.rs)**, transactional audit chain (`chain_meta` + `chain_append`,
   and **chain.rs, the chain's one owner since ROADMAP O233**: the regime, the
   committed head and one streaming replay for `verify`, reconciliation and a
   rotation. The version-2 step folds each record's LABEL and TIME with its
@@ -900,10 +923,17 @@ Consequences that are binding, not advisory:
   anchor is read BEFORE the snapshot everywhere, because read after the pin
   it names heads the rows never produced (counterfactual: false refusals at
   exactly the pinning statement)),
-  verify (**`VerifyReport` is the whole verdict and it has TEN legs**: record
+  verify (**`VerifyReport` is the whole verdict and it has TWELVE legs**: record
   HMACs, the chain replay, the label commitment (O233), drawer supersession
   receipts, **KG fact receipts**, orphan graph labels, mirror drift,
-  **declared-policy drift**, **version replay (O234)**, **storage (O269)**.
+  **declared-policy drift**, **version replay (O234)**, **storage (O269)**,
+  and **identity and field shapes (O406)** — what a moved field boundary or
+  a tag carried between tables MOVES, since a tag check cannot see either: a
+  fact whose id its decoded words do not derive (also refused at the fact
+  read doors, one decision), one id naming rows in two tables, and a covered
+  field of a shape no write produces. Both fail `ok()` (P15b found no hit on
+  any real corpus), block no rotation (a rotation keeps the framing) and
+  withhold the version-2 walk (`walk_blockers`).
   **The tenth runs FIRST and reads the FILE, not the rows**: SQLite's full
   `PRAGMA integrity_check` inside `verify_in`'s one snapshot — so inside
   `backup create`'s pin, the rotation's hold and `repair`'s closing verify —
@@ -1035,7 +1065,11 @@ Consequences that are binding, not advisory:
   (tamper-failing rows SKIPPED, not laundered) and **the migration ends in a
   VACUUM** — an in-place UPDATE leaves the old row images in freed pages, so
   the words were still in the FILE until it did; any future at-rest
-  migration needs the same, and a gate that reads bytes rather than rows),
+  migration that REMOVES confidential bytes needs the same, and a gate that
+  reads bytes rather than rows — scoped so by ROADMAP O406's ruling: its
+  row-tag walk removes none (content and meta are not rewritten, and every
+  version-1 tag already sits verbatim in `audit.tag`), so it runs no VACUUM
+  and its gate is on what it MOVES),
   **and neither is a DIGEST of a drawer's words (U12, 2026-08-06)**:
   `kg_triples.source_fp` and `drawers.supersedes_fp` were unkeyed
   `sha256(verbatim content)` in clear columns — the same confirmation
@@ -4169,7 +4203,7 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   re-keying it means re-indexing the whole corpus, which is why searchable
   encryption separates the index key's lifecycle from the data key's in the
   first place. So: no HKDF-derived vault key (`Vault::tag`, the enc key,
-  any of the five) may appear in an id recipe or a blind-index recipe.
+  any of the six) may appear in an id recipe or a blind-index recipe.
   Where confidentiality demands keying — an unkeyed digest over content is
   a confirmation oracle — use a per-vault secret **stored sealed in
   `meta`**, which rotation RE-SEALS and never regenerates.
@@ -4307,8 +4341,11 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   did the same thing permanently. Rule: **write the marker last, only on a
   clean walk, and report what is still pending on `VaultStats.unhealed`**
   (which is therefore no longer empty on a writable open — two comments said it
-  was). Any future at-rest migration owes the same shape, plus the VACUUM and
-  the byte-reading gate.
+  was). Any future at-rest migration owes the same shape — plus the VACUUM and
+  the byte-reading gate when it removes confidential bytes from the file
+  (ROADMAP O406's ruling, which scoped this sentence: a re-tag removes none,
+  and its gate is one on what it moves — ids and labels byte-identical, every
+  row tag changed).
 - **A struct is not a surface.** `/v1` serializes report structs whole, so a
   new field reaches the wire for free; the CLI prints named fields one by one
   and silently does not. This has bitten `VaultStats` and then

@@ -19164,6 +19164,555 @@ their reasons, the sweep naming each unverifiable and destroying the other expir
 retyped-meta checks exit 2 through the CLI. **Counterfactual**: O221's walk, which handed both to `verify` and
 the sweep as the conversion error.
 
+### O406 — CLOSED 2026-10-13: a row canonical joined its fields by a separator with no lengths and no table domain, so a field boundary could shift, or one table's tag verify on another table's row
+
+**Filed 2026-10-08 by O231's build and widened by its independent review;
+measured.** Every HMAC canonical in the tree concatenates its fields with a
+separator byte (0x1f, and 0x1c–0x1e for the KG extensions) and NO lengths, and
+treats an absent field and an empty one alike. A field whose stored bytes can
+themselves hold the separator — at-rest content, a sealed blob, an optional
+string bound — can therefore be re-partitioned so that a different reading of
+the same bytes still produces the exact canonical the tag covers. A writer
+needs no key: it edits the clear columns, never the tag. This is a tag-FORMAT
+property, so the fix is an on-disk-format change (A10's identity constraints, a
+rotation, a migration) and the entry needs a ruling panel. **Do not build the
+format fix piecemeal.**
+
+**Which tagged rows are reachable, as the reviewer measured them.**
+- **Drawers (`canonical`, `drawer.rs`):** the meta/content boundary moves. On
+  the LoCoMo feed (400 sealed drawers) 155 held a 0x1f; moving the boundary to
+  the FIRST content byte keeps the tag and leaves `meta_json` valid UTF-8, which
+  O231's leg now names. Moving it to a LATER 0x1f leaves `meta_json` not UTF-8,
+  so `verify` and `backup create` return `FromSqlConversionFailure` before the
+  tag is read and never name the row — ROADMAP O269 item 2's pre-tag arm. That
+  row is also an O231 row (its tag verifies), which O232's ruling keeps out of
+  the rotation's blockers while O269 item 2 makes a pre-tag finding one; O269's
+  build rules which.
+- **Facts (`triple_canonical`, `kg.rs`):** two separate moves, both keep the tag
+  and `verify ok()=true` with `version_replay` empty. (1) `valid_to` (and
+  `valid_from`) are written `unwrap_or("")`, so `UPDATE kg_triples SET valid_to=''`
+  on an approved canonical fact is indistinguishable from NULL to the tag, while
+  `lookup_canonical` returns `None` and `kg_query` returns 0 — the fact silently
+  stops being the canonical answer. (2) The `support` extension's separator sits
+  inside its branch, so `object := object‖0x1f‖support, support := NULL` keeps
+  the tag: on hmac-only the object reads back with the grounding JSON glued on
+  and grounding gone; on sealed every `kg_query_entity` then fails `CorruptRow`.
+- **Not reachable:** tunnels and policy rows — every field is validated or fixed
+  width. Entities only through a non-UTF-8 `created_at`, which aborts `verify`
+  rather than passing it. Receipts only where the keyed fingerprint itself holds
+  a 0x1f — unmeasured.
+
+**Shape, for a ruling panel.** The structural fix is a length-prefixed (or
+otherwise unambiguous) canonical, a tag-format change needing a recorded re-tag
+and its own versioning ruling. Cheaper fences to weigh beside it: rejecting a
+control byte in a covered field the write path never emits (a drawer id or a
+`meta_json`), so `verify` and the read paths name it; the search path's response
+to one unreadable candidate (fail the whole query, today) is a separate
+question; and the `valid_to` case is closed on its own by writing NULL and ''
+distinguishably in the canonical.
+
+**Gate**: a field boundary moved with no key fails `verify` as a named verdict,
+and a parseable field cannot be read from bytes written as another. **Counterfactual**:
+today the moves above keep the tag and pass `verify`, measured.
+
+#### RULED 2026-10-12 by three lenses (Agentic Memory Architecture; Cryptography and integrity (unambiguous encodings, MAC domain separation, downgrade); Software Engineering and data migration (on-disk format, rotation, export/import, older binaries, the O238 fence)) and an adversarial refuter
+
+**Question.** Every row tag in the tree is a bare HMAC under the `mac` subkey (`Vault::tag`, `vault/src/lib.rs`
+1376-1384; `seal.rs` 104-109) over fields joined by 0x1f (0x1c–0x1e for the KG extensions), with no lengths, no
+table domain and NULL written as `''`. Six questions: (Q1) the replacement encoding, its scope and its key;
+(Q2) NULL against `''`; (Q3) how existing vaults reach it, what the walk checks first, where its marker lives,
+what O234's arms, read-only opens, rotation, export/import and older binaries do; (Q4) the version class and
+the upgrade obligation; (Q5) interim detection; (Q6) what is folded here, filed apart, or out of scope.
+Everything below was established by reading `train2-o231` at `f28e64f` and the `v1.6.0` / `v1.6.1` tags. No
+build, test or measurement ran in this panel; every claim that only execution can settle names its probe.
+
+**Threat framing, for the severity.** The actor is a writer WITHOUT the vault key who edits columns offline
+(O247's ruling: on a deployment keeping `master.key` beside the database that writer usually has the key, so
+the exposure is a passphrase deployment or a key kept off the data volume), optionally helped by an MCP agent
+that chooses bytes later sitting inside covered fields. HIGH stands, and on hmac-only vaults it is higher
+than the entry measured: see refuted claim 1 (a forged drawer that passes `verify`).
+
+**Prior rulings found, and their disposition.** Searched `rul(ed|ing)` in this entry and in O231, O269
+(including the maintainer's ruling of 2026-10-08), O232/O230, O233/O234, O238/O241, O247, O29, O334, and the
+A10/U12 doctrine. None decides the canonical format, its migration or its class.
+- **O233 (RULED 2026-09-19)**: FOLLOWED as the template — a dedicated HKDF subkey as "a structural choice"
+  rather than prefix separation proved by enumeration; one commitment record read by exact label and
+  `MIN(seq)` (`chain::regime`, `chain.rs` 105-115); verify-first, otherwise withheld and reported on
+  `VaultStats.unhealed`; a read-only open never switches; a downgrade fence; PATCH inside an unreleased MINOR.
+  Its losing options lose here for the same reasons: (S2) a new column (a `READ_SCHEMA` row refuses every
+  read-only open of an older vault), (M2) a switch with no commitment, and bounding by every `migrate/` record.
+- **O232 (RULED 2026-09-19)**: FOLLOWED at its own reason — block only what an operation would make worse.
+  Applied, it gives the walk a STRICTER gate than a rotation: O232's premise for leaving
+  `BadReason::MetaUnparseable` out of the blockers is that "a rotation re-tags the same bytes"
+  (`store/src/lib.rs` 3127-3156, 3469-3475). That holds while the framing is kept. A walk that changes the
+  framing binds the moved partition and destroys the one authenticated recovery v1 still allows (a drawer
+  re-split at its first two 0x1f, an E7 fact re-joined so its id matches), which is what O232 forbids.
+- **O234 and O230 (RULED 2026-09-19)**: FOLLOWED, their boundary extended by one exact record — and BOTH
+  consumers of `rotation_boundary` take it: O234's `version_boundary` (`replay.rs` 281-292, which also feeds
+  `refuse_replayed`) AND the two O230 policy scans (`retention.rs` 595 and 678, compared at 983). The brief
+  named only the first; all three lenses caught the second.
+- **O238, and O241 ruling 4 (RULED 2026-09-21)**: FOLLOWED, with a correction recorded beside O238: bumping
+  `MANIFEST_VERSION` fences nothing on an existing vault, because only `create` writes the constant
+  (`vault/src/lib.rs` 2620); the anchor clones the manifest on disk and rewrites head and height
+  (1508-1511) and `rotation_candidate` clones it and rewrites the salt (2861-2863). The ruling's ordering
+  condition is met — the fence shipped in 1.6.1 — so a manifest-canonical change is now permitted, and the
+  outcome it foresaw for older binaries ("`ManifestTampered` on an intact vault") is already written in
+  `UPGRADING.md`'s 1.6.1 entry.
+- **A10 (identifiers)**: FOLLOWED — no identifier recipe moves: `drawer_id`, `triple_id` (including its
+  `unwrap_or("")`), `entity_id`, the tunnel and quarantine ids, `fp`, `supersedes_fp`, `source_fp` and every
+  `audit.record_id`. No identifier is derived from a tag canonical (`kg.rs` 225-247, 480-489;
+  `core/src/ids.rs`), so a tag-format change moves none by itself; the walk appends one audit row and
+  relabels none, so O233's revision ("a label IS evidence") is not engaged.
+- **A10/U12 at-rest-migration doctrine**: FOLLOWED for "marker last, only on a clean walk, pending reported on
+  `unhealed`, a tamper-failing row never laundered" — here as withhold-entirely, which is O233's shape.
+  REFUTED in one clause, for this migration only: CLAUDE.md says "any future at-rest migration owes the same
+  shape, plus the VACUUM and the byte-reading gate". The VACUUM's stated reason is that an in-place UPDATE
+  left plaintext words or an oracle in freed pages. A re-tag removes no confidential byte: content and meta
+  are not rewritten, every v1 tag already sits verbatim in `audit.tag`, and v1 is refused after the switch.
+  The byte-reading gate's analogue here is a gate on what the walk moves (below), not a scan of bytes.
+- **The canonical-extension convention** (support, authority, extractor, terms, `name_rest`: "untouched facts
+  keep byte-identical canonicals"): its GOAL is kept, its MECHANISM refuted. A separator placed inside each
+  optional branch with no length is exactly what made the fact canonical non-injective (`kg.rs` 352-394). The
+  v2 encoding reverses the goal ONCE, at the walk, and restores it for every later field (TLV, item 1).
+- **O269 item 2 and the maintainer's ruling of 2026-10-08 (B, as PATCH)**: FOLLOWED — an undecodable covered
+  field (a later-0x1f drawer move, a sealed fact or entity field that fails its AEAD open) goes through O269's
+  arm under one name, and its name and blocker status are O269's build's, as `f28e64f` already assigned for
+  drawers.
+- **O247**: inherited and stated — a copied commitment label is refused by the chain replay and by nothing
+  else, exactly as a copied `rotate/` label is.
+- **O29** ("the label is LAST"): the brief misapplied it — see refuted claim 3.
+- **O334**: followed as the precedent for an identifier-recipe defect fenced by validation, not by moving the
+  recipe.
+
+**Ruling.**
+1. **The encoding.** A version-2 ROW canonical for every table whose rows carry a tag recomputed in place:
+   drawer, drawer supersession receipt, fact, fact receipt, entity, tunnel, wing trust, retention policy, and
+   the pushed-embedder marker. Each begins with a length-prefixed per-table domain
+   (`undercroft.row.v2/<table>`). Required fields follow in a fixed order, each with a u64-LE length prefix,
+   fixed-width ones included (one rule, not a rule plus exceptions). Optional fields are TLV — a fixed-width
+   field number, strictly ascending and never reused, then a length-prefixed value; an absent field is
+   omitted and a present empty one is written with length 0, so absent is not empty, and a field added later
+   leaves every older row's bytes unchanged. Every value is encoded **as the database will return it**:
+   `confidence` is canonicalised so that `-0.0` cannot be tagged and read back as `+0.0`, and every upsert
+   computes its tag over the row as it will be stored (both `kg_add` and `kg_import` omit `valid_from` from
+   their `ON CONFLICT` SET lists while tagging the incoming value — `kg.rs` 2273-2302, 2741-2758 — which under
+   a presence encoding would turn a NULL row re-added or imported with `''` into a row that fails its own
+   tag). One builder per table in one module, every call site through it, `rotate.rs` included; the `pub`
+   `Drawer::canonical_bytes` (`core/src/drawer.rs` 471, used by its own test alone, and not even the store's
+   canonical: it serializes `self.meta`, not the stored `meta_json`) is deleted or delegates.
+2. **The key.** A new HKDF subkey (label `row`), derived beside `chain` and `sample` and re-derived by every
+   rotation. `Vault::tag` / `verify_tag` and the `mac` key stay byte-identical for everything else they
+   serve: the record-only canonicals (`del`, `read`, `egress`, `admission`, `migrate`), the `fp` and
+   read-query fingerprints, the keycheck and the version-1 chain step. That keeps every existing erasure
+   receipt's keyed replay (`forget.rs` 741-745, `del\x1f{id}`) at `Verified`; implementing v2 inside
+   `Vault::tag` would silently drop every receipt to `Recorded` (O13's class).
+3. **Out of scope, with reasons.** The record-only canonicals (no stored fields to re-partition; `del` is
+   replayed by third-party receipts). The manifest MAC canonical, except as the 1.6.0 fence (item 7): its
+   fields are fixed or validated. The signed documents — forget attestation, bundle manifest, chain witness —
+   are third-party formats and are filed apart (item 13).
+4. **A regime, never per-row discovery.** The format is a property of the vault, decided by one commitment
+   record, `migrate/tag-v2`, read by exact label and `MIN(seq)` (O233's shape; added to `Namespace::Migrate`'s
+   documented kinds), never by a clear `meta` row. Every writer and verifier takes its format from it: a
+   vault in the v1 regime keeps WRITING v1, so no mixed rows exist; a vault in the v2 regime never accepts a
+   v1 tag, so a row written back from before the switch fails its tag with no per-row bookkeeping. A rotation
+   preserves the regime and never switches it.
+5. **The walk.** At a writable open only; after A10, U12 and O233's switch, and withheld while any of them is;
+   never while a `vault.json.next` or a deferral is in force; under O257's `ExclusiveHold` (refused beside any
+   holder, any version, changing nothing, then withheld and retried at the next writable open). Inside the
+   hold, verify-first: `rotation_blockers()` plus every exact leg of item 8. Any finding, and any ERROR from
+   that verify, withholds the walk entirely — nothing written, the reason on `VaultStats.unhealed` — and never
+   fails the open, because a walk inside `open` that aborts leaves the vault unopenable for `verify` and
+   `repair` (the embedder walk's lesson). Otherwise, in this order: raise `vault.json` to version 2, with the
+   version-2 MAC canonical, through `write_manifest_file`; then ONE transaction re-tagging every row of every
+   tagged table and appending the commitment through `chain_append`; COMMIT; anchor. The walk and the rotation
+   share one per-table re-tag function, so `rotation_names_every_key_derived_artifact` also forces the walk to
+   be complete. If a withheld vault would re-pay a full `verify` on every writable open (P15f), the build may
+   remember the withheld verdict against the committed head and height — an accelerator that can only
+   withhold, reported on every open.
+6. **Manifest and commitment, read together.** v1 manifest and no commitment: v1 regime. v2 manifest and no
+   commitment: a walk interrupted after the raise — v1 regime for tags, walk retried, older binaries stay
+   fenced. v2 manifest and the commitment: v2 regime. The commitment beside a v1 manifest anchored at or past
+   the commitment's height is an integrity finding (no writer of this design produces it); one anchored below
+   it is a stale manifest, healed forward like any lag and raised. The anchor door raises the version to what
+   the regime requires and never lowers it.
+7. **Fences.** 1.6.1 and newer answer `ManifestTooNew` (exit 1, a class-less 409), which depends on the
+   explicit raise of item 5. 1.6.0 and older do not read `version`, and a bump alone opens there (the
+   canonical is unchanged in shape, so its MAC verifies — read at `v1.6.0`): they would then report every row
+   as tampered and, writable, append v1 rows into a v2 vault. So the manifest MAC canonical becomes
+   version-dispatched — version 1 byte-identical to today, version 2 a new shape — and 1.6.0 and older answer
+   `ManifestTampered` (exit 2) at unlock, before reading `vault.json.next` or opening the database. That is
+   the outcome O241 ruling 4 accepted and `UPGRADING.md`'s 1.6.1 entry already states. 1.5.x is additionally
+   fenced by O233.
+8. **The exact legs** (Q5). They are the walk's verify-first, permanent, and may land ahead of the format as
+   a reporting unit (PATCH by the 2026-09-08 ruling; four renderers through `parity.rs::HAND_PROJECTED`) —
+   never instead of it. (a) **Fact identity**: `id == triple_id(decoded subject, predicate, object,
+   valid_from)`, shape-aware for pending A10 rows. Every fact move constructible by reading changes the
+   object or `valid_from`, both inside the id, or lands on a field (b) covers; the one exception is NULL
+   against `''`. It is the same decision `verify` and the fact read doors take (O234's one-decision pattern),
+   because E7's substitution is consumed at read by `lookup_canonical` (O237's lesson). (b) **Shapes**: drawer
+   `id` 32 lowercase hex; receipt `source_drawer_id` and `supersedes` drawer-id shaped; entity `created_at`
+   RFC 3339; `canonical_key`, when present, passes `validate_name`; `valid_from`, `valid_to` and `extractor`
+   hold no C0 byte; `terms` NULL on hmac-only. (c) **Cross-table identity**: a drawer whose id is a fact's or an
+   entity's id, and the reverse — exact (128-bit ids) and indexed on both sides. (d) A sealed field that does
+   not open under its own AAD goes through O269's arm. Rotation blockers: none of (a)–(c) — a same-framing
+   rotation leaves each exactly as detectable (O232); every one withholds the walk. (a) and (b) fail `ok()`
+   only if P15b finds no hit on real legacy corpora; otherwise they are reported and do not fail it.
+   Heuristics — hmac-only fact objects holding separators, `''` dates — never fail `ok()`, because ordinary
+   writes produce them.
+9. **One boundary.** `max(this key's rotate/ record, the commitment)` in one function, read by
+   `version_boundary` (O234's arms and `refuse_replayed`) AND by both O230 policy scans, with a source count
+   that nothing reads `rotation_boundary` outside it. Without the second consumer every trust and retention row
+   becomes "row is not the newest assignment" after the walk (`retention.rs` 983, where a never-rotated vault
+   has no boundary at all), `wing_trusts()` raises and every floored search fails.
+10. **NULL against `''`** (Q2). Presence in the TLV. Reader semantics unchanged: `valid_to = ''` stays closed,
+    as `lookup_canonical` (`kg.rs` 3080-3083), `valid_at` (3813-3829) and `kg_stats` (3592) read it today;
+    reading it as open would re-open closed facts, which `refuse_rewriting_a_canonical_holder` (1980-2010)
+    calls the forgery direction. `kg_add_inner` refuses `''` and any C0 byte in `valid_from` and `valid_to`
+    (the MCP schema documents them as "ISO date", `mcp.rs` 499; the CLI documents nothing). `canonical_key`
+    already refuses `''` (`kg.rs` 624-625). Import keeps what the payload says; its upsert tags the stored row
+    (item 1). Legacy `''` rows are bound as found at the walk — O233's accepted residual one table over,
+    including an approved holder retired by a keyless NULL→`''` flip made before the walk.
+11. **No VACUUM, no per-row records.** The VACUUM's reason does not apply (prior rulings, above). One audit row
+    per re-tagged row would roughly double `audit` and slow every label-guard replay for good (88–93 ms per
+    ~10⁵ audit rows, O237/O251); the rotation precedent is one record.
+12. **Everything else the walk touches.** Read-only opens never walk; they verify in the regime they find and
+    report a pending walk. The walk only appends, so a witness emitted before it still answers `Extends`, and
+    O251's hand-forward is invalidated by the height it moves. Exports carry decoded fields and no tags
+    (`kg.rs` 903-909), so export and import are unchanged and stay the format-independent way back. A restore
+    opens its stage writable, so a pre-walk archive walks or withholds on the stage.
+13. **Dispositions** (Q6). FOLDED here: the cross-table transplant (refuted claim 1; closed by the per-table
+    domain, its interim is leg (c)); the drawer id/meta shift (leg (b)); the receipt and supersession moves
+    (leg (b)); the doc corrections — `seal.rs` 3-6 ("covers the *whole record*"), the `lib.rs` 10816-10817
+    comment ("the tag verified, so `meta_json` is authentic"), `docs/THREAT_MODEL.md` around 189-195 and
+    `docs/security.md` — which are false today and may be corrected now, since moving prose moves no format.
+    FILED under their own ids (O171), by the integrator: (i) the search path failing a whole query on one
+    unreadable candidate; (ii) the hmac-only `triple_id` 0x1f collision, together with the upsert that tags a
+    `valid_from` the row does not keep — an MCP agent reaches a self-inflicted `TagFailed`, a rotation
+    blocker, today (P15h), with O334's fence shape; (iii) the signed canonicals, held by third parties, on O233
+    ruling 5's version dispatch; (iv) a `-0.0` confidence tagged as written and read back as `+0.0` (P15j);
+    (v) `valid_from` / `valid_to` unscreened, unbounded and not validated as dates (O29's class) — whether full
+    ISO validation joins item 10's narrower refusal is that entry's ruling.
+
+**Options that lost, and why.**
+- **Q1-B (only the reachable tables)**: two framings for ever; pre-O29 tunnels keep a reachable truncation
+  move.
+- **Q1-D (fences only)**: a fence inspects one field at a time and the transplant has none out of place; an
+  E7 split leaves no separator in any field; it cannot see NULL against `''`; and it holds injectivity by the
+  population of validators, which is how the extension convention lost it.
+- **v2 under the `mac` key**: needs a disjointness proof against attacker-built v1 canonicals (refuted claim
+  2). **v2 inside `Vault::tag`**: degrades every erasure receipt.
+- **Signed documents in scope**: moves third-party formats and would end export/import as the way back.
+- **Q3-B (at rotation)**: a never-rotated vault stays ambiguous; the rotation's premise breaks (O232); and a
+  version-2 `vault.json.next` beside a version-1 `vault.json` is deleted by a released 1.6.1 on a writable
+  unlock (`v1.6.1` `unlock_as`: `Manifest::parse(..).ok()` maps `ManifestTooNew` to `None`, then
+  `remove_file`, under a comment saying the opposite; O257's correction beside O238 records it) — during a
+  deferred promote that file is the only copy of the salt the database's keys derive from.
+- **Q3-C (lazy, per row)**: no completion, so v1 is never refused and the in-vault downgrade stays open.
+- **Writing v2 in a v1 regime with dual verification until the commitment** (lens 1): a withheld vault would
+  accumulate v2 rows under a version-1 manifest that 1.6.1 opens unfenced.
+- **The commitment label bound to the keycheck** (lens 2's `retag/<keycheck16>`): after a rotation it no
+  longer names the current key, so the regime read would need a prefix — the reading O233 rejected.
+- **Raising `vault.json` after the COMMIT** (lens 2): in the crash window a version-1 manifest sits over a
+  migrated database; 1.6.1 opens it, heals the anchor forward (cloning version 1), reports every row as
+  tampered and writes v1 rows. Raising first makes the crash state "older binaries refuse, the new one
+  retries".
+- **The walk gated on `rotation_blockers()` alone** (lens 1): binds the moved partitions item 8 detects and
+  destroys their authenticated recovery. **Gated on `ok()`** (lens 2): withholds over findings the walk
+  cannot worsen (mirror drift, orphan labels, a pre-switch label mismatch, `Dangling` receipts), contrary to
+  O232's criterion.
+- **Skipping a flagged row and switching anyway**: the skipped row fails under v2 and turns a non-blocking
+  finding into a blocker; withholding is O233's and U12's shape.
+- **A third chain head to fence 1.6.0** (lens 2, after O233's frozen head): entangles the tag regime with the
+  chain regime and moves every head accessor again; the manifest dispatch does the same at unlock.
+  **Leaving 1.6.0 unfenced** (lens 1): it opens, and writes.
+- **Q2-B (`''` read as NULL)**: the forgery direction. **Q2-C**: every open fact reads closed.
+- **A control-byte refusal in fact objects at `kg_add`** (lens 2): it addresses only the agent half of E7,
+  which leg (a) detects exactly and v2 makes impossible, while keeping a content refusal after its reason is
+  gone; refusing at import would refuse restores.
+
+**Claims refuted, the brief's included.**
+1. **Brief E1 / Q6.5, and lens 1's "holds by enumeration"**: the cross-table transplant is reachable by
+   reading on hmac-only vaults. Drawer and triple ids are both 32 lowercase hex (`core/src/ids.rs` 71-80,
+   `kg.rs` 233-239); the drawer canonical `id 1f meta 1f content` reproduces a fact's
+   `id 1f subject 1f predicate 1f from 1f to 1f conf8 1f object …` when a keyless writer INSERTs a drawer
+   with the triple id, `meta_json` = the subject and `content` = the remainder, and copies the fact's tag. On
+   hmac-only the subject column holds the words (`kg.rs` 156-158) and an MCP agent chooses them;
+   `validate_name` admits a ~110-byte `DrawerMeta` JSON (`core/src/lib.rs` 63-89; required fields at
+   `core/src/drawer.rs` 59-83, `filed_at` a plain `String`); `confidence = 0.0` makes the eight bytes NUL,
+   valid UTF-8; hmac-only content is stored raw (`vault/src/lib.rs` 1262-1281); `covered_row` re-derives no id
+   (`store/src/lib.rs` 10787-10823); O234 finds nothing for a row with no record under its own label
+   (`replay.rs` 176 and the leading `<>` subquery at 327-335 is NULL), and `orphan_labels` checks the other
+   direction. Expected: a retrievable drawer in a chosen wing with a chosen `added_by`, under `VERIFY OK`,
+   with no audit record of its write. The same holds entity→drawer. On sealed vaults the subject is a blind
+   index, so the meta does not parse — a named finding. Probe P15i.
+2. **Brief E3** ("a v2 canonical beginning with a domain word can never equal a v1 canonical"): true of
+   genuine v1 canonicals only; a verifier builds v1 bytes from columns a keyless writer chose, including the
+   first one. Moot under a separate key.
+3. **Brief §1** ("the variable one is last", O29): O29's sentence is about the tunnel ID recipe
+   (`ROADMAP.md` 1955-1958, `manage.rs` 2038-2044); in the tunnel TAG canonical `created` follows the label
+   (`manage.rs` 609-617). Safe today because `create_tunnel` has validated the label since O29; a pre-O29
+   label holding 0x1f admits a truncation move.
+4. **Brief Q3** ("an hmac-only object that splits into valid fields is indistinguishable"): the fact id is a
+   digest over the object and `valid_from`, the id is the canonical's first field and cannot move, and no
+   write path rewrites an object in place (`kg_invalidate` re-seals the same plaintext, `kg.rs` 3351-3399;
+   import and the A10 walk re-derive the id). Leg (a) sees it.
+5. **Brief Q3** names O234's arms as the only consumer of a re-tag boundary; the O230 policy scans are a
+   second (item 9).
+6. **Brief Q3-A** ("`MANIFEST_VERSION` bumped"): the constant reaches only `create` (O238 correction, above).
+7. **Brief, by omission**: the released 1.6.1's deletion of a too-new `vault.json.next` on a writable unlock,
+   which decides the walk's ordering and rules out the rotation route.
+8. **Brief Q5** ("by O232's own reason a moved boundary is not laundered by a rotation"): true inside one
+   framing only.
+9. **Brief and lenses** ("`config check` opens no vault"): since O279 it opens one vault's `vault.json`
+   read-only for its identity. The conclusion stands: it reads no database and cannot see a pending walk.
+10. **Lens 1**: a rotation on an unmigrated vault should migrate it (refuted under Q3-B); 1.6.0 needs only a
+    stated residual (it writes); the walk's gate is `rotation_blockers()` alone (item 5).
+11. **Lens 2**: "O241 ruling 4 forbids changing the manifest canonical first" — it forbade a change before the
+    fence shipped, and the fence shipped in 1.6.1. The transplant leg as a rotation blocker — the
+    id-collision observable survives a rotation unchanged, so by O232 it is not one. The `-0.0` row "on a
+    table with no delete path" is not permanent — a re-add of the same four id components re-tags it — but it
+    is an agent-reachable tamper verdict and rotation blocker until then.
+12. **CLAUDE.md's VACUUM sentence**, as applied to this migration (prior rulings, above).
+13. Confirmed rather than refuted: the canonical shapes in the brief's §1 table; the dead `pub` drawer
+    canonical; `kg_verify` checks tags only (`kg.rs` 3613-3660); `rotation_blockers()` destructures with no
+    `..` and matches `BadReason` with no `_`; `v1.6.1` and `v1.6.0` read and MAC-check `vault.json` before
+    `vault.json.next`; `UPGRADING.md` 488-525 (worktree) records the 1.6.1 fence and the 1.6.0 outcome.
+
+**Probes owed** (the integrator runs them; none ran here).
+- **Before the exact legs merge.** **P15i**: on hmac-only, MCP `undercroft_kg_add` with subject
+  `{"wing":"w","room":"r","chunk_index":0,"added_by":"mine","filed_at":"x","normalize_version":2,"id_recipe":"v"}`,
+  predicate `p`, object `INJECTED`, `confidence: 0.0`; then sqlite3 INSERT into `drawers` with the triple id,
+  that JSON as `meta_json`, the content bytes the fact canonical carries after the subject's separator, the
+  fact's tag, mirrors from the JSON and any byte string for the other NOT NULL columns; record `verify`,
+  `drawer get`, MCP `undercroft_wake_up`, `version_replay`. Repeat entity→drawer, and on sealed (expected:
+  `MetaUnparseable`). **P15b**: on real corpora at both levels (the LoCoMo feed mined, `refine` run, an
+  A10-migrated sealed vault, an imported vault), count facts whose stored id differs from the re-derived one,
+  non-RFC-3339 entity `created_at`, non-drawer-shaped `source_drawer_id` / `supersedes`, non-hex drawer ids,
+  drawer ids equal to a fact or entity id, and `''` dates. It decides whether legs (a) and (b) fail `ok()`.
+  **P15a** as the brief has it, plus `triple_id(s, p, object_after, vf) != id`.
+- **Before the walk merges.** **P15e**: `v1.6.0` and `v1.6.1` built from their tags, against (i) a walked
+  vault, (ii) a walked vault in a deferred promote, (iii) the crash state after the raise and before COMMIT,
+  (iv) as counterfactual, the crash state after COMMIT with `vault.json` still version 1; every command, both
+  postures. Assert 1.6.0 exits 2 `ManifestTampered` and 1.6.1 exits 1 `ManifestTooNew` on (i)–(iii) with the
+  sha256 of `vault.db`, its `-wal`, `vault.json` and `vault.json.next` unchanged; that (iv) is opened and
+  written by 1.6.1; and that a v2 `.next` beside a v1 `vault.json` is deleted by a 1.6.1 writable `verify`.
+  **P15k**: trust and retention rows assigned after the last rotation and on a never-rotated vault, drawers
+  and facts after O233's switch; after the walk `verify` OK, `version_replay` and `policy_drift` empty, and
+  `wing_trusts()`, a floored search and `get` succeed; counterfactual: the boundary withheld from the policy
+  scans makes every policy row a finding. Then a vault holding a `MetaUnparseable` row, an E7 split and a
+  transplant: the walk withholds, writes nothing and says why; after `drawer delete` of the first it still
+  withholds on the others. **P15l**: an attestation minted before the walk answers `Verified` after it, a
+  witness emitted before it answers `Extends`. **P15m**: export with the candidate, import with 1.6.1, `verify`
+  OK; restore a pre-walk archive with the candidate (walks or withholds on the stage). **P15f**: at ~10⁵ on
+  both levels — the walk's wall time and WAL growth against the rotation's 2.58–3.22 s; `verify` with legs
+  (a)–(c) and an AEAD open per sealed fact; warm search with the fact read-door arm; repeated writable opens
+  of a withheld vault. 10⁶ only on the maintainer's go. **P15g** is a unit test of the encoder: injective per
+  table over every byte value, absent against empty, field-number order, and domain disjointness.
+- **With their own entries.** **P15h**: over MCP on hmac-only, `kg_add(s, p, "a\u001fb")` with no
+  `valid_from`, then `kg_add(s, p, "a", valid_from "b\u001f")`; expect one id, `valid_from` still NULL and the
+  row `TagFailed`; then the same through `kg_import`. **P15j**: `"confidence": -0.0` over MCP,
+  `kg add --confidence -0` and a `-0.0` import payload; record `typeof(confidence), quote(confidence)`,
+  `verify`'s exit code and `vault rotate`.
+
+**Dissent.** Lens 1 held that the walk may re-tag rows its own legs flag, that a rotation of an unmigrated
+vault should migrate it, that new builds should always write v2, and that the v1 transplant is unreachable;
+each lost on the evidence above. Lens 2 held for raising the manifest after the COMMIT, a third chain head as
+the 1.6.0 fence, `ok()` as the walk's gate, a keycheck-bound label and a kg-object control-byte fence; each
+lost on the evidence above. Lens 3's design is substantially the one ruled. No dissent survives on the
+encoding, the key, the scope or the class.
+
+**What remains.** The build, gated by the probes. The exact legs first, once P15i and P15b have run. Five
+filings (item 13). This entry's heading should widen at integration to the missing table domain as well as
+the moving boundary, and the entry needs a real id before its `**Relations:**` marker with O269 can be made
+reciprocal. Coordination with O269's build over the name and blocker status of undecodable rows. A
+correction beside O238's record that a constant bump fences only `create`. And CLAUDE.md's two VACUUM
+sentences ("any future at-rest migration …") should be scoped to migrations that remove confidential bytes —
+a change to that file lands only through the pull request the maintainer approves.
+
+**Version class.** PATCH-class, deliverable in the unreleased MINOR 1.7.0, on O233's precedent: automatic at
+the first writable open, every older vault opens on the new binary, and downgrade after a writable open is
+already documented as unsupported (`UPGRADING.md` "There is no supported downgrade after the first writable
+open"). The new legs report existing silent defects (the 2026-09-08 ruling). Refusing `''` and C0 in a field
+documented as "ISO date" tightens input never documented as valid. No surface is removed and nothing
+retrievable changes, and no unchanged deployment must act (O163's test): a withheld vault keeps working on
+the v1 format. Not escalated. `UPGRADING.md` owes, each with symptom, cause and fix: (1) after the first
+writable open on the new binary, 1.6.1 and newer refuse with the age message (exit 1) and 1.6.0 and older
+answer `ManifestTampered` (exit 2) — upgrade read-only replicas with or before the writer, and the way back is
+a pre-upgrade backup or an export imported by the older binary; (2) empty or control-character fact dates
+are refused (400, exit 1); (3) the switch is withheld, and says why on `unhealed`, while a finding stands or
+while another process holds the vault — a deployment that keeps a reader attached stays on the old format
+until both restart together; (4) the one-time cost of the switching open (P15f). `config check` cannot see a
+pending walk; `verify --read-only` with the new binary is the pre-flight.
+
+**What would make this verdict fail silently.**
+- v2 implemented inside `Vault::tag` / `verify_tag`: every erasure receipt drops to `Recorded`.
+- The boundary taught to `version_boundary` and not to the policy scans, or the reverse.
+- The constant bumped with no explicit raise of `vault.json`, or the anchor door lowering the version.
+- The raise placed after the COMMIT; or any path — a rotation included — that leaves a version-2
+  `vault.json.next` beside a version-1 `vault.json`.
+- v2 rows written in a v1-regime vault, or the regime read from a clear `meta` row.
+- The walk gated on `rotation_blockers()` alone; a verify ERROR failing the open instead of withholding; a
+  withheld vault paying a full `verify` on every writable open unpriced.
+- An upsert tagging a value the row will not hold (`valid_from` on conflict, `-0.0`), which presence encoding
+  turns into an agent-reachable tamper verdict.
+- Legs (a) or (b) failing `ok()` before P15b shows no hit on real legacy corpora.
+- A gate that round-trips through the builder instead of moving a boundary or transplanting a tag WITHOUT the
+  key and asserting a named verdict; one run on drawers only or on one security level only, since the
+  substitution lives in facts and in hmac-only vaults and the transplant in drawers; a walk counterfactual run
+  on a fixture rather than on a corpus holding moved rows of every reachable table at both levels. The walk
+  arm of `no_durable_reference_moves_on_a_key_rotation` must require ids and labels byte-identical AND every
+  row tag CHANGED, so a walk that did nothing cannot pass.
+- A call site, or `Drawer::canonical_bytes`, left on v1: tests that write and verify through one function
+  pass on any format.
+
+The brief, the three lens answers and the panel's working files are in
+`.handover/rulings-2026-10-07/P15-canonical-encoding/` — material, never the record.
+
+**Recorded at train 1's integration, 2026-10-12.** The record above was written before this entry had an id;
+nothing in it is changed. Since then: the id is O406; its relation with O269 is a reciprocal
+`**Relations:**` pair (the line below); this heading names the missing table domain beside the moving
+boundary, as "What remains" asks; and item 13's five filings are O416 (i), O417 (ii), O418 (iii), O419 (iv)
+and O420 (v). The correction beside O238 and the scoping of CLAUDE.md's VACUUM sentences remain owed.
+
+O269's relation marker to this entry is retired: O269 closed 2026-10-12 and a relation names an open entry. What it built for this one is recorded in the note below.
+
+**Recorded at O269's build, 2026-10-12: what O406's first builder found.** O406's first builder stopped before
+writing code and reported four facts, recorded here so the next build starts from them rather than finds them
+again.
+
+1. **O406 depends on O269's arm.** The walk's verify-first (item 5) withholds on "any finding, and any ERROR",
+   and an undecodable covered field — a later-0x1f drawer move, a sealed fact or entity field that does not open
+   under its own AAD (item 8(d)) — made `verify` return a conversion error instead of a finding. O269's build
+   gives it one name, `BadReason::Undecodable`, in `bad_records`, checked over the BYTES (so a row whose bytes
+   changed stays `TagFailed`), and makes it a rotation blocker — ruled there against O232's exemption for an
+   unparseable meta, because a rotation reads such a row by its type and cannot re-tag it at all. It covers every
+   column `verify` reads in drawers, facts, entities, tunnels and the policy rows; measured on the LoCoMo feed,
+   the later-0x1f move this entry describes is now `UNREADABLE: <id>: column meta_json holds TEXT that is not
+   UTF-8`, exit 2. **What it does not do is open a sealed fact or entity field**: `kg_verify` checks tags only,
+   over bytes; leg (d)'s AEAD open is this entry's to add, through `BadRecord::undecodable` with its own detail.
+2. **P15b needs a pre-A10 binary.** No release tag predates A10, so the A10-migrated sealed vault the probe asks
+   for must be made by `9d7bde1^` (`0a0bc97`), built from source, and then opened by this build.
+3. **P15b's `refine` run needs a loopback LLM stub**: refine reaches only a TLS or loopback endpoint, and no
+   model is in the battery.
+4. **`kg_add_inner` and `kg_import` tag `valid_from` while their `ON CONFLICT` SET lists omit it**
+   (`crates/undercroft-store/src/kg.rs`, the two upserts), so a NULL `valid_from` row re-added or imported with
+   `''` keeps NULL under a tag computed over `''` — a self-inflicted `TagFailed` today (O417), and under item 1's
+   presence encoding the same disagreement for every such re-add. The v2 encoding must tag the row as it will be
+   stored, as item 1 says, and the two SET lists are where that is decided.
+
+#### RULED 2026-10-12 by the maintainer
+
+**The question.** P15f — the walk's wall time and WAL growth, `verify` with the new legs, warm search
+and repeated withheld opens, at ~10⁵ on both levels — a long run; the ruling above allows 10⁶ "only on
+the maintainer's go".
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-12 to the list of
+questions that day's rulings escalated, each shown with its recommended answer, this one among them,
+and relayed with the list to O294's build by the integrator.
+
+**Decided — as recommended, in the integrator's words:** the ~10⁵ measurements may run when the machine
+is otherwise idle; 10⁶ still needs a go of its own.
+
+**What remains open.** The build, gated by its probes; P15f at 10⁶.
+
+#### BUILT 2026-10-13 by O406's build — what was built, what the probes measured, and what is owed
+
+**Probes first, as the ruling ordered.**
+- **P15i, committed as a test before any leg existed** (`transplant_tests.rs`, three tests). Red at the
+  base: on hmac-only a fact's row and tag inserted into `drawers` under the fact's id, with a
+  `DrawerMeta` JSON chosen as the fact's subject over MCP, verified clean (`bad_records` empty,
+  `chain_ok`, every leg empty — `VERIFY OK`), was returned by `get` and `recent` (so `wake_up`), and
+  left no audit record of its write; the same from an entity. On sealed the drawer was named
+  `MetaUnparseable` while its HMAC verified. Green now in both regimes: on a version-1 vault leg (c)
+  names the id in two tables and the drawer's meta, and on a walked vault the drawer's tag no longer
+  verifies (the table domain). The CLI half is
+  `o406_a_tag_carried_between_tables_fails_verify_through_the_cli`.
+- **P15b found no hit anywhere**, so legs (a) and (b) fail `ok()` as item 8 conditions: the LoCoMo
+  feed mined into four wings (402 drawers), five CLI facts (open, dated, closed, re-added, low
+  confidence) and `refine` over 120 drawers through a loopback stub (62 receipted facts, 66 in all,
+  62 entities), at both levels, written by 1.6.0, by 1.6.1, and by a pre-A10 build (`0a0bc97`, built
+  from source; the new build's open ran the A10 walk, relabelling 129 audit records), plus each
+  vault exported and imported by the new build: 0 identity, 0 shapes, 0 non-hex drawer ids, 0
+  non-drawer citations, 0 cross-table ids, 0 `''` dates, `VERIFY OK` on all sixteen.
+- **P15e, with 1.6.0 and 1.6.1 built from their tags**, every command (`verify`, `stats`, `search`,
+  and writable `remember` and `vault rotate`), both postures, each run on a copy: on (i) a walked
+  vault at both levels, (ii) a walked vault in a deferred promote and (iii) the crash after the raise
+  and before the COMMIT, 1.6.0 exits 2 *"vault manifest failed integrity verification — possible
+  tampering"* and 1.6.1 exits 1 with the O238 age message, and the sha256 of `vault.db`, its `-wal`,
+  `vault.json` and `vault.json.next` moved on none of the 64 runs. The new build's writable open of
+  (iii) retries and walks. (iv), the counterfactual — the raise after the COMMIT, crashed between:
+  both older binaries open it, report rows as replayed (`search` exits 2), and `remember` WRITES
+  (`vault.db` and `vault.json` move). And a version-2 `vault.json.next` beside a version-1
+  `vault.json` is DELETED by a 1.6.1 writable `verify`, as refuted claim 7 read.
+- **P15k, P15l, P15m** pass: every row, policy and read after the walk (`verify` OK, `version_replay`
+  and `policy_drift` empty, `wing_trusts()`, a floored search, `get` and `lookup_canonical` succeed) on
+  a never-rotated vault and on one rotated on version 1 whose policies were assigned after the rotation,
+  at both levels; the walk withholds over a `MetaUnparseable` drawer, a re-partitioned
+  fact and a transplant, writes nothing, names why, and stays withheld after the first is deleted; an
+  erasure receipt minted before the walk answers `Verified` after it and a witness `Extends`
+  (`rows_since: 1`); a walked vault's export imports into 1.6.1 and verifies, and a 1.6.1 archive
+  restored by this build walks on its stage (manifest version 2, one commitment, `VERIFY OK`).
+- **P15g** is `the_v2_row_encoder_has_one_parse` (every byte value at every boundary, absent against
+  empty, field-number order, table domain) and the two encoder-misuse tests.
+
+**What was built, item by item.** (1) `RowEncoder`/`RowCanonical`/`RowFormat` in `seal.rs`; every row
+canonical in one module, `store/src/rows.rs`, one builder per table taking its format as a required
+argument, the version-1 recipes private to it and pinned to the released bytes; the fact's
+`confidence` canonicalised (`-0.0` as `+0.0`); both upserts' SET lists now carry `valid_from`, so
+the tag covers the row as stored; `Drawer::canonical_bytes` is deleted, with the one test that called it. (2) `Vault::row_tag` /
+`verify_row_tag` under a sixth subkey, `row`; `Vault::tag` untouched. (4) `retag.rs`: the regime from
+`migrate/tag-v2` by exact label and `MIN(seq)`, cached per handle; a rotation re-tags in the regime
+it finds, through the same `retag_rows`/`apply_retagged` the walk uses. (5) The walk at a writable
+open after `init_chain` and O233's switch, withheld (reason on `unhealed`, never an error) while A10
+or U12 is pending, while `vault.json.next` exists, beside any holder, and on any `walk_blockers()`
+finding or verify error; then every new tag is computed IN MEMORY, `vault.json` is raised to version
+2, the rows are written and the commitment appended in one transaction, COMMIT, anchor. Computing
+the tags before the raise is this build's: a row the re-tag cannot take then leaves both files as
+found rather than a raised manifest over an unwalked database. (6) `judge_tag_regime` at every
+open, both postures. (7) `MANIFEST_VERSION` 2, a version-dispatched manifest MAC canonical, the
+anchor raising to `max(on disk, the handle's regime)` and never lowering. (8) `exact.rs` and
+`kg.rs`: legs (a)–(c) as `VerifyReport.identity` and `.shapes` on all four renderers, (a) also
+refused at the fact read doors (`IntegrityFinding`), (d) as `BadReason::Undecodable`;
+`walk_blockers()` = `rotation_blockers()` + `MetaUnparseable` + identity + shapes. (9)
+`rewrite_boundary`, read by `version_boundary` and both policy scans, with a source gate that nothing
+else reads `rotation_boundary`. (10) `kg_add_inner` refuses `''` and C0 in both bounds; **refine is
+this build's own addition**: it falls back to a note's `content_date` as a fact's `valid_from`, and a
+`content_date` is the writer's string (an MCP save takes any), so one such drawer would have aborted
+every refine run reaching it — refine now writes that fact open
+(`a_note_dated_with_no_date_is_distilled_undated`). (11) No VACUUM, one record. (12) Read-only opens
+never walk and note a pending walk on `unhealed`.
+
+**Counterfactuals, each run as a copy-aside mutation of this tree, restored and compared byte for
+byte.** The boundary withheld from the two policy scans: P15k's first test goes red with
+`retention/w1: row is not the newest declaration`. The walk without its verify-first: both
+withhold tests go red. Version 2 implemented inside `Vault::tag`: P15l goes red with the receipt
+`Recorded { rotations_since: 0 }`. And P15e (iv) above for the raise after the COMMIT.
+
+**Real corpus** (definition of done item 6): the LoCoMo feed mined into 64 wings by the released 1.6.1 (5,445 records
+`verify` checks), three facts, a trust class and a retention policy, then opened by this build — one run per
+level on a machine running another worktree's battery throughout, so every figure is contended. `--read-only
+verify` of the 1.6.1 vault: exit 0 with the pending-walk note (346 ms sealed, 610 ms hmac-only). The walking
+open (`stats`): 858 ms and 966 ms; the database file did not grow (11.0 MB, 19.6 MB: the re-tag rewrites tag
+columns in place), and the WAL was checkpointed away by the time the process exited, so its peak was not
+observed. The next open: 74 ms and 48 ms. `verify` after the walk: `VERIFY OK`, every leg 0 (713 ms, 849 ms);
+a search and `trust list` served. A rotation for comparison: 1,349 ms and 821 ms, `VERIFY OK` after it. At this
+size the switching open costs the order of a rotation, as `UPGRADING.md` says.
+
+**Surfaces.** CLI `verify` prints `identity:` and `field shapes:`, MCP `undercroft_verify` counts
+both, `/v1` carries `identity` and `shapes`, the admin console renders both; nine `e2e` checks were
+added and NOT run as a suite (the battery is the integrator's) — the seven CLI and MCP ones were
+exercised by hand against this build's release binary and print what they match; the two `/v1` ones
+were not. Tests added: 17 in `undercroft-store`'s lib, 6 in
+`undercroft-vault`'s, 1 in the CLI's binary target and 1 in `tests/cli.rs`; one removed from
+`undercroft-core`'s with the dead canonical it tested.
+
+**Owed, filed:** P15f at ~10⁵ — not run, the machine was not idle (another worktree's battery and a
+local stack were running throughout) — together with the accelerator item 5 allows for a withheld
+vault, which this build did not build: a withheld writable open pays one full `verify`
+(O-NEW-O406-1); and the two Mermaid renders under `docs/diagrams/` whose canonical blocks this
+build moved (O-NEW-O406-2). P15h and P15j stay with O417 and O419, whose notes say what this build
+changed for each.
+
 ## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
@@ -19603,6 +20152,18 @@ fences nothing today, because there is no version 2. It is the mechanism a
 future format change will use, and its whole value is being in the field
 BEFORE that change — which is why O241 ruling 4 sequenced it ahead of any
 canonical change rather than bundling it with one.
+
+**Corrected 2026-10-13 by O406's build, as O406's ruling asked (its refuted claim 6) — beside the record
+above, which is unchanged.** "The mechanism a future format change will use" holds only with an explicit
+raise: `MANIFEST_VERSION` reaches `create` alone, while the anchor rewrites the manifest it reads from disk
+(head and height) and `rotation_candidate` clones it (the salt), so bumping the constant moves no existing
+vault's version and fences nothing. O406, the first format change, raises `vault.json` to version 2 itself,
+through the one manifest writer and before its walk's transaction; the anchor now writes the greater of
+the version on disk and the version the handle's tag regime needs, and never lowers it. Measured by O406's
+P15e: a walked vault is refused by 1.6.1 with this entry's age message and by 1.6.0 as `ManifestTampered`
+— the version-2 MAC canonical is a shape 1.6.0 cannot reproduce — both before any byte moves. O257's
+correction above stands: a 1.6.1 writable unlock still deletes a too-new `vault.json.next` (measured
+again by P15e), which is why no O406 path leaves one beside a version-1 `vault.json`.
 
 ## 1.6.0 — released 2026-09-21
 
@@ -43560,457 +44121,6 @@ and the console.
 
 **What remains open.** Nothing for the maintainer. The relations with O225 and O260 above stand.
 
-### O406 — HIGH: a row canonical joins its fields by a separator with no lengths and no table domain, so a field boundary can shift, or one table's tag verify on another table's row
-
-**Filed 2026-10-08 by O231's build and widened by its independent review;
-measured.** Every HMAC canonical in the tree concatenates its fields with a
-separator byte (0x1f, and 0x1c–0x1e for the KG extensions) and NO lengths, and
-treats an absent field and an empty one alike. A field whose stored bytes can
-themselves hold the separator — at-rest content, a sealed blob, an optional
-string bound — can therefore be re-partitioned so that a different reading of
-the same bytes still produces the exact canonical the tag covers. A writer
-needs no key: it edits the clear columns, never the tag. This is a tag-FORMAT
-property, so the fix is an on-disk-format change (A10's identity constraints, a
-rotation, a migration) and the entry needs a ruling panel. **Do not build the
-format fix piecemeal.**
-
-**Which tagged rows are reachable, as the reviewer measured them.**
-- **Drawers (`canonical`, `drawer.rs`):** the meta/content boundary moves. On
-  the LoCoMo feed (400 sealed drawers) 155 held a 0x1f; moving the boundary to
-  the FIRST content byte keeps the tag and leaves `meta_json` valid UTF-8, which
-  O231's leg now names. Moving it to a LATER 0x1f leaves `meta_json` not UTF-8,
-  so `verify` and `backup create` return `FromSqlConversionFailure` before the
-  tag is read and never name the row — ROADMAP O269 item 2's pre-tag arm. That
-  row is also an O231 row (its tag verifies), which O232's ruling keeps out of
-  the rotation's blockers while O269 item 2 makes a pre-tag finding one; O269's
-  build rules which.
-- **Facts (`triple_canonical`, `kg.rs`):** two separate moves, both keep the tag
-  and `verify ok()=true` with `version_replay` empty. (1) `valid_to` (and
-  `valid_from`) are written `unwrap_or("")`, so `UPDATE kg_triples SET valid_to=''`
-  on an approved canonical fact is indistinguishable from NULL to the tag, while
-  `lookup_canonical` returns `None` and `kg_query` returns 0 — the fact silently
-  stops being the canonical answer. (2) The `support` extension's separator sits
-  inside its branch, so `object := object‖0x1f‖support, support := NULL` keeps
-  the tag: on hmac-only the object reads back with the grounding JSON glued on
-  and grounding gone; on sealed every `kg_query_entity` then fails `CorruptRow`.
-- **Not reachable:** tunnels and policy rows — every field is validated or fixed
-  width. Entities only through a non-UTF-8 `created_at`, which aborts `verify`
-  rather than passing it. Receipts only where the keyed fingerprint itself holds
-  a 0x1f — unmeasured.
-
-**Shape, for a ruling panel.** The structural fix is a length-prefixed (or
-otherwise unambiguous) canonical, a tag-format change needing a recorded re-tag
-and its own versioning ruling. Cheaper fences to weigh beside it: rejecting a
-control byte in a covered field the write path never emits (a drawer id or a
-`meta_json`), so `verify` and the read paths name it; the search path's response
-to one unreadable candidate (fail the whole query, today) is a separate
-question; and the `valid_to` case is closed on its own by writing NULL and ''
-distinguishably in the canonical.
-
-**Gate**: a field boundary moved with no key fails `verify` as a named verdict,
-and a parseable field cannot be read from bytes written as another. **Counterfactual**:
-today the moves above keep the tag and pass `verify`, measured.
-
-#### RULED 2026-10-12 by three lenses (Agentic Memory Architecture; Cryptography and integrity (unambiguous encodings, MAC domain separation, downgrade); Software Engineering and data migration (on-disk format, rotation, export/import, older binaries, the O238 fence)) and an adversarial refuter
-
-**Question.** Every row tag in the tree is a bare HMAC under the `mac` subkey (`Vault::tag`, `vault/src/lib.rs`
-1376-1384; `seal.rs` 104-109) over fields joined by 0x1f (0x1c–0x1e for the KG extensions), with no lengths, no
-table domain and NULL written as `''`. Six questions: (Q1) the replacement encoding, its scope and its key;
-(Q2) NULL against `''`; (Q3) how existing vaults reach it, what the walk checks first, where its marker lives,
-what O234's arms, read-only opens, rotation, export/import and older binaries do; (Q4) the version class and
-the upgrade obligation; (Q5) interim detection; (Q6) what is folded here, filed apart, or out of scope.
-Everything below was established by reading `train2-o231` at `f28e64f` and the `v1.6.0` / `v1.6.1` tags. No
-build, test or measurement ran in this panel; every claim that only execution can settle names its probe.
-
-**Threat framing, for the severity.** The actor is a writer WITHOUT the vault key who edits columns offline
-(O247's ruling: on a deployment keeping `master.key` beside the database that writer usually has the key, so
-the exposure is a passphrase deployment or a key kept off the data volume), optionally helped by an MCP agent
-that chooses bytes later sitting inside covered fields. HIGH stands, and on hmac-only vaults it is higher
-than the entry measured: see refuted claim 1 (a forged drawer that passes `verify`).
-
-**Prior rulings found, and their disposition.** Searched `rul(ed|ing)` in this entry and in O231, O269
-(including the maintainer's ruling of 2026-10-08), O232/O230, O233/O234, O238/O241, O247, O29, O334, and the
-A10/U12 doctrine. None decides the canonical format, its migration or its class.
-- **O233 (RULED 2026-09-19)**: FOLLOWED as the template — a dedicated HKDF subkey as "a structural choice"
-  rather than prefix separation proved by enumeration; one commitment record read by exact label and
-  `MIN(seq)` (`chain::regime`, `chain.rs` 105-115); verify-first, otherwise withheld and reported on
-  `VaultStats.unhealed`; a read-only open never switches; a downgrade fence; PATCH inside an unreleased MINOR.
-  Its losing options lose here for the same reasons: (S2) a new column (a `READ_SCHEMA` row refuses every
-  read-only open of an older vault), (M2) a switch with no commitment, and bounding by every `migrate/` record.
-- **O232 (RULED 2026-09-19)**: FOLLOWED at its own reason — block only what an operation would make worse.
-  Applied, it gives the walk a STRICTER gate than a rotation: O232's premise for leaving
-  `BadReason::MetaUnparseable` out of the blockers is that "a rotation re-tags the same bytes"
-  (`store/src/lib.rs` 3127-3156, 3469-3475). That holds while the framing is kept. A walk that changes the
-  framing binds the moved partition and destroys the one authenticated recovery v1 still allows (a drawer
-  re-split at its first two 0x1f, an E7 fact re-joined so its id matches), which is what O232 forbids.
-- **O234 and O230 (RULED 2026-09-19)**: FOLLOWED, their boundary extended by one exact record — and BOTH
-  consumers of `rotation_boundary` take it: O234's `version_boundary` (`replay.rs` 281-292, which also feeds
-  `refuse_replayed`) AND the two O230 policy scans (`retention.rs` 595 and 678, compared at 983). The brief
-  named only the first; all three lenses caught the second.
-- **O238, and O241 ruling 4 (RULED 2026-09-21)**: FOLLOWED, with a correction recorded beside O238: bumping
-  `MANIFEST_VERSION` fences nothing on an existing vault, because only `create` writes the constant
-  (`vault/src/lib.rs` 2620); the anchor clones the manifest on disk and rewrites head and height
-  (1508-1511) and `rotation_candidate` clones it and rewrites the salt (2861-2863). The ruling's ordering
-  condition is met — the fence shipped in 1.6.1 — so a manifest-canonical change is now permitted, and the
-  outcome it foresaw for older binaries ("`ManifestTampered` on an intact vault") is already written in
-  `UPGRADING.md`'s 1.6.1 entry.
-- **A10 (identifiers)**: FOLLOWED — no identifier recipe moves: `drawer_id`, `triple_id` (including its
-  `unwrap_or("")`), `entity_id`, the tunnel and quarantine ids, `fp`, `supersedes_fp`, `source_fp` and every
-  `audit.record_id`. No identifier is derived from a tag canonical (`kg.rs` 225-247, 480-489;
-  `core/src/ids.rs`), so a tag-format change moves none by itself; the walk appends one audit row and
-  relabels none, so O233's revision ("a label IS evidence") is not engaged.
-- **A10/U12 at-rest-migration doctrine**: FOLLOWED for "marker last, only on a clean walk, pending reported on
-  `unhealed`, a tamper-failing row never laundered" — here as withhold-entirely, which is O233's shape.
-  REFUTED in one clause, for this migration only: CLAUDE.md says "any future at-rest migration owes the same
-  shape, plus the VACUUM and the byte-reading gate". The VACUUM's stated reason is that an in-place UPDATE
-  left plaintext words or an oracle in freed pages. A re-tag removes no confidential byte: content and meta
-  are not rewritten, every v1 tag already sits verbatim in `audit.tag`, and v1 is refused after the switch.
-  The byte-reading gate's analogue here is a gate on what the walk moves (below), not a scan of bytes.
-- **The canonical-extension convention** (support, authority, extractor, terms, `name_rest`: "untouched facts
-  keep byte-identical canonicals"): its GOAL is kept, its MECHANISM refuted. A separator placed inside each
-  optional branch with no length is exactly what made the fact canonical non-injective (`kg.rs` 352-394). The
-  v2 encoding reverses the goal ONCE, at the walk, and restores it for every later field (TLV, item 1).
-- **O269 item 2 and the maintainer's ruling of 2026-10-08 (B, as PATCH)**: FOLLOWED — an undecodable covered
-  field (a later-0x1f drawer move, a sealed fact or entity field that fails its AEAD open) goes through O269's
-  arm under one name, and its name and blocker status are O269's build's, as `f28e64f` already assigned for
-  drawers.
-- **O247**: inherited and stated — a copied commitment label is refused by the chain replay and by nothing
-  else, exactly as a copied `rotate/` label is.
-- **O29** ("the label is LAST"): the brief misapplied it — see refuted claim 3.
-- **O334**: followed as the precedent for an identifier-recipe defect fenced by validation, not by moving the
-  recipe.
-
-**Ruling.**
-1. **The encoding.** A version-2 ROW canonical for every table whose rows carry a tag recomputed in place:
-   drawer, drawer supersession receipt, fact, fact receipt, entity, tunnel, wing trust, retention policy, and
-   the pushed-embedder marker. Each begins with a length-prefixed per-table domain
-   (`undercroft.row.v2/<table>`). Required fields follow in a fixed order, each with a u64-LE length prefix,
-   fixed-width ones included (one rule, not a rule plus exceptions). Optional fields are TLV — a fixed-width
-   field number, strictly ascending and never reused, then a length-prefixed value; an absent field is
-   omitted and a present empty one is written with length 0, so absent is not empty, and a field added later
-   leaves every older row's bytes unchanged. Every value is encoded **as the database will return it**:
-   `confidence` is canonicalised so that `-0.0` cannot be tagged and read back as `+0.0`, and every upsert
-   computes its tag over the row as it will be stored (both `kg_add` and `kg_import` omit `valid_from` from
-   their `ON CONFLICT` SET lists while tagging the incoming value — `kg.rs` 2273-2302, 2741-2758 — which under
-   a presence encoding would turn a NULL row re-added or imported with `''` into a row that fails its own
-   tag). One builder per table in one module, every call site through it, `rotate.rs` included; the `pub`
-   `Drawer::canonical_bytes` (`core/src/drawer.rs` 471, used by its own test alone, and not even the store's
-   canonical: it serializes `self.meta`, not the stored `meta_json`) is deleted or delegates.
-2. **The key.** A new HKDF subkey (label `row`), derived beside `chain` and `sample` and re-derived by every
-   rotation. `Vault::tag` / `verify_tag` and the `mac` key stay byte-identical for everything else they
-   serve: the record-only canonicals (`del`, `read`, `egress`, `admission`, `migrate`), the `fp` and
-   read-query fingerprints, the keycheck and the version-1 chain step. That keeps every existing erasure
-   receipt's keyed replay (`forget.rs` 741-745, `del\x1f{id}`) at `Verified`; implementing v2 inside
-   `Vault::tag` would silently drop every receipt to `Recorded` (O13's class).
-3. **Out of scope, with reasons.** The record-only canonicals (no stored fields to re-partition; `del` is
-   replayed by third-party receipts). The manifest MAC canonical, except as the 1.6.0 fence (item 7): its
-   fields are fixed or validated. The signed documents — forget attestation, bundle manifest, chain witness —
-   are third-party formats and are filed apart (item 13).
-4. **A regime, never per-row discovery.** The format is a property of the vault, decided by one commitment
-   record, `migrate/tag-v2`, read by exact label and `MIN(seq)` (O233's shape; added to `Namespace::Migrate`'s
-   documented kinds), never by a clear `meta` row. Every writer and verifier takes its format from it: a
-   vault in the v1 regime keeps WRITING v1, so no mixed rows exist; a vault in the v2 regime never accepts a
-   v1 tag, so a row written back from before the switch fails its tag with no per-row bookkeeping. A rotation
-   preserves the regime and never switches it.
-5. **The walk.** At a writable open only; after A10, U12 and O233's switch, and withheld while any of them is;
-   never while a `vault.json.next` or a deferral is in force; under O257's `ExclusiveHold` (refused beside any
-   holder, any version, changing nothing, then withheld and retried at the next writable open). Inside the
-   hold, verify-first: `rotation_blockers()` plus every exact leg of item 8. Any finding, and any ERROR from
-   that verify, withholds the walk entirely — nothing written, the reason on `VaultStats.unhealed` — and never
-   fails the open, because a walk inside `open` that aborts leaves the vault unopenable for `verify` and
-   `repair` (the embedder walk's lesson). Otherwise, in this order: raise `vault.json` to version 2, with the
-   version-2 MAC canonical, through `write_manifest_file`; then ONE transaction re-tagging every row of every
-   tagged table and appending the commitment through `chain_append`; COMMIT; anchor. The walk and the rotation
-   share one per-table re-tag function, so `rotation_names_every_key_derived_artifact` also forces the walk to
-   be complete. If a withheld vault would re-pay a full `verify` on every writable open (P15f), the build may
-   remember the withheld verdict against the committed head and height — an accelerator that can only
-   withhold, reported on every open.
-6. **Manifest and commitment, read together.** v1 manifest and no commitment: v1 regime. v2 manifest and no
-   commitment: a walk interrupted after the raise — v1 regime for tags, walk retried, older binaries stay
-   fenced. v2 manifest and the commitment: v2 regime. The commitment beside a v1 manifest anchored at or past
-   the commitment's height is an integrity finding (no writer of this design produces it); one anchored below
-   it is a stale manifest, healed forward like any lag and raised. The anchor door raises the version to what
-   the regime requires and never lowers it.
-7. **Fences.** 1.6.1 and newer answer `ManifestTooNew` (exit 1, a class-less 409), which depends on the
-   explicit raise of item 5. 1.6.0 and older do not read `version`, and a bump alone opens there (the
-   canonical is unchanged in shape, so its MAC verifies — read at `v1.6.0`): they would then report every row
-   as tampered and, writable, append v1 rows into a v2 vault. So the manifest MAC canonical becomes
-   version-dispatched — version 1 byte-identical to today, version 2 a new shape — and 1.6.0 and older answer
-   `ManifestTampered` (exit 2) at unlock, before reading `vault.json.next` or opening the database. That is
-   the outcome O241 ruling 4 accepted and `UPGRADING.md`'s 1.6.1 entry already states. 1.5.x is additionally
-   fenced by O233.
-8. **The exact legs** (Q5). They are the walk's verify-first, permanent, and may land ahead of the format as
-   a reporting unit (PATCH by the 2026-09-08 ruling; four renderers through `parity.rs::HAND_PROJECTED`) —
-   never instead of it. (a) **Fact identity**: `id == triple_id(decoded subject, predicate, object,
-   valid_from)`, shape-aware for pending A10 rows. Every fact move constructible by reading changes the
-   object or `valid_from`, both inside the id, or lands on a field (b) covers; the one exception is NULL
-   against `''`. It is the same decision `verify` and the fact read doors take (O234's one-decision pattern),
-   because E7's substitution is consumed at read by `lookup_canonical` (O237's lesson). (b) **Shapes**: drawer
-   `id` 32 lowercase hex; receipt `source_drawer_id` and `supersedes` drawer-id shaped; entity `created_at`
-   RFC 3339; `canonical_key`, when present, passes `validate_name`; `valid_from`, `valid_to` and `extractor`
-   hold no C0 byte; `terms` NULL on hmac-only. (c) **Cross-table identity**: a drawer whose id is a fact's or an
-   entity's id, and the reverse — exact (128-bit ids) and indexed on both sides. (d) A sealed field that does
-   not open under its own AAD goes through O269's arm. Rotation blockers: none of (a)–(c) — a same-framing
-   rotation leaves each exactly as detectable (O232); every one withholds the walk. (a) and (b) fail `ok()`
-   only if P15b finds no hit on real legacy corpora; otherwise they are reported and do not fail it.
-   Heuristics — hmac-only fact objects holding separators, `''` dates — never fail `ok()`, because ordinary
-   writes produce them.
-9. **One boundary.** `max(this key's rotate/ record, the commitment)` in one function, read by
-   `version_boundary` (O234's arms and `refuse_replayed`) AND by both O230 policy scans, with a source count
-   that nothing reads `rotation_boundary` outside it. Without the second consumer every trust and retention row
-   becomes "row is not the newest assignment" after the walk (`retention.rs` 983, where a never-rotated vault
-   has no boundary at all), `wing_trusts()` raises and every floored search fails.
-10. **NULL against `''`** (Q2). Presence in the TLV. Reader semantics unchanged: `valid_to = ''` stays closed,
-    as `lookup_canonical` (`kg.rs` 3080-3083), `valid_at` (3813-3829) and `kg_stats` (3592) read it today;
-    reading it as open would re-open closed facts, which `refuse_rewriting_a_canonical_holder` (1980-2010)
-    calls the forgery direction. `kg_add_inner` refuses `''` and any C0 byte in `valid_from` and `valid_to`
-    (the MCP schema documents them as "ISO date", `mcp.rs` 499; the CLI documents nothing). `canonical_key`
-    already refuses `''` (`kg.rs` 624-625). Import keeps what the payload says; its upsert tags the stored row
-    (item 1). Legacy `''` rows are bound as found at the walk — O233's accepted residual one table over,
-    including an approved holder retired by a keyless NULL→`''` flip made before the walk.
-11. **No VACUUM, no per-row records.** The VACUUM's reason does not apply (prior rulings, above). One audit row
-    per re-tagged row would roughly double `audit` and slow every label-guard replay for good (88–93 ms per
-    ~10⁵ audit rows, O237/O251); the rotation precedent is one record.
-12. **Everything else the walk touches.** Read-only opens never walk; they verify in the regime they find and
-    report a pending walk. The walk only appends, so a witness emitted before it still answers `Extends`, and
-    O251's hand-forward is invalidated by the height it moves. Exports carry decoded fields and no tags
-    (`kg.rs` 903-909), so export and import are unchanged and stay the format-independent way back. A restore
-    opens its stage writable, so a pre-walk archive walks or withholds on the stage.
-13. **Dispositions** (Q6). FOLDED here: the cross-table transplant (refuted claim 1; closed by the per-table
-    domain, its interim is leg (c)); the drawer id/meta shift (leg (b)); the receipt and supersession moves
-    (leg (b)); the doc corrections — `seal.rs` 3-6 ("covers the *whole record*"), the `lib.rs` 10816-10817
-    comment ("the tag verified, so `meta_json` is authentic"), `docs/THREAT_MODEL.md` around 189-195 and
-    `docs/security.md` — which are false today and may be corrected now, since moving prose moves no format.
-    FILED under their own ids (O171), by the integrator: (i) the search path failing a whole query on one
-    unreadable candidate; (ii) the hmac-only `triple_id` 0x1f collision, together with the upsert that tags a
-    `valid_from` the row does not keep — an MCP agent reaches a self-inflicted `TagFailed`, a rotation
-    blocker, today (P15h), with O334's fence shape; (iii) the signed canonicals, held by third parties, on O233
-    ruling 5's version dispatch; (iv) a `-0.0` confidence tagged as written and read back as `+0.0` (P15j);
-    (v) `valid_from` / `valid_to` unscreened, unbounded and not validated as dates (O29's class) — whether full
-    ISO validation joins item 10's narrower refusal is that entry's ruling.
-
-**Options that lost, and why.**
-- **Q1-B (only the reachable tables)**: two framings for ever; pre-O29 tunnels keep a reachable truncation
-  move.
-- **Q1-D (fences only)**: a fence inspects one field at a time and the transplant has none out of place; an
-  E7 split leaves no separator in any field; it cannot see NULL against `''`; and it holds injectivity by the
-  population of validators, which is how the extension convention lost it.
-- **v2 under the `mac` key**: needs a disjointness proof against attacker-built v1 canonicals (refuted claim
-  2). **v2 inside `Vault::tag`**: degrades every erasure receipt.
-- **Signed documents in scope**: moves third-party formats and would end export/import as the way back.
-- **Q3-B (at rotation)**: a never-rotated vault stays ambiguous; the rotation's premise breaks (O232); and a
-  version-2 `vault.json.next` beside a version-1 `vault.json` is deleted by a released 1.6.1 on a writable
-  unlock (`v1.6.1` `unlock_as`: `Manifest::parse(..).ok()` maps `ManifestTooNew` to `None`, then
-  `remove_file`, under a comment saying the opposite; O257's correction beside O238 records it) — during a
-  deferred promote that file is the only copy of the salt the database's keys derive from.
-- **Q3-C (lazy, per row)**: no completion, so v1 is never refused and the in-vault downgrade stays open.
-- **Writing v2 in a v1 regime with dual verification until the commitment** (lens 1): a withheld vault would
-  accumulate v2 rows under a version-1 manifest that 1.6.1 opens unfenced.
-- **The commitment label bound to the keycheck** (lens 2's `retag/<keycheck16>`): after a rotation it no
-  longer names the current key, so the regime read would need a prefix — the reading O233 rejected.
-- **Raising `vault.json` after the COMMIT** (lens 2): in the crash window a version-1 manifest sits over a
-  migrated database; 1.6.1 opens it, heals the anchor forward (cloning version 1), reports every row as
-  tampered and writes v1 rows. Raising first makes the crash state "older binaries refuse, the new one
-  retries".
-- **The walk gated on `rotation_blockers()` alone** (lens 1): binds the moved partitions item 8 detects and
-  destroys their authenticated recovery. **Gated on `ok()`** (lens 2): withholds over findings the walk
-  cannot worsen (mirror drift, orphan labels, a pre-switch label mismatch, `Dangling` receipts), contrary to
-  O232's criterion.
-- **Skipping a flagged row and switching anyway**: the skipped row fails under v2 and turns a non-blocking
-  finding into a blocker; withholding is O233's and U12's shape.
-- **A third chain head to fence 1.6.0** (lens 2, after O233's frozen head): entangles the tag regime with the
-  chain regime and moves every head accessor again; the manifest dispatch does the same at unlock.
-  **Leaving 1.6.0 unfenced** (lens 1): it opens, and writes.
-- **Q2-B (`''` read as NULL)**: the forgery direction. **Q2-C**: every open fact reads closed.
-- **A control-byte refusal in fact objects at `kg_add`** (lens 2): it addresses only the agent half of E7,
-  which leg (a) detects exactly and v2 makes impossible, while keeping a content refusal after its reason is
-  gone; refusing at import would refuse restores.
-
-**Claims refuted, the brief's included.**
-1. **Brief E1 / Q6.5, and lens 1's "holds by enumeration"**: the cross-table transplant is reachable by
-   reading on hmac-only vaults. Drawer and triple ids are both 32 lowercase hex (`core/src/ids.rs` 71-80,
-   `kg.rs` 233-239); the drawer canonical `id 1f meta 1f content` reproduces a fact's
-   `id 1f subject 1f predicate 1f from 1f to 1f conf8 1f object …` when a keyless writer INSERTs a drawer
-   with the triple id, `meta_json` = the subject and `content` = the remainder, and copies the fact's tag. On
-   hmac-only the subject column holds the words (`kg.rs` 156-158) and an MCP agent chooses them;
-   `validate_name` admits a ~110-byte `DrawerMeta` JSON (`core/src/lib.rs` 63-89; required fields at
-   `core/src/drawer.rs` 59-83, `filed_at` a plain `String`); `confidence = 0.0` makes the eight bytes NUL,
-   valid UTF-8; hmac-only content is stored raw (`vault/src/lib.rs` 1262-1281); `covered_row` re-derives no id
-   (`store/src/lib.rs` 10787-10823); O234 finds nothing for a row with no record under its own label
-   (`replay.rs` 176 and the leading `<>` subquery at 327-335 is NULL), and `orphan_labels` checks the other
-   direction. Expected: a retrievable drawer in a chosen wing with a chosen `added_by`, under `VERIFY OK`,
-   with no audit record of its write. The same holds entity→drawer. On sealed vaults the subject is a blind
-   index, so the meta does not parse — a named finding. Probe P15i.
-2. **Brief E3** ("a v2 canonical beginning with a domain word can never equal a v1 canonical"): true of
-   genuine v1 canonicals only; a verifier builds v1 bytes from columns a keyless writer chose, including the
-   first one. Moot under a separate key.
-3. **Brief §1** ("the variable one is last", O29): O29's sentence is about the tunnel ID recipe
-   (`ROADMAP.md` 1955-1958, `manage.rs` 2038-2044); in the tunnel TAG canonical `created` follows the label
-   (`manage.rs` 609-617). Safe today because `create_tunnel` has validated the label since O29; a pre-O29
-   label holding 0x1f admits a truncation move.
-4. **Brief Q3** ("an hmac-only object that splits into valid fields is indistinguishable"): the fact id is a
-   digest over the object and `valid_from`, the id is the canonical's first field and cannot move, and no
-   write path rewrites an object in place (`kg_invalidate` re-seals the same plaintext, `kg.rs` 3351-3399;
-   import and the A10 walk re-derive the id). Leg (a) sees it.
-5. **Brief Q3** names O234's arms as the only consumer of a re-tag boundary; the O230 policy scans are a
-   second (item 9).
-6. **Brief Q3-A** ("`MANIFEST_VERSION` bumped"): the constant reaches only `create` (O238 correction, above).
-7. **Brief, by omission**: the released 1.6.1's deletion of a too-new `vault.json.next` on a writable unlock,
-   which decides the walk's ordering and rules out the rotation route.
-8. **Brief Q5** ("by O232's own reason a moved boundary is not laundered by a rotation"): true inside one
-   framing only.
-9. **Brief and lenses** ("`config check` opens no vault"): since O279 it opens one vault's `vault.json`
-   read-only for its identity. The conclusion stands: it reads no database and cannot see a pending walk.
-10. **Lens 1**: a rotation on an unmigrated vault should migrate it (refuted under Q3-B); 1.6.0 needs only a
-    stated residual (it writes); the walk's gate is `rotation_blockers()` alone (item 5).
-11. **Lens 2**: "O241 ruling 4 forbids changing the manifest canonical first" — it forbade a change before the
-    fence shipped, and the fence shipped in 1.6.1. The transplant leg as a rotation blocker — the
-    id-collision observable survives a rotation unchanged, so by O232 it is not one. The `-0.0` row "on a
-    table with no delete path" is not permanent — a re-add of the same four id components re-tags it — but it
-    is an agent-reachable tamper verdict and rotation blocker until then.
-12. **CLAUDE.md's VACUUM sentence**, as applied to this migration (prior rulings, above).
-13. Confirmed rather than refuted: the canonical shapes in the brief's §1 table; the dead `pub` drawer
-    canonical; `kg_verify` checks tags only (`kg.rs` 3613-3660); `rotation_blockers()` destructures with no
-    `..` and matches `BadReason` with no `_`; `v1.6.1` and `v1.6.0` read and MAC-check `vault.json` before
-    `vault.json.next`; `UPGRADING.md` 488-525 (worktree) records the 1.6.1 fence and the 1.6.0 outcome.
-
-**Probes owed** (the integrator runs them; none ran here).
-- **Before the exact legs merge.** **P15i**: on hmac-only, MCP `undercroft_kg_add` with subject
-  `{"wing":"w","room":"r","chunk_index":0,"added_by":"mine","filed_at":"x","normalize_version":2,"id_recipe":"v"}`,
-  predicate `p`, object `INJECTED`, `confidence: 0.0`; then sqlite3 INSERT into `drawers` with the triple id,
-  that JSON as `meta_json`, the content bytes the fact canonical carries after the subject's separator, the
-  fact's tag, mirrors from the JSON and any byte string for the other NOT NULL columns; record `verify`,
-  `drawer get`, MCP `undercroft_wake_up`, `version_replay`. Repeat entity→drawer, and on sealed (expected:
-  `MetaUnparseable`). **P15b**: on real corpora at both levels (the LoCoMo feed mined, `refine` run, an
-  A10-migrated sealed vault, an imported vault), count facts whose stored id differs from the re-derived one,
-  non-RFC-3339 entity `created_at`, non-drawer-shaped `source_drawer_id` / `supersedes`, non-hex drawer ids,
-  drawer ids equal to a fact or entity id, and `''` dates. It decides whether legs (a) and (b) fail `ok()`.
-  **P15a** as the brief has it, plus `triple_id(s, p, object_after, vf) != id`.
-- **Before the walk merges.** **P15e**: `v1.6.0` and `v1.6.1` built from their tags, against (i) a walked
-  vault, (ii) a walked vault in a deferred promote, (iii) the crash state after the raise and before COMMIT,
-  (iv) as counterfactual, the crash state after COMMIT with `vault.json` still version 1; every command, both
-  postures. Assert 1.6.0 exits 2 `ManifestTampered` and 1.6.1 exits 1 `ManifestTooNew` on (i)–(iii) with the
-  sha256 of `vault.db`, its `-wal`, `vault.json` and `vault.json.next` unchanged; that (iv) is opened and
-  written by 1.6.1; and that a v2 `.next` beside a v1 `vault.json` is deleted by a 1.6.1 writable `verify`.
-  **P15k**: trust and retention rows assigned after the last rotation and on a never-rotated vault, drawers
-  and facts after O233's switch; after the walk `verify` OK, `version_replay` and `policy_drift` empty, and
-  `wing_trusts()`, a floored search and `get` succeed; counterfactual: the boundary withheld from the policy
-  scans makes every policy row a finding. Then a vault holding a `MetaUnparseable` row, an E7 split and a
-  transplant: the walk withholds, writes nothing and says why; after `drawer delete` of the first it still
-  withholds on the others. **P15l**: an attestation minted before the walk answers `Verified` after it, a
-  witness emitted before it answers `Extends`. **P15m**: export with the candidate, import with 1.6.1, `verify`
-  OK; restore a pre-walk archive with the candidate (walks or withholds on the stage). **P15f**: at ~10⁵ on
-  both levels — the walk's wall time and WAL growth against the rotation's 2.58–3.22 s; `verify` with legs
-  (a)–(c) and an AEAD open per sealed fact; warm search with the fact read-door arm; repeated writable opens
-  of a withheld vault. 10⁶ only on the maintainer's go. **P15g** is a unit test of the encoder: injective per
-  table over every byte value, absent against empty, field-number order, and domain disjointness.
-- **With their own entries.** **P15h**: over MCP on hmac-only, `kg_add(s, p, "a\u001fb")` with no
-  `valid_from`, then `kg_add(s, p, "a", valid_from "b\u001f")`; expect one id, `valid_from` still NULL and the
-  row `TagFailed`; then the same through `kg_import`. **P15j**: `"confidence": -0.0` over MCP,
-  `kg add --confidence -0` and a `-0.0` import payload; record `typeof(confidence), quote(confidence)`,
-  `verify`'s exit code and `vault rotate`.
-
-**Dissent.** Lens 1 held that the walk may re-tag rows its own legs flag, that a rotation of an unmigrated
-vault should migrate it, that new builds should always write v2, and that the v1 transplant is unreachable;
-each lost on the evidence above. Lens 2 held for raising the manifest after the COMMIT, a third chain head as
-the 1.6.0 fence, `ok()` as the walk's gate, a keycheck-bound label and a kg-object control-byte fence; each
-lost on the evidence above. Lens 3's design is substantially the one ruled. No dissent survives on the
-encoding, the key, the scope or the class.
-
-**What remains.** The build, gated by the probes. The exact legs first, once P15i and P15b have run. Five
-filings (item 13). This entry's heading should widen at integration to the missing table domain as well as
-the moving boundary, and the entry needs a real id before its `**Relations:**` marker with O269 can be made
-reciprocal. Coordination with O269's build over the name and blocker status of undecodable rows. A
-correction beside O238's record that a constant bump fences only `create`. And CLAUDE.md's two VACUUM
-sentences ("any future at-rest migration …") should be scoped to migrations that remove confidential bytes —
-a change to that file lands only through the pull request the maintainer approves.
-
-**Version class.** PATCH-class, deliverable in the unreleased MINOR 1.7.0, on O233's precedent: automatic at
-the first writable open, every older vault opens on the new binary, and downgrade after a writable open is
-already documented as unsupported (`UPGRADING.md` "There is no supported downgrade after the first writable
-open"). The new legs report existing silent defects (the 2026-09-08 ruling). Refusing `''` and C0 in a field
-documented as "ISO date" tightens input never documented as valid. No surface is removed and nothing
-retrievable changes, and no unchanged deployment must act (O163's test): a withheld vault keeps working on
-the v1 format. Not escalated. `UPGRADING.md` owes, each with symptom, cause and fix: (1) after the first
-writable open on the new binary, 1.6.1 and newer refuse with the age message (exit 1) and 1.6.0 and older
-answer `ManifestTampered` (exit 2) — upgrade read-only replicas with or before the writer, and the way back is
-a pre-upgrade backup or an export imported by the older binary; (2) empty or control-character fact dates
-are refused (400, exit 1); (3) the switch is withheld, and says why on `unhealed`, while a finding stands or
-while another process holds the vault — a deployment that keeps a reader attached stays on the old format
-until both restart together; (4) the one-time cost of the switching open (P15f). `config check` cannot see a
-pending walk; `verify --read-only` with the new binary is the pre-flight.
-
-**What would make this verdict fail silently.**
-- v2 implemented inside `Vault::tag` / `verify_tag`: every erasure receipt drops to `Recorded`.
-- The boundary taught to `version_boundary` and not to the policy scans, or the reverse.
-- The constant bumped with no explicit raise of `vault.json`, or the anchor door lowering the version.
-- The raise placed after the COMMIT; or any path — a rotation included — that leaves a version-2
-  `vault.json.next` beside a version-1 `vault.json`.
-- v2 rows written in a v1-regime vault, or the regime read from a clear `meta` row.
-- The walk gated on `rotation_blockers()` alone; a verify ERROR failing the open instead of withholding; a
-  withheld vault paying a full `verify` on every writable open unpriced.
-- An upsert tagging a value the row will not hold (`valid_from` on conflict, `-0.0`), which presence encoding
-  turns into an agent-reachable tamper verdict.
-- Legs (a) or (b) failing `ok()` before P15b shows no hit on real legacy corpora.
-- A gate that round-trips through the builder instead of moving a boundary or transplanting a tag WITHOUT the
-  key and asserting a named verdict; one run on drawers only or on one security level only, since the
-  substitution lives in facts and in hmac-only vaults and the transplant in drawers; a walk counterfactual run
-  on a fixture rather than on a corpus holding moved rows of every reachable table at both levels. The walk
-  arm of `no_durable_reference_moves_on_a_key_rotation` must require ids and labels byte-identical AND every
-  row tag CHANGED, so a walk that did nothing cannot pass.
-- A call site, or `Drawer::canonical_bytes`, left on v1: tests that write and verify through one function
-  pass on any format.
-
-The brief, the three lens answers and the panel's working files are in
-`.handover/rulings-2026-10-07/P15-canonical-encoding/` — material, never the record.
-
-**Recorded at train 1's integration, 2026-10-12.** The record above was written before this entry had an id;
-nothing in it is changed. Since then: the id is O406; its relation with O269 is a reciprocal
-`**Relations:**` pair (the line below); this heading names the missing table domain beside the moving
-boundary, as "What remains" asks; and item 13's five filings are O416 (i), O417 (ii), O418 (iii), O419 (iv)
-and O420 (v). The correction beside O238 and the scoping of CLAUDE.md's VACUUM sentences remain owed.
-
-O269's relation marker to this entry is retired: O269 closed 2026-10-12 and a relation names an open entry. What it built for this one is recorded in the note below.
-
-**Recorded at O269's build, 2026-10-12: what O406's first builder found.** O406's first builder stopped before
-writing code and reported four facts, recorded here so the next build starts from them rather than finds them
-again.
-
-1. **O406 depends on O269's arm.** The walk's verify-first (item 5) withholds on "any finding, and any ERROR",
-   and an undecodable covered field — a later-0x1f drawer move, a sealed fact or entity field that does not open
-   under its own AAD (item 8(d)) — made `verify` return a conversion error instead of a finding. O269's build
-   gives it one name, `BadReason::Undecodable`, in `bad_records`, checked over the BYTES (so a row whose bytes
-   changed stays `TagFailed`), and makes it a rotation blocker — ruled there against O232's exemption for an
-   unparseable meta, because a rotation reads such a row by its type and cannot re-tag it at all. It covers every
-   column `verify` reads in drawers, facts, entities, tunnels and the policy rows; measured on the LoCoMo feed,
-   the later-0x1f move this entry describes is now `UNREADABLE: <id>: column meta_json holds TEXT that is not
-   UTF-8`, exit 2. **What it does not do is open a sealed fact or entity field**: `kg_verify` checks tags only,
-   over bytes; leg (d)'s AEAD open is this entry's to add, through `BadRecord::undecodable` with its own detail.
-2. **P15b needs a pre-A10 binary.** No release tag predates A10, so the A10-migrated sealed vault the probe asks
-   for must be made by `9d7bde1^` (`0a0bc97`), built from source, and then opened by this build.
-3. **P15b's `refine` run needs a loopback LLM stub**: refine reaches only a TLS or loopback endpoint, and no
-   model is in the battery.
-4. **`kg_add_inner` and `kg_import` tag `valid_from` while their `ON CONFLICT` SET lists omit it**
-   (`crates/undercroft-store/src/kg.rs`, the two upserts), so a NULL `valid_from` row re-added or imported with
-   `''` keeps NULL under a tag computed over `''` — a self-inflicted `TagFailed` today (O417), and under item 1's
-   presence encoding the same disagreement for every such re-add. The v2 encoding must tag the row as it will be
-   stored, as item 1 says, and the two SET lists are where that is decided.
-
-#### RULED 2026-10-12 by the maintainer
-
-**The question.** P15f — the walk's wall time and WAL growth, `verify` with the new legs, warm search
-and repeated withheld opens, at ~10⁵ on both levels — a long run; the ruling above allows 10⁶ "only on
-the maintainer's go".
-
-**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-12 to the list of
-questions that day's rulings escalated, each shown with its recommended answer, this one among them,
-and relayed with the list to O294's build by the integrator.
-
-**Decided — as recommended, in the integrator's words:** the ~10⁵ measurements may run when the machine
-is otherwise idle; 10⁶ still needs a go of its own.
-
-**What remains open.** The build, gated by its probes; P15f at 10⁶.
-
 ### O235 — `StoreError::Integrity` says "HMAC mismatch" at sites where no HMAC was compared
 
 **Filed 2026-09-19 by O230/O232's ruling; established by reading.** The
@@ -53391,6 +53501,16 @@ over MCP on hmac-only the two writes above give one id, `valid_from` still NULL 
 then the same through `kg_import`; after the fix, the second write is refused or tags what it stores, and
 `verify` and `vault rotate` pass.
 
+**Noted 2026-10-13 by O406's build — two of this entry's three parts moved; P15h was not run.** Both
+upserts' `ON CONFLICT` SET lists now carry `valid_from` (O406 item 1), so a re-add or an import tags the
+row as it is stored and the self-inflicted `TagFailed` is gone in both tag regimes
+(`an_empty_or_control_date_is_refused_and_a_re_add_keeps_its_own_tag`). And `kg_add_inner` now refuses a
+`valid_from` holding a control byte (O406 item 10), which every MCP and CLI route to the collision needs:
+`validate_name` already keeps 0x1f out of the subject and predicate, so with none in `valid_from` the
+hmac-only recipe's fields parse one way and two `kg_add` calls cannot derive one id from different words.
+What is left is the import door, which keeps what its payload says, so an operator-supplied payload can
+still land on another fact's id. Whether that closes the entry is its own ruling's.
+
 ### O418 — the signed canonicals third parties verify join their fields by a separator with no lengths
 
 **Filed 2026-10-12 by O406's ruling (its item 13 (iii)), which holds them out of its own scope.** The
@@ -53416,6 +53536,12 @@ it (O406's ruling, item 1). **Gate**: P15j — `"confidence": -0.0` over MCP, `k
 `-0.0` import payload; record `typeof(confidence), quote(confidence)`, `verify`'s exit code and `vault
 rotate`; after the fix, `verify` OK and the rotation completes.
 
+**Noted 2026-10-13 by O406's build — P15j was not run.** The version-2 fact canonical encodes
+`confidence` as the database returns it (`-0.0` as `+0.0`, O406 item 1), so on a walked vault a `-0.0`
+fact verifies. A vault still on the version-1 regime — one whose walk is withheld — keeps the defect,
+because its tags must stay the released bytes. Storing the canonical value at the write door would close
+both regimes, and is this entry's to rule.
+
 ### O420 — a fact's `valid_from` and `valid_to` are unscreened, unbounded and not validated as dates
 
 **Filed 2026-10-12 by O406's ruling (its item 13 (v)); read.** The MCP schema documents both as "ISO
@@ -53429,6 +53555,45 @@ import keeping what its payload says. **Gate**: a `valid_from` that is not a dat
 refusal is ruled, one holding a C0 byte — is refused on MCP, the CLI and `/v1`, and an import of the
 vault's own export still lands; counterfactual, today's acceptance.
 
+**Noted 2026-10-13 by O406's build.** Item 10's narrower refusal is built: `kg_add_inner` refuses `''`
+and any C0 byte in both bounds, which reaches MCP and the CLI; `/v1` writes facts only through `refine`,
+which now writes a fact open where its note's `content_date` would be refused, so a planted
+`content_date` cannot abort a run. Full date validation, a length bound and the screen remain this
+entry's question.
+
+### O-NEW-O406-1 — P15f at ~10⁵ is unmeasured, and a withheld vault pays a full `verify` at every writable open
+
+**Filed 2026-10-13 by O406's build.** O406's ruling owes P15f — at ~10⁵ on both levels, the walk's wall
+time and WAL growth against the rotation's 2.58–3.22 s; `verify` with legs (a)–(c) and an AEAD open per
+sealed fact; warm search with the fact read-door arm; repeated writable opens of a withheld vault — and
+the maintainer allowed it when the machine is otherwise idle (O406's second ruling). It was not: another
+worktree's battery ran throughout the build. O406's BUILT record carries one contended run at 5,445
+records, where the switching open cost the order of a rotation and the WAL's peak was not observed.
+
+Item 5 of the ruling lets the build remember a withheld verdict against the committed head and height —
+an accelerator that can only withhold. It was not built, so a vault withheld by a finding pays one full
+`verify`, the storage leg included (4.0–4.5 s at 102,000 sealed drawers by O269's measurement), on every
+writable open until the finding is cleared. A holder costs nothing: the exclusive hold refuses before the
+verify.
+
+**Shape**: run P15f as the ruling words it, the WAL's peak read during the open rather than after it;
+if a withheld open's cost is material at 10⁵, build the accelerator — a verdict remembered against the
+head, height and keycheck, reported on every open, never a reason to walk. **Gate**: the figures,
+recorded in O406's entry; and, if built, a second writable open of a withheld vault that runs no verify
+(counted), while a write in between makes it run one.
+
+### O-NEW-O406-2 — two Mermaid renders under `docs/diagrams/` predate the canonical blocks O406 moved
+
+**Filed 2026-10-13 by O406's build.** O406 moved two canonical Mermaid blocks and their extracted
+`src/*.mmd` copies: `docs/security.md`'s seal-and-verify flow (the tag is now a table-domained,
+length-prefixed canonical under the `row` key) and `docs/architecture.md`'s key hierarchy (six subkeys;
+it had also lacked `chain` since O233). It did not re-render `security-seal-verify.svg` and
+`architecture-key-hierarchy.svg`: the pinned `minlag/mermaid-cli:10.9.1` image was not on the build
+machine, and fetching it was not that unit's to decide. The book renders the blocks live, so only the
+standalone SVGs are stale; O190 is the missing gate that would have said so.
+
+**Shape**: the recipe in `docs/diagrams/README.md`, two files. **Gate**: the two SVGs' labels read against
+their blocks; O190's gate once it exists.
 ### O422 — the token path, room derivation and refine's lowercasing read std's Unicode tables, so every Rust release that moves them is an identity decision
 
 **Filed 2026-10-12 by the ruling on O294 and O166.** With O294's compile-time assertion, a toolchain

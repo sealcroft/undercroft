@@ -591,10 +591,11 @@ mod tests {
             }
         ));
         // Verdict::Cost — the pre-switch witness names rows the un-switch
-        // left untouched; the re-switch's commitment is appended after them.
+        // left untouched; the re-switch's commitment is appended after them,
+        // and the row-tag walk's after that (ROADMAP O406).
         assert!(matches!(
             s.witness_check(&w_pre).unwrap(),
-            WitnessVerdict::Extends { rows_since: 1, .. }
+            WitnessVerdict::Extends { rows_since: 2, .. }
         ));
     }
 

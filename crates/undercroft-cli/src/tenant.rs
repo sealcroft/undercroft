@@ -1555,6 +1555,11 @@ impl Tenancy {
             // `integrity_check` returned that is not `ok`, and every leg a
             // corruption code stopped.
             "storage": report.storage,
+            // ROADMAP O406 item 8: a fact whose id its own fields do not
+            // derive, one id naming rows in two tables, and a covered field
+            // holding a shape no write produces — rows whose tag verifies.
+            "identity": report.identity,
+            "shapes": report.shapes,
             "supersessions": {
                 "verified": count(V::Verified),
                 "source_changed": count(V::SourceChanged),

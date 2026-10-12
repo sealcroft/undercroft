@@ -683,60 +683,27 @@ pub(crate) fn joined(domain: &[u8], parts: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-pub(crate) fn wing_trust_canonical(
-    wing: impl AsRef<[u8]>,
-    trust: impl AsRef<[u8]>,
-    assigned_at: impl AsRef<[u8]>,
-) -> Vec<u8> {
-    joined(
-        b"wingtrust",
-        &[wing.as_ref(), trust.as_ref(), assigned_at.as_ref()],
-    )
-}
-
-pub(crate) fn tunnel_canonical(
-    id: impl AsRef<[u8]>,
-    from: impl AsRef<[u8]>,
-    to: impl AsRef<[u8]>,
-    label: impl AsRef<[u8]>,
-    created: impl AsRef<[u8]>,
-) -> Vec<u8> {
-    joined(
-        b"tunnel",
-        &[
-            id.as_ref(),
-            from.as_ref(),
-            to.as_ref(),
-            label.as_ref(),
-            created.as_ref(),
-        ],
-    )
-}
-
 /// A tunnel row's tag, verified under the handle's key — the ONE decision
 /// [`VaultStore::list_tunnels`], [`VaultStore::follow_tunnel`] and a repeated
 /// [`VaultStore::create_tunnel`] share. A row that fails it is the integrity
 /// class, counted and signalled as a tamper event on every one of the three.
+/// The caller builds `canonical` with [`crate::rows::tunnel`] in the
+/// handle's regime, the one recipe.
 fn verify_tunnel_tag(
     vault: &undercroft_vault::Vault,
+    canonical: &undercroft_vault::RowCanonical,
     id: &str,
-    from: &str,
-    to: &str,
-    label: &str,
-    created: &str,
     tag: &[u8],
 ) -> Result<(), StoreError> {
-    vault
-        .verify_tag(&tunnel_canonical(id, from, to, label, created), tag)
-        .map_err(|_| {
-            undercroft_obs::hmac_verify_failed("tunnel");
-            undercroft_obs::event_hmac_fail(
-                vault.id(),
-                "tunnel",
-                undercroft_obs::TamperSite::default(),
-            );
-            StoreError::Integrity(format!("tunnel/{id}"))
-        })
+    vault.verify_row_tag(canonical, tag).map_err(|_| {
+        undercroft_obs::hmac_verify_failed("tunnel");
+        undercroft_obs::event_hmac_fail(
+            vault.id(),
+            "tunnel",
+            undercroft_obs::TamperSite::default(),
+        );
+        StoreError::Integrity(format!("tunnel/{id}"))
+    })
 }
 
 impl VaultStore {
@@ -813,9 +780,12 @@ impl VaultStore {
             .map_err(|e| StoreError::Invalid(e.to_string()))?;
         undercroft_core::validate_trust(trust).map_err(|e| StoreError::Invalid(e.to_string()))?;
         let now = now_rfc3339();
-        let tag = self
-            .vault
-            .tag(wing_trust_canonical(wing, trust, &now).as_slice());
+        let tag = self.vault.row_tag(&crate::rows::wing_trust(
+            self.row_format(),
+            wing,
+            trust,
+            &now,
+        ));
         let tx = self.conn.transaction()?;
         tx.execute(
             "INSERT INTO wing_trust (wing, trust, tag, assigned_at) VALUES (?1, ?2, ?3, ?4)
@@ -992,7 +962,10 @@ impl VaultStore {
                 (Some(fp), Some(receipt)) => {
                     if self
                         .vault
-                        .verify_tag(&crate::supersession_canonical(&id, &old_id, &fp), &receipt)
+                        .verify_row_tag(
+                            &crate::rows::supersession(self.row_format(), &id, &old_id, &fp),
+                            &receipt,
+                        )
                         .is_err()
                     {
                         crate::kg::ReceiptVerdict::Tampered
@@ -2366,9 +2339,14 @@ impl VaultStore {
             &sha2::Sha256::digest(format!("{from_wing}\x1f{to_wing}\x1f{label}").as_bytes())[..12],
         );
         let created = now_rfc3339();
-        let tag = self
-            .vault
-            .tag(&tunnel_canonical(&id, from_wing, to_wing, label, &created));
+        let tag = self.vault.row_tag(&crate::rows::tunnel(
+            self.row_format(),
+            &id,
+            from_wing,
+            to_wing,
+            label,
+            &created,
+        ));
         let tx = self.conn.transaction()?;
         // **A create that inserted nothing records nothing** (ROADMAP O236).
         // The id is a function of the three declared fields, so a repeated
@@ -2404,7 +2382,12 @@ impl VaultStore {
                     params![id],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
                 )?;
-            verify_tunnel_tag(&self.vault, &id, &from, &to, &lbl, &at, &stored)?;
+            verify_tunnel_tag(
+                &self.vault,
+                &crate::rows::tunnel(self.row_format.get(), &id, &from, &to, &lbl, &at),
+                &id,
+                &stored,
+            )?;
         }
         tx.commit()?;
         if inserted {
@@ -2435,7 +2418,12 @@ impl VaultStore {
             .collect::<Result<_, _>>()?;
         let mut out = Vec::new();
         for (id, from, to, label, tag, created) in rows {
-            verify_tunnel_tag(&self.vault, &id, &from, &to, &label, &created, &tag)?;
+            verify_tunnel_tag(
+                &self.vault,
+                &crate::rows::tunnel(self.row_format.get(), &id, &from, &to, &label, &created),
+                &id,
+                &tag,
+            )?;
             if wing.map(|w| from == w || to == w).unwrap_or(true) {
                 out.push(Tunnel {
                     id,
@@ -2496,7 +2484,12 @@ impl VaultStore {
         let to = match row {
             None => None,
             Some((from, to, label, tag, created)) => {
-                verify_tunnel_tag(&self.vault, id, &from, &to, &label, &created, &tag)?;
+                verify_tunnel_tag(
+                    &self.vault,
+                    &crate::rows::tunnel(self.row_format.get(), id, &from, &to, &label, &created),
+                    id,
+                    &tag,
+                )?;
                 Some(to)
             }
         };
@@ -2596,7 +2589,10 @@ impl VaultStore {
             let verified = match (b(0), b(1), b(2), b(3), b(4), b(5)) {
                 (Some(id), Some(from), Some(to), Some(label), Some(tag), Some(created)) => self
                     .vault
-                    .verify_tag(&tunnel_canonical(id, from, to, label, created), tag)
+                    .verify_row_tag(
+                        &crate::rows::tunnel(self.row_format(), id, from, to, label, created),
+                        tag,
+                    )
                     .is_ok(),
                 _ => false,
             };
@@ -2741,28 +2737,31 @@ impl VaultStore {
         content_rest: &[u8],
         tag: &[u8],
     ) -> Result<Drawer, StoreError> {
-        self.vault
-            .verify_tag(
-                &crate::canonical(id, meta_json.as_bytes(), content_rest),
-                tag,
-            )
-            .map_err(|_| {
-                undercroft_obs::hmac_verify_failed("drawer");
-                // M6, as at every other drawer tamper site: the alarm names
-                // the row and the location that row claims, marked
-                // unverified because its tag has just been rejected.
-                let (w, r) = crate::claimed_site(meta_json);
-                undercroft_obs::event_hmac_fail(
-                    self.vault.id(),
-                    "drawer",
-                    undercroft_obs::TamperSite {
-                        id: Some(id),
-                        wing: w.as_deref(),
-                        room: r.as_deref(),
-                    },
-                );
-                StoreError::Integrity(id.to_string())
-            })?;
+        crate::rows::verify_drawer(
+            &self.vault,
+            self.row_format(),
+            id,
+            meta_json.as_bytes(),
+            content_rest,
+            tag,
+        )
+        .map_err(|_| {
+            undercroft_obs::hmac_verify_failed("drawer");
+            // M6, as at every other drawer tamper site: the alarm names
+            // the row and the location that row claims, marked
+            // unverified because its tag has just been rejected.
+            let (w, r) = crate::claimed_site(meta_json);
+            undercroft_obs::event_hmac_fail(
+                self.vault.id(),
+                "drawer",
+                undercroft_obs::TamperSite {
+                    id: Some(id),
+                    wing: w.as_deref(),
+                    room: r.as_deref(),
+                },
+            );
+            StoreError::Integrity(id.to_string())
+        })?;
         self.decode(id, meta_json, content_rest)
     }
 
@@ -2939,12 +2938,15 @@ pub enum Namespace {
     /// `audit` table's one writer since ROADMAP O233, so a scan of
     /// `chain_append` callers still cannot see it.
     Rotate,
-    /// An at-rest migration: `migrate/{kind}` for the five kinds the store
+    /// An at-rest migration: `migrate/{kind}` for the six kinds the store
     /// mints — `kg-blind` (the blind-index walk), `content-fp` (the
     /// fingerprint re-key), `embedding-space` (the hash-embedder upgrade
-    /// walk), `repair`, and `chain-v2` (the audit chain's switch to the
+    /// walk), `repair`, `chain-v2` (the audit chain's switch to the
     /// labelled step, ROADMAP O233, whose record is the commitment the
-    /// replay switches at).
+    /// replay switches at), and `tag-v2` (the row tags' switch to the
+    /// version-2 canonical, ROADMAP O406, whose record — read by exact label
+    /// and `MIN(seq)` — is the vault's tag regime and the boundary below
+    /// which no row's newest record can carry its current tag).
     Migrate,
     /// A distilled fact, and the authority tier's promotions.
     Kg,
@@ -4282,7 +4284,8 @@ mod tests {
         // badly tagged one is covered by (b) below.
         {
             let created = now_rfc3339();
-            let tag = s.vault.tag(&tunnel_canonical(
+            let tag = s.vault.row_tag(&crate::rows::tunnel(
+                s.row_format(),
                 "legacy",
                 "notes",
                 crate::admission::QUARANTINE_WING,
@@ -4751,7 +4754,7 @@ mod tests {
             .conn
             .query_row(
                 "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'migrate/%' \
-                 AND record_id <> 'migrate/chain-v2'",
+                 AND record_id NOT IN ('migrate/chain-v2', 'migrate/tag-v2')",
                 [],
                 |r| r.get(0),
             )
@@ -4765,7 +4768,7 @@ mod tests {
             .conn
             .query_row(
                 "SELECT record_id, at, tag FROM audit WHERE record_id LIKE 'migrate/%' \
-                 AND record_id <> 'migrate/chain-v2'",
+                 AND record_id NOT IN ('migrate/chain-v2', 'migrate/tag-v2')",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )

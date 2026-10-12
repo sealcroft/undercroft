@@ -142,25 +142,6 @@ fn now_rfc3339() -> String {
         .expect("rfc3339 now")
 }
 
-pub(crate) fn retention_canonical(
-    wing: impl AsRef<[u8]>,
-    room: impl AsRef<[u8]>,
-    days: u32,
-    at: impl AsRef<[u8]>,
-) -> Vec<u8> {
-    // Over bytes (ROADMAP O269 item 2): `manage::joined`, byte for byte the
-    // `format!` it replaces.
-    crate::manage::joined(
-        b"retention",
-        &[
-            wing.as_ref(),
-            room.as_ref(),
-            days.to_string().as_bytes(),
-            at.as_ref(),
-        ],
-    )
-}
-
 impl VaultStore {
     pub(crate) fn init_retention_schema(&self) -> Result<(), StoreError> {
         self.conn.execute_batch(
@@ -212,9 +193,13 @@ impl VaultStore {
             ));
         }
         let now = now_rfc3339();
-        let tag = self
-            .vault
-            .tag(retention_canonical(wing, room, max_age_days, &now).as_slice());
+        let tag = self.vault.row_tag(&crate::rows::retention(
+            self.row_format(),
+            wing,
+            room,
+            max_age_days,
+            &now,
+        ));
         let rest = if room.is_empty() {
             wing.to_string()
         } else {
@@ -632,7 +617,7 @@ impl VaultStore {
         if on == LabelUse::Decide {
             self.labels_authenticated(snap)?;
         }
-        let boundary = self.rotation_boundary(snap, on)?;
+        let boundary = self.rewrite_boundary(snap, on)?;
         let mut findings = Vec::new();
         let mut seen = std::collections::HashSet::new();
         // Read by type (ROADMAP O269 item 2): a row no read takes is a
@@ -685,7 +670,10 @@ impl VaultStore {
                 ) {
                     (Some(w), Some(rm), Some(d), Some(tag), Some(at)) => self
                         .vault
-                        .verify_tag(&retention_canonical(w, rm, d, at), tag)
+                        .verify_row_tag(
+                            &crate::rows::retention(self.row_format(), w, rm, d, at),
+                            tag,
+                        )
                         .is_ok(),
                     _ => false,
                 };
@@ -716,8 +704,8 @@ impl VaultStore {
             let key = Namespace::Retention.record(&rest);
             let verifies = self
                 .vault
-                .verify_tag(
-                    retention_canonical(&wing, &room, days, &at).as_slice(),
+                .verify_row_tag(
+                    &crate::rows::retention(self.row_format(), &wing, &room, days, &at),
                     &tag,
                 )
                 .is_ok();
@@ -777,7 +765,7 @@ impl VaultStore {
         if on == LabelUse::Decide {
             self.labels_authenticated(snap)?;
         }
-        let boundary = self.rotation_boundary(snap, on)?;
+        let boundary = self.rewrite_boundary(snap, on)?;
         let mut findings = Vec::new();
         let mut seen = std::collections::HashSet::new();
         // Read by type, as the retention scan is (ROADMAP O269 item 2).
@@ -809,7 +797,7 @@ impl VaultStore {
                 ) {
                     (Some(w), Some(t), Some(tag), Some(at)) => self
                         .vault
-                        .verify_tag(&crate::manage::wing_trust_canonical(w, t, at), tag)
+                        .verify_row_tag(&crate::rows::wing_trust(self.row_format(), w, t, at), tag)
                         .is_ok(),
                     _ => false,
                 };
@@ -831,8 +819,8 @@ impl VaultStore {
             let key = Namespace::Trust.record(&wing);
             let verifies = self
                 .vault
-                .verify_tag(
-                    crate::manage::wing_trust_canonical(&wing, &trust, &at).as_slice(),
+                .verify_row_tag(
+                    &crate::rows::wing_trust(self.row_format(), &wing, &trust, &at),
                     &tag,
                 )
                 .is_ok();
@@ -1480,9 +1468,12 @@ mod tests {
             meta.contains("last spring"),
             "PREMISE: the clock was rewritten"
         );
-        let tag = store
-            .vault
-            .tag(&crate::canonical(&legacy.id, meta.as_bytes(), &content));
+        let tag = store.vault.row_tag(&crate::rows::drawer(
+            store.row_format(),
+            &legacy.id,
+            meta.as_bytes(),
+            &content,
+        ));
         store
             .conn
             .execute(

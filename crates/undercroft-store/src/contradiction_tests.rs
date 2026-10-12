@@ -755,7 +755,8 @@ fn o296_every_legitimate_state_still_settles() {
         let root = dir.path();
         mgr(root).create(VAULT, level).unwrap();
         let s = settled("a fresh vault", root, None);
-        assert_eq!(s.chain_state().unwrap().1, 1);
+        // The chain's switch commitment (O233) and the row-tag walk's (O406).
+        assert_eq!(s.chain_state().unwrap().1, 2);
         assert!(keycheck(root).is_some(), "{level:?}: seeded");
 
         let dir = TempDir::new().unwrap();

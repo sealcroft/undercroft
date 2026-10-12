@@ -351,6 +351,33 @@ check "kg query shows current"    0 "globex"                         -- "$BIN" k
 check "kg as-of shows history"    0 "acme"                           -- "$BIN" kg query alice --as-of 2024-06-15
 check "kg timeline"               0 "acme"                           -- "$BIN" kg timeline --entity alice
 check "kg stats"                  0 "triples: 2"                     -- "$BIN" kg stats
+# ROADMAP O406: the vault's row tags are in the version-2 format from its
+# first writable open — its manifest says version 2 — and `verify` carries the
+# identity and field-shape legs, by line on the CLI and by count over MCP. A
+# validity bound is a date: an empty one is refused on both surfaces that
+# write a fact, and an absent one is the open window it always was.
+check "O406: the walked vault's manifest is version 2" 0 '"version": 2' -- \
+  cat "$UNDERCROFT_HOME/vaults/default/vault.json"
+check "O406: verify names the identity leg"     0 "identity:        0"  -- "$BIN" verify
+check "O406: verify names the field-shape leg"  0 "field shapes:    0"  -- "$BIN" verify
+check "O406: kg add refuses an empty bound"     1 "empty or holds a control character" -- \
+  "$BIN" kg add alice works_at initech --to ""
+O406_MCP="$(printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"undercroft_kg_add","arguments":{"subject":"alice","predicate":"works_at","object":"initech","valid_to":""}}}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"undercroft_verify","arguments":{}}}' \
+  | "$BIN" serve-mcp 2>/dev/null)"
+if grep -F '"id":2' <<<"$O406_MCP" | grep -qF '"isError":true' \
+   && grep -qF 'empty or holds a control character' <<<"$O406_MCP"; then
+  echo "ok    O406: MCP kg_add refuses an empty bound"; PASS=$((PASS+1))
+else
+  echo "FAIL  O406: MCP kg_add refuses an empty bound"; echo "$O406_MCP" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+if grep -qF 'identity: 0' <<<"$O406_MCP" && grep -qF 'shapes: 0' <<<"$O406_MCP"; then
+  echo "ok    O406: MCP verify counts the identity and shape legs"; PASS=$((PASS+1))
+else
+  echo "FAIL  O406: MCP verify counts the identity and shape legs"; echo "$O406_MCP" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 # U12: the receipt summary must NAME every verdict it counts. `unreceipted`
 # was tallied into a bucket the summary line never printed — invisible until
 # U12 made it reachable for a fact (a citation with no binding: a plain
@@ -4464,6 +4491,12 @@ rest_body "verify after rotate" '"ok":true'       -- -X POST "$API/vaults/acme/v
 # ROADMAP O233: the eighth leg reaches the wire, and a rotation keeps the
 # labels it bound — the commitment is preserved verbatim.
 rest_body "O233: /v1 verify names the label commitment" '"label_commitment":"intact"' -- \
+  -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
+# ROADMAP O406: the identity and field-shape legs reach the wire, empty on a
+# rotated vault — a rotation keeps the tag regime and re-tags in it.
+rest_body "O406: /v1 verify carries the identity leg" '"identity":[]' -- \
+  -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
+rest_body "O406: /v1 verify carries the field-shape leg" '"shapes":[]' -- \
   -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
 # ROADMAP O234: the version leg reaches the wire too — and this vault has just
 # been ROTATED, which re-tags every row and records nothing per row, so a leg

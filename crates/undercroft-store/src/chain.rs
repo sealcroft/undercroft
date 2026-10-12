@@ -1554,6 +1554,38 @@ impl crate::VaultStore {
         Ok(self.newest_record(snap, &label, on)?.map(|r| r.seq))
     }
 
+    /// **Where every row tag was last legitimately rewritten with no record
+    /// per row** — `max(this key's rotation, the version-2 tag commitment)`,
+    /// in ONE function (ROADMAP O406 item 9), and the only reader of
+    /// [`rotation_boundary`](Self::rotation_boundary) (a source count holds
+    /// it: `every_tag_comparison_reads_the_one_rewrite_boundary`).
+    ///
+    /// The tag walk re-tags every row and appends ONE record, as a rotation
+    /// does, so below it the chain cannot carry the current tag of any row
+    /// and a comparison of a row with its newest record must stop there.
+    /// Both consumers take it — O234's version arms and `refuse_replayed`
+    /// through `version_boundary`, and the two O230 policy scans — because
+    /// without the second every trust and retention row reads "not the
+    /// newest assignment" after the walk, `wing_trusts()` raises and every
+    /// floored search fails; and without the first every row written since
+    /// O233's switch reads as a replayed version.
+    ///
+    /// The commitment is read by exact label and `MIN(seq)`, so a copy of
+    /// its label appended later cannot lift the boundary (O247's shape: the
+    /// replay refuses such a copy, and nothing else does).
+    pub(crate) fn rewrite_boundary(
+        &self,
+        snap: &Snapshot<'_>,
+        on: LabelUse,
+    ) -> Result<Option<i64>, StoreError> {
+        let rotated = self.rotation_boundary(snap, on)?;
+        let walked = match crate::retag::tag_regime(snap.conn())? {
+            crate::retag::TagRegime::V2 { switch_seq } => Some(switch_seq),
+            crate::retag::TagRegime::V1 => None,
+        };
+        Ok(rotated.max(walked))
+    }
+
     /// Install a verdict the OPEN's replay produced, so the first guarded
     /// read does not walk the same rows again (ROADMAP O251).
     ///
@@ -2060,13 +2092,16 @@ mod tests {
         let store = reopen(&dir).unwrap();
         assert!(matches!(regime(&store.conn).unwrap(), Regime::V2 { .. }));
         drop(store);
-        // The anchor as it was before the switch committed: behind by one.
+        // The anchor as it was before the switch committed: behind by two —
+        // the switch's commitment and the row-tag walk's after it (ROADMAP
+        // O406), which a version-1 manifest anchored BELOW its commitment is
+        // healed forward over, and raised.
         std::fs::write(&manifest, &before).unwrap();
         let store = reopen(&dir).unwrap();
         assert!(
             matches!(
                 store.anchor_at_open,
-                crate::AnchorState::Healed { behind_by: 1 }
+                crate::AnchorState::Healed { behind_by: 2 }
             ),
             "{:?}",
             store.anchor_at_open
@@ -3382,6 +3417,53 @@ mod tests {
         assert!(
             !production_sites("replay.rs", concat!("chain::", "newest_record(")).is_empty(),
             "premise: the scanner finds the one call the list names"
+        );
+    }
+
+    /// **ROADMAP O406 item 9: ONE boundary.** Every comparison of a row's tag
+    /// with its newest chain record stops at
+    /// [`VaultStore::rewrite_boundary`], and nothing in production reads the
+    /// rotation's boundary around it — a consumer that did would read every
+    /// row the version-2 walk re-tagged as a replay (the version arms) or as
+    /// "not the newest assignment" (the policy scans), and a floored search
+    /// would fail on every walked vault. Counted against the source, both
+    /// consumers named.
+    #[test]
+    fn every_tag_comparison_reads_the_one_rewrite_boundary() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut rotation: Vec<(String, String)> = Vec::new();
+        let mut rewrite: Vec<(String, String)> = Vec::new();
+        for entry in std::fs::read_dir(&src).expect("the crate's own src is readable") {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            for f in production_sites(&name, ".rotation_boundary(") {
+                rotation.push((name.clone(), f));
+            }
+            for f in production_sites(&name, ".rewrite_boundary(") {
+                rewrite.push((name.clone(), f));
+            }
+        }
+        rotation.sort();
+        rewrite.sort();
+        assert_eq!(
+            rotation,
+            [("chain.rs".to_string(), "rewrite_boundary".to_string())],
+            "the rotation's boundary is read through the one rewrite boundary alone"
+        );
+        assert_eq!(
+            rewrite,
+            [
+                ("replay.rs".to_string(), "version_boundary".to_string()),
+                (
+                    "retention.rs".to_string(),
+                    "retention_policy_scan".to_string()
+                ),
+                ("retention.rs".to_string(), "trust_policy_scan".to_string()),
+            ],
+            "O234's arms and both O230 policy scans take the rewrite boundary"
         );
     }
 

@@ -2284,6 +2284,18 @@ fn print_verify_report(report: &undercroft_store::VerifyReport) {
     for s in &report.storage {
         outln!("  STORAGE: {s}");
     }
+    // ROADMAP O406 item 8: what a field boundary moved, or a tag moved
+    // between tables, moves — a fact whose id its own fields do not derive,
+    // one id naming rows in two tables, and a covered field holding a shape
+    // no write produces. Each is a row whose tag still verifies.
+    outln!("identity:        {}", report.identity.len());
+    for i in &report.identity {
+        outln!("  IDENTITY: {i}");
+    }
+    outln!("field shapes:    {}", report.shapes.len());
+    for s in &report.shapes {
+        outln!("  SHAPE: {s}");
+    }
     // Drawer supersession links are part of the vault's integrity
     // story: a receipted link that fails its HMAC is tampering,
     // reported with the same severity as a bad record. The leg now

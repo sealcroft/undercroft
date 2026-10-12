@@ -50,7 +50,18 @@ modification: every read verifies, `verify` audits everything.
   availability attack, self-healed by an index rebuild) but can never
   forge a record, since every returned row still verifies its HMAC.
 - **Integrity**: HMAC-SHA256 per record (independent key) over
-  id + metadata + at-rest content; append-only audit table; chain head
+  id + metadata + at-rest content — since 1.7.0 in an UNAMBIGUOUS row
+  canonical: `undercroft.row.v2/<table>` first, every field
+  length-prefixed, every optional field a numbered TLV where absent is not
+  empty, under a sixth HKDF subkey, `row` (ROADMAP O406). **A tag proves a
+  run of bytes, not where each field ends**, and the version-1 canonicals
+  joined their fields by a separator with no lengths, no table domain and one
+  key: a writer WITHOUT the key could move a field boundary, or carry a
+  fact's row and tag onto a drawer row (measured: served by `get` and
+  `wake_up` under `VERIFY OK`). A vault switches once, at its first writable
+  open under 1.7.0, after `verify` finds nothing the re-tag would bind — and
+  until it does, `verify`'s identity and shape legs name the moves the old
+  format admits. Append-only audit table; chain head
   `h_i = HMAC(chain, "undercroft.chain.v2" ‖ lp(h_{i-1}) ‖ lp(record_id_i) ‖
   lp(tag_i) ‖ lp(at_i))` committed in `chain_meta` in the same transaction
   as the write, and anchored in a MAC'd manifest. Deletions log keyed
@@ -115,7 +126,7 @@ What one record goes through, at rest and on read:
 flowchart LR
     subgraph write["write (sealed vault)"]
         c["content"] --> z["zstd compress<br/><i>own frame, no shared dictionary</i>"] --> e["XChaCha20-Poly1305<br/><i>AAD: vault id + record id</i>"]
-        e --> h["HMAC-SHA256 tag<br/><i>id ␟ meta_at_rest ␟ sealed bytes</i>"]
+        e --> h["HMAC-SHA256 tag (row key)<br/><i>row.v2/drawer ‖ lp(id) ‖ lp(meta_at_rest) ‖ lp(sealed bytes)</i>"]
         e --> row["SQLite row"]
         h --> row
         row --> chain["audit row + chain head<br/><i>same transaction</i>"]
