@@ -118,9 +118,31 @@ fn rotation_refusal(blockers: &[String]) -> String {
          fails or a receipt that does not verify, restore it from a backup that \
          verifies or delete it; for a broken audit chain, restore a backup that \
          verifies; for a policy finding, re-declare the policy (`trust set`, \
-         `retention set` or `retention clear`).",
+         `retention set` or `retention clear`); for a storage finding or a row \
+         no read takes, restore the newest backup whose restore is accepted \
+         (`undercroft repair` rebuilds no index, so it mends none of these).",
         blockers.len()
     )
+}
+
+/// **Every phase-3 re-key changes exactly one row** (ROADMAP O269 item 4).
+///
+/// Each UPDATE finds its row by a key the rotation read out of the same
+/// table moments earlier, inside the exclusive hold, so no legitimate count is
+/// anything but one. The count was discarded, so a row its index had lost —
+/// a missing autoindex entry on a table re-keyed by key — was re-keyed in
+/// ZERO rows and left tagged under the retired key: a vault that verified
+/// before the rotation and failed after it. Any other count refuses, in the
+/// integrity class, and the hold rolls the whole rotation back.
+pub(crate) fn one_row(changed: usize, what: &str, key: &str) -> Result<(), StoreError> {
+    if changed == 1 {
+        return Ok(());
+    }
+    Err(StoreError::IntegrityFinding(format!(
+        "key rotation refused, and nothing was re-keyed: re-keying {what} {key:?} changed \
+         {changed} row(s), not one — the row is not where the table's own index says it is. \
+         Run `undercroft verify`, whose storage leg names the damage (ROADMAP O269)"
+    )))
 }
 
 impl VaultStore {
@@ -855,12 +877,20 @@ impl VaultStore {
                      WHERE seq = ?1",
                 )?;
                 for d in &drawer_upds {
-                    up.execute(params![d.seq, d.content, d.emb, d.tag, d.fp, d.sup_receipt])?;
+                    one_row(
+                        up.execute(params![d.seq, d.content, d.emb, d.tag, d.fp, d.sup_receipt])?,
+                        "drawers seq",
+                        &d.seq.to_string(),
+                    )?;
                 }
                 let mut up =
                     tx.prepare("UPDATE kg_entities SET tag = ?2, name_rest = ?3 WHERE id = ?1")?;
                 for (id, tag, name_rest) in &entity_upds {
-                    up.execute(params![id, tag, name_rest])?;
+                    one_row(
+                        up.execute(params![id, tag, name_rest])?,
+                        "kg_entities id",
+                        id,
+                    )?;
                 }
                 let mut up = tx.prepare(
                     "UPDATE kg_triples SET object = ?2, tag = ?3, receipt_tag = ?4, support = ?5,
@@ -868,52 +898,76 @@ impl VaultStore {
                      WHERE id = ?1",
                 )?;
                 for (id, object, tag, receipt_tag, support, terms) in &triple_upds {
-                    up.execute(params![id, object, tag, receipt_tag, support, terms])?;
+                    one_row(
+                        up.execute(params![id, object, tag, receipt_tag, support, terms])?,
+                        "kg_triples id",
+                        id,
+                    )?;
                 }
                 let mut up = tx.prepare("UPDATE tunnels SET tag = ?2 WHERE id = ?1")?;
                 for (id, tag) in &tunnel_upds {
-                    up.execute(params![id, tag])?;
+                    one_row(up.execute(params![id, tag])?, "tunnels id", id)?;
                 }
                 let mut up = tx.prepare("UPDATE wing_trust SET tag = ?2 WHERE wing = ?1")?;
                 for (wing, tag) in &trust_upds {
-                    up.execute(params![wing, tag])?;
+                    one_row(up.execute(params![wing, tag])?, "wing_trust wing", wing)?;
                 }
                 let mut up = tx.prepare(
                     "UPDATE retention_policy SET tag = ?3 WHERE wing = ?1 AND room = ?2",
                 )?;
                 for (wing, room, tag) in &retention_upds {
-                    up.execute(params![wing, room, tag])?;
+                    one_row(
+                        up.execute(params![wing, room, tag])?,
+                        "retention_policy wing/room",
+                        &format!("{wing}/{room}"),
+                    )?;
                 }
                 let mut up = tx.prepare("UPDATE drawer_tok SET tok = ?2 WHERE id = ?1")?;
                 for (id, tok) in &tok_upds {
-                    up.execute(params![id, tok])?;
+                    one_row(up.execute(params![id, tok])?, "drawer_tok id", id)?;
                 }
                 let mut up = tx.prepare("UPDATE drawer_pq SET code = ?2 WHERE seq = ?1")?;
                 for (seq, code) in &pq_upds {
-                    up.execute(params![seq, code])?;
+                    one_row(
+                        up.execute(params![seq, code])?,
+                        "drawer_pq seq",
+                        &seq.to_string(),
+                    )?;
                 }
                 let mut up =
                     tx.prepare("UPDATE drawer_pq_wing SET code = ?3 WHERE wing = ?1 AND seq = ?2")?;
                 for (wing, seq, code) in &wing_pq_upds {
-                    up.execute(params![wing, seq, code])?;
+                    one_row(
+                        up.execute(params![wing, seq, code])?,
+                        "drawer_pq_wing wing/seq",
+                        &format!("{wing}/{seq}"),
+                    )?;
                 }
                 let mut up = tx.prepare("UPDATE pq_meta SET value = ?2 WHERE key = ?1")?;
                 for (key, blob) in &meta_dyn_upds {
-                    up.execute(params![key, blob])?;
+                    one_row(up.execute(params![key, blob])?, "pq_meta key", key)?;
                 }
                 let mut up =
                     tx.prepare("UPDATE pq_page SET blob = ?3 WHERE list = ?1 AND pageno = ?2")?;
                 for (list, pageno, blob) in &page_upds {
-                    up.execute(params![list, pageno, blob])?;
+                    one_row(
+                        up.execute(params![list, pageno, blob])?,
+                        "pq_page list/page",
+                        &format!("{list}/{pageno}"),
+                    )?;
                 }
                 let mut up = tx.prepare("UPDATE drawer_fde SET fde = ?2 WHERE id = ?1")?;
                 for (id, fde) in &fde_upds {
-                    up.execute(params![id, fde])?;
+                    one_row(up.execute(params![id, fde])?, "drawer_fde id", id)?;
                 }
                 for (table, key, blob) in &meta_upds {
-                    tx.execute(
-                        &format!("UPDATE {table} SET value = ?2 WHERE key = ?1"),
-                        params![key, blob],
+                    one_row(
+                        tx.execute(
+                            &format!("UPDATE {table} SET value = ?2 WHERE key = ?1"),
+                            params![key, blob],
+                        )?,
+                        &format!("{table} key"),
+                        key,
                     )?;
                 }
             }
@@ -921,9 +975,13 @@ impl VaultStore {
             // O237). Hex rather than a blob because the row it lives in is
             // `meta(key TEXT, value TEXT)`.
             if let Some(tag) = &pushed_marker_upd {
-                tx.execute(
-                    "UPDATE meta SET value = ?2 WHERE key = ?1",
-                    params![crate::remote::PUSHED_EMBEDDER_TAG_KEY, hex::encode(tag)],
+                one_row(
+                    tx.execute(
+                        "UPDATE meta SET value = ?2 WHERE key = ?1",
+                        params![crate::remote::PUSHED_EMBEDDER_TAG_KEY, hex::encode(tag)],
+                    )?,
+                    "meta key",
+                    crate::remote::PUSHED_EMBEDDER_TAG_KEY,
                 )?;
             }
             // The rotation's own audit row, inside the same transaction as

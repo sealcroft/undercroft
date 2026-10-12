@@ -4012,7 +4012,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**462** of the **477** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**465** of the **480** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -18471,6 +18471,698 @@ O406's P15f (its record of this date).
 **What remains open.** The build. Which release carries this entry is settled by O294's: it sits under
 `## 1.7.0 — unreleased` beside that entry (the note above), until the maintainer names another. P-U1 is
 done (O294's record): the ruling stands, and U+0295's class is one CHANGELOG must name.
+
+### O269 — CLOSED 2026-10-12: `verify` checks the file its rows live in, names a row no read can take, and a database that does not hold together is an integrity verdict
+
+**Filed 2026-09-26 by O268's ruling; measured by the integrator.** `verify` walks
+record tags and replays the chain; it never checks the database's page structure.
+One flipped byte in an index page (R3, seven pages tried on a 40-drawer vault):
+`verify` exited 0 on four where `PRAGMA integrity_check` reported `row N missing
+from index` — `idx_drawers_fp`, `idx_drawers_room`, `idx_drawers_wing_room` — so a
+scoped search or the dedup probe can miss a drawer on a vault `verify` calls
+clean. `PRAGMA quick_check` said `ok` on all seven: it does not compare indexes
+with their tables. And where `verify` does trip over corruption it does not return
+a verdict: a truncated `vault.db` answered `database disk image is malformed`, a
+flipped byte in a row `Conversion error … invalid utf-8`, both as
+`StoreError::Sqlite` — exit 1, the class `integrity_verdict`
+(`crates/undercroft-cli/src/main.rs`) tells a script means "retry", on a vault
+whose answer will never change. O268 checks a restore's stage with
+`integrity_check` and classes corruption in the stage's handle as integrity; the
+live vault's `verify` is this entry.
+
+**Shape, for a ruling panel**: a storage leg on `VerifyReport` (a tenth, so every
+renderer and `rotation_blockers()` must rule it), `integrity_check` or a cheaper
+equivalent measured at 10⁵ and 10⁶, and whether SQLite's `DatabaseCorrupt` and
+`NotADatabase` join the integrity set on every command — which moves the class of
+every surface at once and is why O268 did not take it.
+
+**Gate**: the R3 flips and the two row-level corruptions each fail `verify` as a
+verdict (exit 2 / 409 integrity) on every renderer. **Counterfactual**: today, exit
+0 on the index flips and exit 1 on the others.
+
+**Amended 2026-10-08 by O231's build.** The arm this entry's ruling shares with
+O231 exists now: `VerifyReport.bad_records` is a `Vec<BadRecord>`, each a record id
+and a `BadReason` (`TagFailed`, `MetaUnparseable`), serialized as one string — a
+bare id for a failed HMAC, as before, and `"<id>: <reason>"` otherwise. An
+undecodable row joins it as a new `BadReason` variant, and the compiler then asks
+for its ruling in three exhaustive matches: `rotation_blockers()` (this entry's
+item 2 makes it a blocker, where O232's ruling keeps an O231 row out), the CLI's
+split into `hmac failures:` and `unreadable:`, and MCP's counts. One more abort
+belongs to item 2: a supersession link or a fact receipt that cites an O231 row
+makes `verify` return the cited drawer's `CorruptRow` (exit 1, a 500 on `/v1`)
+instead of a verdict, because the receipt legs read it through `get`.
+`o231_a_link_citing_the_row_answers_an_error_never_ok` pins that. Separately, the two
+receipt legs now swallow an `Integrity` refusal only while a FAILED HMAC stands —
+an emptied leg must never drop a tampered receipt from the rotation's blockers;
+that test cannot exercise it, since `get` raises `CorruptRow` there, which the
+`Integrity` arm never caught. And a third abort, found by O231's independent
+review: when a keyless writer moves a drawer's meta/content boundary to a 0x1f
+LATER in its content, `meta_json` no longer holds UTF-8, `covered_row`'s
+`as_str()` fails before the tag is checked, and `verify` and `backup create`
+return `FromSqlConversionFailure` — the row is never named, though its tag
+verifies over those bytes. It is item 2's pre-tag arm, and it is also an O231
+row, which O232's ruling keeps out of the rotation's blockers while item 2 makes
+a pre-tag finding one: this entry's build rules which (O406 carries the
+measurement).
+
+**Relations:** shares a question with O263 — two legs of one class, the file is not what this engine wrote, with two different rotation answers.
+
+**Relations:** shares a diff surface with O406 — one arm for undecodable rows and unparseable meta, and the boundary move that produces both.
+
+The closed O231's own relation marker to this entry is retired by that line; the edge now runs between this entry and O406 (made reciprocal at train 1's integration, 2026-10-12).
+
+**Relations:** shares a diff surface with O318 — both change `storage_check` and `archive_verdict` in `crates/undercroft-store/src/restore.rs`; after this build an archive's storage damage reaches that entry's `backup verify` as a failed leg, and whichever lands second adjusts.
+
+**Relations:** shares a question with O349 — this entry's REINDEX ruling's reconsideration waits on that entry.
+
+#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
+
+**The question.** Whether `verify` gains a storage leg, by what check, where it runs, whether a finding blocks a
+rotation and `backup create`, and at what cost; what `verify` does with corruption it trips over; and — handed
+here by O268's ruling of 2026-10-06 — whether a restore's stage is REINDEXed rather than refused when the damage
+looks index-only. Whether SQLite's corruption codes become integrity verdicts OUTSIDE `verify`'s own checking is
+escalated in the panel analysis that follows.
+
+**Prior rulings found, and their disposition.**
+
+- **O268's ruling of 2026-09-26, item 5** ("`integrity_check`, not `quick_check`", R3) — FOLLOWED.
+- **O268's ruling of 2026-09-26, item 9** (corruption codes are integrity only for the stage's handle) with its
+  lost option ("a global remap … is its own question (O269)") — FOLLOWED: nothing here remaps an error outside
+  `verify`'s own report; the every-command question is escalated.
+- **O268's ruling of 2026-10-06**, item 1 (no override on any refusal class) and item 3 (salvage is O318's and
+  never installs in place) — FOLLOWED; they decide the REINDEX question (item 7).
+- **O232 ruling 1** — FOLLOWED and APPLIED at its own reason ("conditions the rotation cannot make worse"): a
+  storage finding is laundered or made worse by a rotation (item 4). The brief's "block only what a rotation
+  would launder" is narrower than that reason.
+- **O256's options that lost** — FOLLOWED as ruled ("a second full verify of the archive at create" stays
+  rejected; a leg inside the one verify `backup create` already runs is not that). Its reason's clause "storage
+  corruption, which belongs to restore", read as leaving a SOURCE vault's storage damage to restore, is REFUTED
+  with evidence O256 did not have, to be recorded beside it: R3, measured after O256, shows the `verify` backup
+  gates on is blind to index damage; restore refuses every such archive; and the prune keeps ten archives by
+  count, oldest first, after every `Created` (`backup.rs` 225; `backups.rs` 30, 258), so ten backups of a
+  damaged source evict the last archive a restore accepts.
+- **O113/O253** (one report, one snapshot; the anchor read before the pin) — FOLLOWED.
+- **The 2026-09-08 versioning ruling** — APPLIED.
+
+**Ruled.**
+
+1. **A storage leg, `VerifyReport.storage`, separate from O263's schema leg** (their rotation answers differ):
+   the full `PRAGMA integrity_check`, every row read, `ok` recorded as no finding, run FIRST inside `verify_in`'s
+   snapshot — so inside `backup create`'s pinned snapshot (`backup.rs` 175), inside the rotation's exclusive hold
+   (`rotate.rs` 216-226), in `repair`'s closing verify (`manage.rs` 1880) and on every surface. Not
+   `quick_check`: blind on 7 of 7 R3 flips, because it omits index validation (sqlite3.c 140758). Not a
+   table-scoped check: it skips the freelist and page accounting (run 1's reading, 81592-81595, 81679) and FTS5's
+   `xIntegrity` pass. Not hand-written counts: R3's flips keep the counts equal. A `DatabaseCorrupt` or
+   `NotADatabase` the pragma itself raises is the leg's finding, not an error.
+
+2. **No row aborts `verify`.** Every row `verify_in` reads is read by value type and never by a typed `get`
+   that can fail: `covered_row`'s `id` and `meta_json` before the tag (`lib.rs` 10690-10694), its four mirror
+   columns after it (10718-10721), the orphan-label leg's `record_id` (10880-10887), and the graph, tunnel,
+   policy and version walks. A value of the wrong type or invalid UTF-8 is a finding naming the row (by `seq`
+   where the id does not decode) in the leg that owns the read: before a tag, `bad_records` (a blocker); a mirror
+   column after a verified tag, `mirror_drift`; an audit label, the orphan-label leg. The tag is verified over the
+   bytes. The retention sweep classes such a row `unverifiable` and never destroys it. O231's `MetaUnparseable`
+   (counted and reported nowhere, `lib.rs` 10805-10821) shares the arm. `FromSqlConversionFailure` and
+   `InvalidColumnType` are classified only at these reads and never remapped at large: a code defect raises them
+   too. This is not only corruption: one keyless `UPDATE drawers SET wing = X'…'` produces it today, because
+   `integrity_check` admits a BLOB in a TEXT column of a non-STRICT table (sqlite3.c 140704-140712), and
+   `verify` then exits 1 and reports nothing else it found.
+
+3. **Corruption a later leg trips over is the storage leg's finding, unconditionally.** Only `SqliteFailure` with
+   `DatabaseCorrupt` or `NotADatabase`, raised inside `verify_in`'s snapshot: the storage leg names the leg it
+   stopped ("<leg> not run: <error>"), that leg takes its empty value, and `chain_ok` is false if the replay
+   itself could not run (a positive claim must not survive a leg that did not run).
+
+4. **A storage finding blocks a rotation**, and every phase-3 UPDATE asserts exactly one row changed. Three
+   mechanisms, the first two read here:
+   - **An index-hidden replay is laundered** (run 1). An offline writer replays an older `wing_trust` or
+     retention row and flips one byte in the `idx_audit_record_id` cell of the newer record. `newest_record` is an
+     indexed equality (`chain.rs` 704-713), so `policy_finding` is handed the older record and reports nothing,
+     while the chain replay, a table scan in `seq` order, stays green: `verify` OK today. A rotation appends a
+     `rotate/` record that becomes the boundary, and `policy_finding` compares only records above it
+     (`retention.rs` 983), so even after the index is repaired the replayed row, re-tagged under the new key,
+     never reads as drift again.
+   - **Zero-row re-keys** (both runs). Phase 3 discards every UPDATE's row count (`rotate.rs` 851-918); a
+     missing autoindex entry on a table re-keyed by key (`kg_entities`, `kg_triples`, `tunnels`, `wing_trust`,
+     `retention_policy`, `drawer_tok`, `drawer_fde`, the meta tables) leaves that row tagged under the retired key:
+     a vault that verifies before the rotation and fails after it. The assertion refuses as `IntegrityFinding`
+     and the rotation rolls back; inside the exclusive hold no legitimate count is anything else.
+   - **Freelist reuse** (run 2's reading of `btreeGetUnusedPage`, sqlite3.c 72986-73004, not re-read): a
+     whole-vault rewrite over freelist damage spreads it.
+
+5. **`backup create` refuses on a storage finding** through its existing `Refused(report)` (O256 disposition
+   above).
+
+6. **Restore: one implementation, and the refusal says why.** `storage_check` (`restore.rs` 164-176) is deleted
+   and its call (278-280) goes; the stage's `verify` carries the leg. Today a storage refusal reaches the
+   operator as `storage_check`'s `IntegrityFinding` text naming the missing rows, while a `Refused(report)` prints
+   only "it fails integrity verification" on the CLI (`main.rs` 4594-4601) and on `/v1` (`tenant.rs` 2420-2428);
+   folding storage into the report without projecting it there would drop the only diagnostic about an archive
+   the operator cannot verify otherwise. So both `Refused` arms render the refused report's findings, every leg,
+   through the projection `verify` uses. `o268_a_corrupt_index_passes_verify_and_is_still_refused` is
+   re-expressed — every other leg passes and the storage leg names the index; the restore refuses — never
+   deleted.
+
+7. **No REINDEX on a restore's stage.** REINDEX rebuilds an index FROM its table, so it conforms the indexes to
+   damage on the table side of an indexed column instead of repairing it. One flipped byte in a `drawers`
+   leaf's rowid that keeps `seq` order reads "row N missing from index" on every index of `drawers` — the shape
+   of index-only damage — and after REINDEX passes `integrity_check` and every `verify` leg, because the drawer's
+   tag does not cover `seq`; but `drawers_fts` is keyed by `seq` (`lib.rs` 6759-6762) and so is `drawer_pq`
+   (`pqidx.rs` 634-641), and the open's FTS staleness test compares counts only (6698-6711), so the restored
+   hmac-only vault's prefilter answers a query with the orphaned row and cuts the drawer out of search
+   (6658-6660). `drawers.fp` and `filed_at` are the same shape, outside every leg. Today such an archive is
+   refused; with REINDEX it would install, silently. Salvage stays O318's, which never installs in place, and
+   O319 must not document a "REINDEX a copy, then restore it" route, which launders the same way. Reconsidered
+   only once new entry 2 below gives `verify` a leg that sees `seq`-keyed and `fp`-keyed structures against the
+   drawers they derive from — and then it is a new outcome on `backup restore`, a MINOR the maintainer decides.
+
+8. **No `immutable=1` escalation on corruption** (run 1). `connect_read_only` escalates on every probe failure
+   that is neither busy nor a deleted vault (`lib.rs` 5612-5620), and the immutable read takes the main file
+   without its WAL (the code's own comment, 5587-5594), so a vault whose bytes do not hold together is reopened
+   onto the posture whose reads are least trustworthy, announced as an unwritable directory. A `DatabaseCorrupt`
+   or `NotADatabase` from the ordinary probe is answered as itself, carved out exactly as O257 carved out busy;
+   the escalation stays for everything else. A deny-list, never an allowlist: what a write-protected mount
+   returns is unmeasured (O286).
+
+9. **Cost is measured and recorded, and never weakens the check** (integrity is not a tier). On record at ~10⁵
+   sealed: `integrity_check` alone 445 ms beside `verify` 674 ms and a backup pin of 723-757 ms (O268's and
+   O256's built records), so a pin near 1.2 s against O256's ~2 s line and `verify` near 1.1 s. That figure is
+   narrow — one sealed corpus of short notes, no derived tier, no FTS, read from an `immutable=1` archive
+   (`restore_tests.rs` 865-982) — and hmac-only is missing from every figure, where FTS5's `xIntegrity`
+   re-tokenizes every `%_content` row. The rotation's hold measured 2.56 s at 102,000 (O257's P8); +~0.45 s
+   moves the arriving open's 5 s crossover from ~2×10⁵ toward ~1.7×10⁵ drawers (run 2's arithmetic, not
+   measured). Before merge the integrator runs P-O269b and P-O269h and publishes the figures; a breach of
+   O256's ~2 s pin line or of the rotation hold's crossover is answered by scheduling, on O258's line (a waiter
+   starved past its busy budget), never by `quick_check`, a scoped check or a narrower verify on one surface. 10⁶ is a long run and needs the maintainer's go; until it runs, no surface
+   states a 10⁶ cost. The leg is also agent-callable through `undercroft_verify` (not operator-only), a cost
+   stated rather than fenced.
+
+10. **Surfaces.** The four renderers and `HAND_PROJECTED` (MCP by count, `ui.html` rows through `textContent`
+    because an index name in an `integrity_check` row is chosen by whoever wrote the file); `rotation_blockers()`
+    destructures the new field with no `..`; `docs/AGENTS.md`'s list of what `verify` checks; the stale leg
+    counts named under O263; every diagram that counts the legs (O105).
+
+11. **The remedy `UPGRADING.md` names is stated precisely.** `repair` rebuilds every index from its table (its
+    VACUUM, `manage.rs` 1870) and re-embeds every drawer, which under a served embedder sends the corpus to the
+    endpoint (O167's egress). That repairs damage confined to an index; damage on the table side of an indexed
+    column is conformed, not repaired (item 7's mechanism, which a live `repair` shares), and the text says so and
+    names the alternative: restore the newest archive whose restore is accepted.
+
+    **Item 11's premise refuted, 2026-10-12, by O269's build and the independent review of it — recorded beside
+    the item, which is not changed.** `repair`'s VACUUM never rebuilt an index. `sqlite3RunVacuum` (sqlite3.c
+    3.46.0, the copy `libsqlite3-sys` 0.30.1 bundles, line 155110) copies each table into the new file with
+    `INSERT INTO vacuum_db.<t> SELECT * FROM main.<t>` (155265-155273), and that statement takes
+    `xferOptimization` (135876, "particularly useful at making VACUUM run faster"), whose index loop
+    (136187-136242) reads each SOURCE index's records with `OP_RowData` over the source index cursor and
+    `OP_IdxInsert`s them into the destination index — an index's records copied as they stand, never computed
+    from the table's rows. Measured too: after `repair`, `verify` still named `row 11 missing from index
+    idx_drawers_room`. So index damage has had NO repair remedy in any release, and its remedy is a restore.
+    The first build added `REINDEX` to `repair` to make the premise true, and its review removed it: that was a
+    change of remedy no ruling made, and REINDEX conforms an index to its table — the laundering item 7 refuses
+    for a restore's stage, which `repair` would then perform in place, on the live vault, over a TABLE-side flip
+    that reads exactly like index damage. The gate's "`repair` over an R3 index flip brings `verify` back to OK"
+    falls with the premise; the build's gate is a restore of an archive taken before the damage. Whether index
+    damage should get a rebuild, and with what detection of a table-side flip first, is O434's question
+    for a ruling panel.
+
+**The gate.** Each R3 flip on the LIVE vault fails `verify` as a verdict on all four renderers (exit 2,
+`"ok": false`, MCP `isError`), and `backup create` and `vault rotate` refuse it; `repair` over an R3 index flip
+brings `verify` back to OK; the UTF-8 row flip and a BLOB in `drawers.wing`, in `meta_json` and in a bare-id
+`audit.record_id` are each named by `seq` while every other leg still reports; P-L2c (the index-hidden replay:
+today `verify` passes and a rotation launders it; with the leg `verify` fails on storage and the rotation
+refuses); P-O269e (an autoindex entry removed in `kg_entities`, then a rotation: today the row stays under the
+retired key; now refused before any work); P-L2d (ten backups of an R3-flipped vault: today ten `Created` and the
+good archives pruned; now each refused); a corrupt index in an archive refuses its restore with the storage
+findings in the CLI's and `/v1`'s refusal text. A property gate: build a vault, read every TEXT column of every
+table from `table_xinfo` (O80), retype each to BLOB and to invalid UTF-8 one at a time; `verify` returns a report
+every time, never an error. **Counterfactual**: today, exit 0 on the index flips and exit 1 on the row flip. The
+truncated `vault.db` of this entry's gate may fail at OPEN, before `verify` runs — P-O269f decides whether its arm
+is met here (a truncation surfacing inside the walk is item 3's) or waits on the escalated question below; on MCP
+it is unreachable by any design, because `serve-mcp` opens its store before it serves a tool (`main.rs`
+3440-3457).
+
+**Where the two runs disagreed, and what settled it.**
+
+- **The fold of later corruption (item 3).** Run 1 folded only while the storage leg had already found damage;
+  run 2 folded unconditionally. Settled for run 2, with run 1's empty-value and `chain_ok` detail: inside one WAL
+  snapshot on a non-immutable handle a corruption code is a property of the file's bytes, and run 1's own item 5
+  ("one undecodable row does not erase the report") argues the same way; a conditional fold returns an error
+  exactly where `integrity_check`'s coverage happens to stop.
+- **REINDEX (item 7).** Run 1 escalated it, recommending it be offered automatically as a MINOR with a shape that
+  "decides nothing by SQLite's text"; run 2 ruled it out. Settled for run 2 by the `seq`-keyed reading in item 7:
+  run 1's shape accepts any damage REINDEX can make consistent, table-side damage included, and run 1's answer
+  that "a keyless writer could already make `fp` invisible" addresses a deliberate writer, not the accidental
+  damage a restore's refusal exists to stop, and misses `seq`.
+- **O256's disposition.** Run 1 "followed"; run 2 "refuted for the source". Reconciled above: followed as ruled,
+  its reason's clause refuted for the source, recorded beside O256.
+- **Cost as a condition.** Run 1 made P-O269b/h a condition of merge; run 2 recorded cost only. Reconciled in item
+  9: the measurement is owed before merge as any unit's cost is (definition of done item 6), and its result never
+  removes or narrows the leg.
+- **Item 8** was run 1's alone; run 2 neither ruled nor contradicted it. Kept on the reading above.
+
+**Options that lost, with their cost.** `quick_check`, a scoped check and hand counts (item 1). A separate command
+or flag: `verify`, `backup create` and the rotation stay blind by default — the R3 state. Keeping `storage_check`
+beside the leg: two implementations of one decision and `integrity_check` twice per restore (+445 ms at 10⁵).
+One leg merged with O263's schema leg: their rotation answers differ. Not a blocker: item 4. Run 2's lens 3's
+check of the COPY after the snapshot: the source and the copy are the same pages, `backup.rs` documents every
+failure after the verify as the I/O class, and it brings back the check of the archive O256 rejected. A
+verify-scoped remap of corruption errors at the verify door's own open (run 1's security lens): `verify` would
+answer exit 2 on bytes `search`, `stats` and `recent` answer exit 1, the per-command split `docs/AGENTS.md` records
+as the defect its one classifier fixed — escalated whole below. REINDEX in the stage: item 7.
+
+**Claims refuted, the briefs' first.** The brief frames index corruption as availability ("a scoped search or the
+dedup probe can miss a drawer"); it is integrity — item 4's hidden replay, and identity resolution:
+`delete_drawer_ruled` and `destroy_in` find a drawer through `id`'s autoindex (`manage.rs` 1015-1019, 1064-1070),
+so a missing entry makes `forget` answer that a drawer every scan still serves does not exist. The brief omits
+that corruption pushes the read-only open onto `immutable=1` (item 8). The brief's table presents 445 ms as
+"`integrity_check` at 10⁵"; it is item 9's narrow corpus. The brief calls decode failures "corruption"; a keyless
+writer produces them on purpose (item 2). The brief's "O232: block only what a rotation would launder" is narrower
+than O232's reason. This entry's own gate ("on every renderer" for the truncated file) cannot be met on MCP.
+Run 1's REINDEX claim that table damage REINDEX cannot repair "still fails the second check or a leg": refuted by
+item 7. Run 1's memory lens's "O232's criterion does not reach this leg": refuted by item 4. Run 2's lens 3's "not
+a blocker, row-count assertion only": the laundering mechanism has no per-statement guard. Run 2's lens 2's
+"fourteen tags": thirteen. Run 1's "FTS5's `xIntegrity` ignores `isQuick`" (sqlite3.c 252576) was not re-read
+here and decides nothing.
+
+**Probes owed by the build.** P-O269a: R3 on the live vault through each renderer, today and after. P-O269b: cost
+at 10⁵ with realistic chunks and the PQ and wing-PQ tiers built, both levels — `verify` alone, the check alone,
+inside backup's pin with a writer saving every 10 ms (against O256's ~2 s line), inside the rotation's hold.
+P-O269c: 10⁶, on the maintainer's go. P-O269d: one flipped `drawers_fts_data` page — `integrity_check` reports it
+through FTS5's `xIntegrity` by reading; the probe settles whether the prefilter under-returns meanwhile. P-O269e
+and P-L2c, P-L2d as in the gate. P-O269h: the hmac-only cost (FTS5's re-tokenization), a late-interaction vault, a
+read-audited vault whose `audit` is ~10× its drawers. P-O269f and P-O269g: see the analysis below. P-O286x, for
+item 8: on a write-protected mount (or O286's harness once it reaches the escalation), record the ordinary probe's
+error code and confirm it is neither `DatabaseCorrupt` nor `NotADatabase`.
+
+**Dissent.** None on the leg, its check, its placement, its blocker status or the deletion of `storage_check`.
+Run 1's position on REINDEX is recorded above and refuted on evidence.
+
+**Fails silently if**: `quick_check` or a scoped check is chosen for cost; the check runs outside `verify_in`'s
+snapshot or reads only its first row; the leg misses a renderer, or MCP prints its rows; `rotation_blockers()`
+gains a `..`; one addressed phase-3 UPDATE goes unchecked; the restore's `Refused` arms still print no findings
+once `storage_check` is gone; the `restore_tests.rs` premise is deleted rather than re-expressed; only the
+pre-tag reads move to bytes, or an undecodable row is reported nowhere, as `MetaUnparseable` is today; item 3
+folds conversion errors, or becomes conditional; item 8 becomes an allowlist; a REINDEX route appears in the stage,
+in salvage or in O319's runbook; the cost is measured on the short-note sealed corpus only, at 10³, or claimed at
+10⁶ without a run.
+
+**What remains.** The escalated class question (next subsection). Residuals stated: on an `immutable=1` handle
+beside a writer — the posture the open already warns is wrong — torn pages can read as storage findings, as they
+can already read as a broken chain; derived lookup structures keyed by `seq` or `fp` are outside every leg (new
+entry 2). Relations owed (O169), reciprocal on both entries: O269 with O231 (one arm for undecodable rows and
+unparseable meta), O269 with O318 (shares `restore.rs`'s `storage_check` and `archive_verdict`; after this build
+an archive's storage damage reaches O318's `backup verify` as a failed leg — exit 2, 200 `ok: false` — instead of
+`storage_check`'s `IntegrityFinding`, and whichever lands second adjusts), O269 with O263, and O269 with new entry
+2 (item 7's reconsideration waits on it).
+
+**Version class.** PATCH: the leg reports an existing silent defect (the 2026-09-08 ruling); a rotation or a backup
+refusing a vault that fails `verify` is their documented behaviour; and `verify` answering exit 2 rather than exit
+1 on a row that does not decode is the door's own documented "exit 2 on failure" (`docs/AGENTS.md`'s `verify`
+line) that the abort contradicted. `UPGRADING.md` owes an entry in the same unit: a vault carrying R3-class damage
+or an undecodable row now fails `verify`, and `backup create` and `vault rotate` refuse it; item 11's remedy,
+worded as stated there; `config check` opens no vault database and cannot pre-flight it — the pre-flight is the
+new binary's `verify --read-only`.
+
+#### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
+
+**The question.** When a command other than `verify`'s own checking meets SQLite corruption — at its open (the
+connector's probe, the schema batch, the read-only open's first read) or partway through — is that an integrity
+verdict (exit 2 on the CLI, 409 `class: "integrity"` on `/v1`, as one set) or the run failure it is today (exit 1;
+a 500 through `store_err`'s catch-all)? The codes are `DatabaseCorrupt` and `NotADatabase`. A truncated `vault.db`
+answered `database disk image is malformed`; where it surfaces is P-O269f's to say.
+
+**Prior ruling.** O268's ruling of 2026-09-26, item 9 — FOLLOWED: its stage-only mapping stays, and it named this
+exact question as this entry's.
+
+**Why it is escalated.** The published contract states both answers and nothing in the tree decides which binds.
+`docs/AGENTS.md` (the paragraph beginning "Exit 2 means an integrity verdict", working tree 992-1031) and the doc of
+`EXIT_FAILURE` (`main.rs` 2001-2003) list "an unreadable vault" under exit 1; the same paragraph defines exit 2 by
+retry semantics ("a compliance script may retry exit 1; retrying exit 2 only re-detects the tampering"), and
+corruption in stored bytes never heals on a retry. If "unreadable" covers malformed bytes, moving it changes a
+documented contract — MAJOR — and that release consequence is the maintainer's. 1.0.0 moved rollback-at-open from
+exit 1 to exit 2, but 1.0.0 was a version reset and is no precedent for a PATCH; the 2026-09-08 ruling covers new
+surface that reports a defect, not an existing exit code that moves.
+
+**Evidence for.** The retry rationale fits a malformed database exactly. The same sentence lists "a missing file"
+under exit 1 while a missing DATABASE beneath a manifest has been exit 2 since A33 (`DatabaseMissing`), so its
+nouns read as the run's inputs and environment rather than the vault's bytes. `archive_verdict` already classes
+these codes as integrity for the stage (`restore.rs` 106-144). A planted malformed schema object surfaces as exactly
+this code at open (O263).
+
+**Evidence against, and costs.** Every command's class moves at once (O268's stated reason). A handle escalated to
+`immutable=1` for a reason other than corruption, beside a writer, can read torn pages and raise the code on an
+intact vault (`lib.rs` 5640-5646 warns this posture is wrong beside a writer; the RULED item 8 removes only the
+escalation's corruption path). FTS5 raises `SQLITE_CORRUPT_VTAB` for a damaged accelerator, which would then page
+as tampering.
+
+**Options.**
+
+- **A — one classifier at the store's error conversion** (run 1's recommendation): `Sqlite(#[from] …)` becomes a
+  hand-written `From` mapping `DatabaseCorrupt`/`NotADatabase` to a new `StoreError::StorageCorrupt`, worded as
+  damage rather than tampering (O235), joined to the CLI's exit-2 set and `/v1`'s integrity class as one set (the
+  one-set test gains it on both sides), with an O115 mint-site row and `archive_verdict` moved onto it. It loses on
+  evidence: the conversion sees a `StoreError` only, never the handle's posture, so the `immutable=1` torn read
+  above pages a tamper verdict on every command.
+- **B — a typed integrity-family variant minted by the store at named doors, only on a non-`immutable` handle**
+  (run 2's recommendation, refined): the connector's probe and first locking statement, the writable schema batch,
+  and the read-only open's first content read. Same O115 row and one-set test. Corruption met partway through a
+  command other than `verify` stays exit 1, a residual stated: the next `verify` gives the verdict (RULED items 1
+  and 3).
+- **C — leave the class**: every open-time corruption stays exit 1, and the truncated-file arm of the gate with it
+  if P-O269f places it at the open.
+- A verify-scoped remap only: refuted in the RULED subsection.
+
+**Recommended answer:** B, as PATCH, under the retry-semantics reading, with `docs/AGENTS.md`'s sentence and
+`EXIT_FAILURE`'s doc refined in the same unit to say that "unreadable" means unreachable for a reason outside the
+file's bytes — permissions, a lock, a missing path, an I/O error — and that a database whose bytes do not hold
+together is an integrity verdict, as an absent one has been since A33; `UPGRADING.md` gains an entry. If the
+maintainer reads the sentence as covering malformed bytes, B is MAJOR and goes to `2.0.0`, C stands until then, and
+the gate's truncated arm waits for it if P-O269f places the truncation at the open. A is preferable to B only if
+P-O269g shows an `immutable=1` handle beside a writer never raises the codes, which a probe can support and never
+prove.
+
+**Probes first.** P-O269f: for each of the entry's corruptions — a truncated `vault.db`, a row byte that breaks
+UTF-8, one that does not — on both postures, the step it surfaces at (connector, schema batch, first read, the
+walk, a later leg) and the rusqlite error it raises. P-O269g: an `immutable=1` reader beside a live writer, looped
+— does it ever raise `DatabaseCorrupt` or `NotADatabase` on an intact vault.
+
+**Where the two runs disagreed.** Both escalated; run 1 recommended A, run 2 B. Settled for B on the posture
+evidence above, A kept as the alternative P-O269g could reopen.
+
+**Version class.** B: PATCH under the recommended reading, MAJOR under the literal one. A: the same. C: none.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question.** When a command other than `verify`'s own checking meets SQLite corruption (`DatabaseCorrupt`,
+`NotADatabase`) — at its open or partway through — is that an integrity verdict, or the run failure it is today?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: B, as PATCH, under the retry-semantics reading.** "A typed integrity-family variant minted by the
+store at named doors, only on a non-`immutable` handle": the connector's probe and first locking statement, the
+writable schema batch, and the read-only open's first content read, with the same O115 row and one-set test.
+Corruption met partway through a command other than `verify` stays exit 1, a residual stated: the next `verify`
+gives the verdict. In the same unit, `docs/AGENTS.md`'s sentence and `EXIT_FAILURE`'s doc are refined "to say that
+'unreadable' means unreachable for a reason outside the file's bytes — permissions, a lock, a missing path, an
+I/O error — and that a database whose bytes do not hold together is an integrity verdict, as an absent one has
+been since A33; `UPGRADING.md` gains an entry." The answer takes the retry-semantics reading, so the MAJOR branch
+the recommendation describes — B to `2.0.0`, C until then — does not arise.
+
+**What remains open.** Nothing for the maintainer. The probes come first: P-O269f places each corruption, and
+P-O269g asks whether an `immutable=1` reader beside a writer ever raises the codes. A stays the alternative
+P-O269g could reopen.
+
+#### BUILT 2026-10-12
+
+**Rulings followed.** Both 2026-10-08 records above, item by item, and the maintainer's option B; O232 ruling
+1 at its own reason; O263's ruling for the leg's separateness (its `schema` leg is its own field, with its own
+rotation answer); O406's ruling of 2026-10-12, which hands this build "the name and blocker status" of an
+undecodable covered field. **Decided here, where those rulings left it to the build:** one arm,
+`BadReason::Undecodable`, for every value `verify` reads before a tag that holds what no read takes — the
+wrong storage class, or TEXT that is not UTF-8 — named by its id, or `<table> seq N` / `rowid N` where the id
+does not decode, and a **rotation blocker**, as item 2 says. O232's exemption for an unparseable meta rests on
+the rotation re-tagging the same bytes without parsing them; for this row that premise is false — the
+rotation reads every column it re-keys by its type and cannot take the row at all (a conversion error on
+hmac-only, a refused re-seal on a sealed vault) — so the blocker loses nothing and turns a mid-transaction
+error into a refusal before any work. O406's later-0x1f move is such a row (measured below).
+
+**Probes run first, as the maintainer's record asks.**
+- **P-O269f**: a truncated `vault.db` (on a page boundary and mid-page) and a zeroed header surface at the
+  open's FIRST statement on both postures — the read-only probe, the writable `journal_mode=WAL` — as
+  `SQLITE_CORRUPT` / `SQLITE_NOTADB`; the read-only open escalated to `immutable=1` and failed again there with
+  the same raw code. A meta byte that breaks UTF-8 opens on both postures and passes `integrity_check`, and
+  `verify` returned `FromSqlConversionFailure` from the drawer walk; one that keeps UTF-8 was already a
+  `TagFailed`. So the truncation arm of the gate is met at the open, by option B.
+- **P-O269g**: an `immutable=1` reader beside a live writer (1,544 saves, a passive checkpoint every four, 60 s):
+  **721 of 61,742 reads raised `SQLITE_CORRUPT` on an intact vault**, none `SQLITE_NOTADB`. Option A — a
+  remap at the store's error conversion, blind to posture — would have paged a tamper verdict on those; B's
+  exclusion of `immutable=1` handles is measured, not only argued.
+
+**What was built.**
+1. **`VerifyReport.storage`**, the tenth leg, run first in `verify_in`'s snapshot: the full `PRAGMA
+   integrity_check`, every row read by type, `ok` as no finding, `"integrity_check: <row>"` otherwise, a
+   corruption code the pragma raises as its own finding. `ok()` reads it; `rotation_blockers()` destructures it
+   (no `..`) and blocks on it. **Each FTS5 table is read in the snapshot first** — found by P-O269b's first
+   hmac-only run, a defect this build introduced and fixed before it landed: FTS5's integrity pass reuses the
+   index structure the connection cached, so a long-lived handle whose last FTS read predated another
+   connection's FTS write reported `malformed inverted index for FTS5 table main.drawers_fts` on an intact
+   vault, and `backup create` beside a writer refused; a fresh connection, or the same one after one ordinary
+   read of the table, reported `ok`.
+2. **No row aborts `verify`**: `covered_row` (the id, meta and content before the tag, the four mirrors after
+   it), the graph walk (facts and entities), the tunnel walk, both policy scans, the version walks, `chain_keys`
+   and the orphan-label leg — which now reads every label once, by type, and names one that does not decode by
+   `seq` in any namespace — read by value type; the tag is checked over the bytes through the one builder per
+   table (`canonical`, `triple_canonical_bytes`, `entity_canonical`, `tunnel_canonical`,
+   `wing_trust_canonical`, `retention_canonical` now take bytes; a test pins each byte for byte against the
+   `format!` it replaced). The two receipt legs leave out the ONE link whose cited drawer a walk named and no
+   read can take, where they returned its error (`CorruptRow`, O231's pinned abort) or emptied the leg; a
+   tampered receipt is decided before that read, so it is still reported and still blocks. The retention sweep
+   classes such a row `unverifiable`.
+3. **The fold** (`leg`): `SQLITE_CORRUPT`/`SQLITE_NOTADB` from any later leg is `"<leg> not run: <error>"` on
+   the storage leg, that leg empty, and `chain_ok` false and the label commitment `pending` when the replay did
+   not run. **And the snapshot's own end** (`report_despite_the_end`): measured, once a leg met a corrupt page
+   SQLite answered the snapshot's `COMMIT` with the same code, and `verify` returned it after every leg had
+   folded — the end is inside the snapshot, so the report stands; `backup create`'s refused report likewise.
+4. **Rotation**: the storage leg and an undecodable row block it; every phase-3 UPDATE asserts one row changed
+   (`one_row`, `IntegrityFinding`).
+5. **`backup create`** refuses through `Refused(report)`, unchanged in shape.
+6. **Restore**: `storage_check` deleted with its call; the stage's `verify` carries the leg; the CLI's and
+   `/v1`'s `Refused` arms print the refused report through `verify`'s projection — `print_verify_report`, now
+   the CLI's one projection (and `HAND_PROJECTED`'s anchor), and `verify_report_json` as `report` beside `/v1`'s
+   409 (`RestError` gained an optional `report`). `o268_a_corrupt_index_passes_verify_and_is_still_refused` is
+   re-expressed: every row leg passes, the storage leg names the index, the restore refuses with that report.
+7. **No REINDEX on a restore's stage** — none added.
+8. **No `immutable=1` escalation on corruption**: the read-only connector's ordinary probe answers the codes as
+   `StorageCorrupt`; everything else still escalates.
+9. **Cost** — below.
+10. **Surfaces**: CLI (`storage:` / `STORAGE:` lines; `unreadable:` now counts `Undecodable` too), MCP
+    (`storage: N`, a count, never names), `/v1` (`"storage"`), `ui.html` (through `textContent`); MCP and the
+    CLI split `bad_records` with no `_`.
+11. **`repair` rebuilds no index.** The first build added `REINDEX` to it; the review removed it (below, and the
+    record beside item 11).
+
+**The maintainer's option B**: `StoreError::StorageCorrupt`, the integrity family (exit 2; 409 `class:
+"integrity"`), minted by `storage_corrupt_at` at the writable connector's first statement, the writable schema
+batch, the read-only connector's ordinary probe and the read-only open's first content read (the keycheck),
+the last only on a handle that is not `immutable=1` (`connect_read_only` now says which it opened). It is in
+`integrity_verdict`, `store_err`'s code and class, the one-set test, and `archive_verdict`. `EXIT_FAILURE`'s
+doc (the CLI's and `undercroft-obs`'s) and `docs/AGENTS.md` now say exit 1's "unreadable" means unreachable for
+a reason outside the file's bytes.
+
+**Claims refuted, the ruling's first.**
+- **Item 11's "`repair` rebuilds every index from its table (its VACUUM, `manage.rs` 1870)", and the gate's
+  "`repair` over an R3 index flip brings `verify` back to OK"**: measured false — after `repair`, `verify` still
+  named `row 11 missing from index idx_drawers_room`. VACUUM's transfer copies an index's b-tree as it stands.
+  The first build answered that by adding `REINDEX` to `repair`; its review removed it, and the refutation, with
+  the sqlite3.c evidence, is recorded beside item 11: index damage has no repair remedy, the remedy is a
+  restore, and a rebuild is O434's question.
+- **The gate's "on every renderer" for the truncated file** was already corrected by the ruling (MCP opens before
+  it serves); P-O269f placed the truncation at the open, so it is met on the CLI and `/v1`.
+- **Item 3's "raised inside `verify_in`'s snapshot"** covered more than the legs: the snapshot's end raised it too
+  (above).
+- **The property gate's "every TEXT column of every table"** cannot be met by `verify` for `chain_meta`: a
+  retyped value there refuses BOTH opens with a conversion error before `verify` runs, and a retyped `meta.value`
+  the writable one. Not this entry's item 2 (the reads `verify` makes) nor option B (corruption codes) — filed
+  as O433; the gate runs over every other table, opening read-only where the writable open refuses.
+
+**Probes owed and their state.** P-O269a: the e2e block below. P-O269b and P-O269h: below; the late-interaction
+arm and a read-audited vault whose `audit` is ~10× its drawers were NOT run (no ColBERT model on this machine;
+~10⁶ chained read records would take the run past its budget), stated rather than claimed. P-O269c (10⁶): not
+run — it needs the maintainer's go, and no surface states a 10⁶ cost. P-O269d: one byte flipped in a
+`drawers_fts_data` page of an hmac-only vault, four flips that reached FTS5's check: `integrity_check` named
+`malformed inverted index for FTS5 table main.drawers_fts` on all four, `verify` failed on the storage leg on all
+four, and the FTS-prefiltered search answered differently from before on three of the four — the prefilter
+under-returns while the leg reports it. P-O269e and P-L2c, P-L2d: tests below. P-O286x: not run — no
+write-protected mount here; item 8 stays a deny-list.
+
+**Tests** (`crates/undercroft-store/src/storage_tests.rs`, 18 run and 4 `#[ignore]`d probes since the review): the open's doors
+(truncation on both boundaries and a zeroed header, both levels, both postures — each names its door); the
+read-only first content read (a damaged `meta` root page; the writable open meets it partway, the stated
+residual, pinned); R3 on a live vault, both levels — the leg names the index, `ok()` false, backup refused, the
+rotation refused with the file byte-identical, `repair` leaving the finding and a restore of an archive taken
+before the damage bringing OK (the review's re-expression); a freelist trunk and a table page flipped
+(findings, never errors; the drawer walk named as not run); a damaged `audit` root page (no chain claimed); the
+retypes (a BLOB meta, a BLOB mirror, a BLOB id named by `seq`, a meta byte that breaks UTF-8 as `TagFailed`, a
+BLOB audit label, a TEXT fact object, a TEXT policy tag — every other leg still reporting, the storage leg clean);
+the property gate (every TEXT column of every table but `chain_meta`, both forms, both levels); P-O269e (an id
+autoindex entry of `kg_entities` damaged — the rotation refused before any work); `one_row`; the byte-for-byte
+builder pins; P-L2d (ten backups refused, the archive taken before the damage kept); P-L2c (an older trust row
+written back and the newer record's `idx_audit_record_id` entry pointed at the older one: every row leg clean,
+the storage leg names the index, the rotation refuses); O406's later-0x1f move (named `Undecodable`, a blocker,
+backup refused); and a writer beside a long-lived hmac-only handle (no finding; its premise arm shows the bare
+pragma's false finding on the stale handle). Re-expressed: `o268_a_corrupt_index_passes_verify_and_is_still_refused`,
+`o231_a_link_citing_the_row_answers_a_verdict_never_ok` (was `…an_error_never_ok`, now with a tampered receipt
+still reported); the two KG tests comparing `kg_verify` to strings; `the_cli_exit_2_set_and_v1s_integrity_class_are_one_set`
+gains `StorageCorrupt`. The CLI's integration tests and unit tests pass unchanged.
+
+**Counterfactuals**, each a copy of the fixed tree with one arm reverted, a forced recompile, the targeted
+tests run and the tree compared back: the storage leg off — 4 of 12 fail (R3, the autoindex rotation, the
+freelist, O268's restore), and P-L2c and P-L2d fail; the fold off — the replay and table-page tests fail; item
+2 reverted to an abort — the retype test and the property gate fail, and O406's later-0x1f test; option B's
+doors off — both open tests fail; the escalation carve-out removed — the open test fails on the read-only
+posture; the end fold off — the replay test fails; `one_row`
+accepting any count — its test fails; the link omission off — O231's link test, the retype test and the property
+gate fail; the FTS read removed — the long-lived-handle test fails. The new tests passed five consecutive runs.
+
+**`e2e`** (as first built; the review's re-run is below): a 21-check block (`tests/e2e.sh`, O269) through the release binary — R3 on a live vault (verify,
+MCP, `/v1`, backup, rotation, `repair` with SQLite's own check after it), a file cut in half (verify, `search`,
+the read-only posture, `/v1`), a retyped meta, and an archive with an index flip refused on both surfaces with
+its findings: 21 of 21 pass. Against the base binary (`main` `2b69f04`) 17 of the 21 fail; the four that
+pass are the flip's premise, two tree-independent re-verifies and `repair`'s own line, which the base prints
+`integrity: ok` over the damage it cannot see — which is why the block reads SQLite's own verdict after
+`repair` too, and that check fails on the base. Run on this machine against release binaries built here, the
+block lifted verbatim out of `tests/e2e.sh`; the integrator's battery runs the whole suite.
+
+**Real corpus, through the release binary** — the LoCoMo feed mined into 64 wings of a sealed vault (5,440
+drawers, 5,441 audit rows, 10.6 MB, mined in 7 s): `verify` 117–141 ms against the base binary's 86–113 ms, and
+SQLite's check alone 43–65 ms. One byte flipped in `idx_drawers_room` (R3): the base answered `VERIFY OK`, exit
+0; this build exits 2 with `storage: 100` — SQLite's cap — from `row 5297 missing from index idx_drawers_room`
+on, `backup create` refuses, and `repair` (1.5 s) brought `VERIFY OK` and SQLite's own check `ok` — through
+the `REINDEX` the review removed; re-run after it, below. A BLOB meta:
+the base exits 1 (`Invalid type`), this build exits 2 naming the drawer. O406's later-0x1f move, one SQL
+statement over every drawer whose ciphertext holds two 0x1f bytes: 3,154 of the 5,440 moved, the tag column's
+digest unchanged; the base exits 1 (`invalid utf-8 sequence`) on `verify` and on `vault rotate`; this build
+exits 2 with `hmac failures: 0` and `unreadable: 3154`, every one named `column meta_json holds TEXT that is
+not UTF-8`, and refuses the rotation.
+
+**Cost (P-O269b, P-O269h)**, measured by `p_o269b_cost_of_the_storage_leg_at_scale` (run by name): chunks of
+five LoCoMo-feed turns in eight wings, the PQ tier built and, at 10⁵, every wing's; three rounds of each figure;
+the machine shared with another agent's container throughout, so these are ranges, not points.
+
+| | sealed, 10.2k (20.5 MB) | hmac-only, 10.2k (36.1 MB) | sealed, 102k (218.5 MB) | hmac-only, 102k (369.0 MB) |
+|---|---|---|---|---|
+| `verify`, whole | 104–121 ms | 247–412 ms | 7.6–8.7 s | 3.8–5.1 s |
+| the storage leg alone | 35–38 ms | 143–243 ms | 4.0–4.5 s | 2.4–3.0 s |
+| backup's pin, beside a writer saving every 10 ms | 153–228 ms | 291–341 ms | 9.1–13.4 s | 5.1–5.7 s |
+| that writer's saves, p50 / p99 / max | 23 / 42 / 42 ms | 38 / 69 / 69 ms | 64 / 253 / 427 ms | 30 / 85 / 252 ms |
+| one rotation, the hold whole | 0.6 s | 0.5 s | 35.4 s | 7.7 s |
+
+Process-level, interleaved, three each, at 10⁵: `undercroft verify` 7.3–9.6 s against the base binary's
+1.3–3.4 s on the sealed vault, 3.6–4.9 s against 1.3–1.5 s on the hmac-only one. **The ruling's on-record
+estimate does not hold for realistic chunks**: it priced the check at 445 ms at 10⁵ from one sealed corpus of
+short notes (O268's built record); the check is linear in the FILE, and five-turn chunks make a 218 MB file at
+10⁵, where it costs 4.0–4.5 s and more than doubles `verify`. **O256's ~2 s pin line is breached** — 9.1–13.4 s
+sealed, 5.1–5.7 s hmac-only, the leg ~4 s of it; no save was refused, the writer's p99 rose to 253 ms — and so
+is the rotation hold's 5 s crossover, 35.4 s on the sealed vault, of which the leg is ~4.5 s: an open arriving
+during that rotation waits its busy budget and is refused as held, as it would be without the leg at this size.
+Both are answered by scheduling, on O258's line, as item 9 rules, and the figures are recorded there; the check
+is not narrowed. 10⁶ was not run: it needs the maintainer's go.
+
+**Residuals, stated.** Corruption met partway through a command other than `verify` stays exit 1 (the ruling's
+B); so does a damaged page the writable open reaches past its named doors (pinned by test: a damaged `meta`
+page). An `immutable=1` handle's corruption codes are never a verdict (P-O269g): the open's doors mint none on
+such a handle, and since the review `verify` there answers `StorageUnverifiable` rather than a storage finding.
+Its OTHER legs still give verdicts on such a handle beside a writer, the chain leg on nearly every call
+(O435). Derived structures keyed by
+`seq` or `fp` remain outside every leg (O349). A sealed fact or entity field that does not open is O406's leg
+(d), through this arm. The open's typed reads of `meta`/`chain_meta` values: O433.
+
+**After an independent review of this build, the same day — all mine.** Four findings, each fixed in this unit:
+1. **`repair` ran `REINDEX`** (MED-HIGH): a change of remedy no ruling made, and the laundering item 7 refuses —
+   removed; `repair` rebuilds no index. Item 11's premise is refuted beside it (dated, with the sqlite3.c
+   evidence) and the remedy question is filed as O434. The R3 test now asserts that `repair` leaves the
+   finding and that a restore of an archive taken before the damage brings `verify` back to OK, and the e2e
+   block drives the same through the CLI (SQLite's own check after each). Counterfactual: `REINDEX` put back,
+   the R3 test fails at `repair`.
+2. **`UPGRADING.md`'s Fix and the runbook told an operator that index-only lines mean `repair`** (MED): the
+   table-side flip item 7 measured produces exactly those lines. Both now say restore, and why; `docs/AGENTS.md`
+   (the `/v1` repair row), `CLAUDE.md`, `CHANGELOG.md` and the verify-repair-backup view no longer say REINDEX.
+   Two refusal texts of mine said the same: the open's storage-damage refusal ("`undercroft repair` mends only
+   damage confined to an index") and the rotation's — both reworded. The open's also said "Nothing was
+   written", which O322's gate, merged from `main`, reported unclassified; at the schema-batch door it is not
+   true (the batch's CREATEs commit one by one), so it now says only that the open stops there; the chain's new
+   refusal says the write is refused rather than making the same claim.
+3. **A false integrity verdict on an `immutable=1` handle** (MED): the open's doors excluded such a handle, but
+   `verify`'s storage leg, the `leg` fold and `report_despite_the_end` turned the pragma's rows and a later leg's
+   corruption codes into findings with no posture check, and the store discarded `immutable` after the open — so
+   this record's "never a verdict" was false for `verify`. The handle now keeps `immutable`, and `verify` on it
+   answers `StoreError::StorageUnverifiable` naming why (not a verdict: exit 1, 409 with no class, in the one-set
+   test beside its neighbour `ReadOnlyUnmigrated`) wherever the storage leg would have held a finding.
+   `o269_an_immutable_handle_reports_the_storage_leg_not_verifiable` forces the escalation as O213's gate does
+   and pins it, with an intact vault through the same posture still verifying and the ordinary handle on the
+   same file still getting the verdict; counterfactual, the posture check off, it fails. The race itself,
+   P-O269g's setup through the store (`p_o269g_verify_through_an_immutable_handle_beside_a_writer`, run by name),
+   never met a torn read: 38,363 verifies beside 4,857 saves, and with the handle's cache cut to eight pages
+   16,773 beside 1,920 and 7,416 beside 884, every report checking exactly the 306 records the vault held at the
+   open (measured on the last run) — such a handle read none of the writer's rows. What it answered instead, on
+   all but the first few calls, was a CHAIN-leg failure, an integrity verdict on an intact vault: filed as
+   O435, outside this review's item.
+4. **The LOW items**: `chain::set_head` and `set_writes` now refuse in the integrity class when their UPDATE
+   moves other than one row (`one_meta_row`, as a rotation's phase 3 does); an FTS5 table whose pre-read meets a
+   corruption code is its own finding and `integrity_check` still runs — and the rows the pragma returned before
+   it then stopped on a code are kept, found by that test: the pragma aborted at FTS5's pass and the leg had
+   dropped the index lines it had already named; the R3 test's docstring no longer says VACUUM rebuilds an
+   index; `repair`'s doc no longer counts "nine legs"; `docs/AGENTS.md`'s `undercroft_verify` row states the
+   cost. Tests `o269_a_head_or_height_that_moves_no_row_refuses` and
+   `o269_a_corrupt_fts_table_read_first_does_not_cancel_the_check`; counterfactuals: the row check accepting any
+   count fails the first, the first build's pre-read handling fails the second, and dropping the rows kept
+   before the abort fails the second.
+
+**Re-run after the review**, the tree merged over trains 1-3 and built by rust 1.98.1. The e2e block is 23
+checks — `repair` now exits 2 over the flip with SQLite's own check still naming the row, and the archive taken
+before the flip restores to `VERIFY OK` and an `ok` from SQLite: 23 of 23 pass; against the base binary
+(`2b69f04`) 17 fail, and the six that pass are the flip's premise, the two SQLite reads after `repair` and after
+the restore, the restore itself, and two re-verifies — the base `repair` printed `integrity: ok`, exit 0, over an
+index SQLite still named, which is item 11's premise failing on the base too. The real corpus re-mined (5,440
+drawers, 10.6 MB): `verify` 108–141 ms against the base's 51–85 ms, SQLite's check alone 29–33 ms; the R3 flip
+exits 2 with `storage: 100`, `backup create` refuses, `repair` (1.1 s) exits 2 with SQLite still naming row
+5297, and restoring the archive taken before the flip (0.17 s) brings `VERIFY OK` and `ok`; a BLOB meta exits 2
+naming the drawer (the base 1); the later-0x1f move took 3,184 drawers this time — the count depends on the
+ciphertext — and every one is named, the rotation refused.
+
+**Merged over trains 1-3, the same day.** O221's `CoveredRow` carries the row's `seq`, its clear wing and the
+wing its meta claims on every variant, for the review queue; they now ride this build's by-type walk, and
+`Undecodable` carries the column and what it holds where O221's carried the conversion error. Because the tag is
+checked over the bytes (item 2), a retype that CHANGED the bytes — O221's `content = 'not a blob'` — fails the tag
+and the queue reports it `tag-fails`, while one that kept them stays `column-retyped`; O221's in-queue test asserts
+each. O427, which O221's review filed for `verify` and the sweep, is closed by this build (its entry, beside this
+one).
+
+**Integration, 2026-10-12.** The three entries this one filed took their ids here: O433 (the open's typed
+reads of `meta` and `chain_meta`), O434 (whether `repair` rebuilds an index) and O435 (`verify` on an
+`immutable=1` handle beside a writer). Counted at the integrated tree with the battery's own readers:
+`test` 1443 run / 21 ignored over 20 targets (was 1425 / 17; the 18 run and 4 ignored are this unit's store
+tests), `e2e` 901 (was 878; this unit's block is 23), so the landing tiles move 1425 → 1443 and 1330 → 1353,
+and the level-3 headings are 480, 465 of them with an id (were 477 and 462).
+
+**PATCH** inside the unreleased 1.7.0, by the 2026-09-08 ruling and the maintainer's of 2026-10-08.
+`UPGRADING.md` carries the entry (symptom, cause, the restore remedy and why `repair` is not it, the
+pre-flight); `config check` opens no vault database and cannot see any of it.
+
+### O427 — CLOSED 2026-10-12: one covered column retyped offline makes `verify` and the retention sweep fail with a conversion error instead of naming the row — `verify` names it and the sweep holds it, by O269's ruling
+
+**Filed 2026-10-12 by O221's build, after its independent review; measured by that review's probe.**
+`walk_covered` reads `meta_json` as TEXT and `content` and `tag` as BLOBs. An offline writer who
+rewrites one of them with another storage type (`UPDATE drawers SET content = 'x'`, or
+`meta_json = CAST(meta_json AS BLOB)`) leaves a row no tag can be checked over. Since O221 the walk
+yields it as `CoveredRow::Undecodable`, and the review queue's doors read it as a row that does not
+verify. `verify` and the retention sweep still raise the conversion error, as they did before O221:
+`verify` answers `sqlite error: Conversion error …` rather than an integrity verdict naming the row,
+and one such row anywhere in the vault fails every sweep. By reading, `backup create` and a rotation,
+which run `verify` first, fail with the same error (not measured).
+
+**Why it is its own entry.** It is not O221's: the review queue's doors regressed on it and are
+fixed, while `verify` and the sweep answered it the same way before. What it owes is a verdict, which
+is a ruling: a `BadReason` for `verify` beside O231's `MetaUnparseable` (and whether a rotation
+blocks on it, O232's question), and the sweep's `unverifiable` arm (O206 ruling 2's rule).
+
+**Gate**: a row whose `content` is TEXT, and one whose `meta_json` is a BLOB: `verify` names each
+with its reason and exits 2; a sweep names each as unverifiable and destroys the rest.
+**Counterfactual**: today, both fail with the conversion error.
+
+**Closed 2026-10-12 by O269's build, merged over O221's train.** The ruling this entry asked for exists and is
+older than the entry: O269's item 2 (2026-10-08) rules that no row aborts `verify` — every column read by its
+type, the tag checked over the bytes, a value no read takes named in the leg that owns the read and a rotation
+blocker, and the retention sweep's `unverifiable` arm for it — and O269's build follows it for the drawer walk
+this entry names, which `verify`, the sweep and the queue share. So `meta_json` stored as a BLOB, its bytes
+intact, is `UNREADABLE: <id>: column meta_json holds a BLOB …`, exit 2, a rotation blocker, and `unverifiable`
+to a sweep; `content` rewritten as TEXT `'x'` changes the bytes, so its tag fails over them: an HMAC failure,
+exit 2, and `unverifiable` to a sweep. **Gate**:
+`o427_two_retyped_rows_are_named_by_verify_and_held_by_the_sweep` (`storage_tests.rs`) — both rows named with
+their reasons, the sweep naming each unverifiable and destroying the other expired members; the e2e block's
+retyped-meta checks exit 2 through the CLI. **Counterfactual**: O221's walk, which handed both to `verify` and
+the sweep as the conversion error.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -43278,7 +43970,31 @@ nothing in it is changed. Since then: the id is O406; its relation with O269 is 
 boundary, as "What remains" asks; and item 13's five filings are O416 (i), O417 (ii), O418 (iii), O419 (iv)
 and O420 (v). The correction beside O238 and the scoping of CLAUDE.md's VACUUM sentences remain owed.
 
-**Relations:** shares a diff surface with O269 — one arm for undecodable rows and unparseable meta, and the boundary move that produces both.
+O269's relation marker to this entry is retired: O269 closed 2026-10-12 and a relation names an open entry. What it built for this one is recorded in the note below.
+
+**Recorded at O269's build, 2026-10-12: what O406's first builder found.** O406's first builder stopped before
+writing code and reported four facts, recorded here so the next build starts from them rather than finds them
+again.
+
+1. **O406 depends on O269's arm.** The walk's verify-first (item 5) withholds on "any finding, and any ERROR",
+   and an undecodable covered field — a later-0x1f drawer move, a sealed fact or entity field that does not open
+   under its own AAD (item 8(d)) — made `verify` return a conversion error instead of a finding. O269's build
+   gives it one name, `BadReason::Undecodable`, in `bad_records`, checked over the BYTES (so a row whose bytes
+   changed stays `TagFailed`), and makes it a rotation blocker — ruled there against O232's exemption for an
+   unparseable meta, because a rotation reads such a row by its type and cannot re-tag it at all. It covers every
+   column `verify` reads in drawers, facts, entities, tunnels and the policy rows; measured on the LoCoMo feed,
+   the later-0x1f move this entry describes is now `UNREADABLE: <id>: column meta_json holds TEXT that is not
+   UTF-8`, exit 2. **What it does not do is open a sealed fact or entity field**: `kg_verify` checks tags only,
+   over bytes; leg (d)'s AEAD open is this entry's to add, through `BadRecord::undecodable` with its own detail.
+2. **P15b needs a pre-A10 binary.** No release tag predates A10, so the A10-migrated sealed vault the probe asks
+   for must be made by `9d7bde1^` (`0a0bc97`), built from source, and then opened by this build.
+3. **P15b's `refine` run needs a loopback LLM stub**: refine reaches only a TLS or loopback endpoint, and no
+   model is in the battery.
+4. **`kg_add_inner` and `kg_import` tag `valid_from` while their `ON CONFLICT` SET lists omit it**
+   (`crates/undercroft-store/src/kg.rs`, the two upserts), so a NULL `valid_from` row re-added or imported with
+   `''` keeps NULL under a tag computed over `''` — a self-inflicted `TagFailed` today (O417), and under item 1's
+   presence encoding the same disagreement for every such re-add. The v2 encoding must tag the row as it will be
+   stored, as item 1 says, and the two SET lists are where that is decided.
 
 #### RULED 2026-10-12 by the maintainer
 
@@ -44888,6 +45604,16 @@ MCP text changes. The O254 entry, "every process that writes one vault must run 
 a new writer starves an old one harder. `undercroft config check` has nothing to detect, because no declaration is
 involved.
 
+**Recorded at O269's build, 2026-10-12: the holds its storage leg lengthens are this entry's.** O269's ruling,
+item 9, answers a breach of O256's ~2 s pin line, or of the rotation hold's 5 s crossover, by scheduling on this
+entry's line and never by narrowing the check. Its build measured both breached on realistic chunks — five
+LoCoMo-feed turns per drawer, the PQ tiers built, the machine shared: at 102,000 drawers `backup create`'s pinned
+snapshot held 9.1–13.4 s on a sealed vault (218.5 MB) and 5.1–5.7 s on an hmac-only one (369.0 MB), SQLite's
+`integrity_check` about 4 s of it, while a writer saving every 10 ms beside it was never refused (p99 253 ms,
+max 427 ms); and one rotation held the vault 35.4 s sealed and 7.7 s hmac-only, the check ~4.5 s of the first —
+so an open arriving during that rotation waits its busy budget and is refused as held, as it would be at that
+size without the check. The figures and their instrument are in O269's built record.
+
 ### O261 — a receipt minted beside another writer before O255 is genuine and reports as forged forever
 
 **Filed 2026-09-25 by O255's ruling (the security lens and the refuter).**
@@ -45357,7 +46083,7 @@ class shuts at open and that class narrows to raw page edits.
 
 **Relations:** sequenced with or before O267 — a copy-on-delete trigger defeats that entry's hygiene while it fires, so this entry's item 1 lands with or before that entry's build.
 
-**Relations:** shares a question with O269 — two legs of one class, the file is not what this engine wrote, with two different rotation answers.
+O269's relation marker to this entry is retired, that entry having closed 2026-10-12: its storage leg is `VerifyReport.storage`, the tenth leg, a rotation blocker; this entry's schema leg is its own field with its own rotation answer (item 7), and `rotation_blockers()` destructures every field with no `..`, so adding it does not compile until that answer is written. The stale leg counts item 4 names were corrected to ten by O269's build.
 
 **Relations:** shares a question with O348 — this entry's inventory admits `sqlite_sequence` and cannot see its content.
 
@@ -46212,390 +46938,6 @@ open of an hmac-only vault rebuilds its FTS index once, holding the write lock f
 corpus; destructions, updates and rebuilds write more; `drawers_fts` becomes unreadable to an external `sqlite3`
 older than 3.42; residue from before the upgrade stays until `repair`. `config check` has nothing to pre-flight
 here and the entry says so.
-
-### O269 — `verify` is blind to storage corruption, and exits 1 on the corruption it trips over
-
-**Filed 2026-09-26 by O268's ruling; measured by the integrator.** `verify` walks
-record tags and replays the chain; it never checks the database's page structure.
-One flipped byte in an index page (R3, seven pages tried on a 40-drawer vault):
-`verify` exited 0 on four where `PRAGMA integrity_check` reported `row N missing
-from index` — `idx_drawers_fp`, `idx_drawers_room`, `idx_drawers_wing_room` — so a
-scoped search or the dedup probe can miss a drawer on a vault `verify` calls
-clean. `PRAGMA quick_check` said `ok` on all seven: it does not compare indexes
-with their tables. And where `verify` does trip over corruption it does not return
-a verdict: a truncated `vault.db` answered `database disk image is malformed`, a
-flipped byte in a row `Conversion error … invalid utf-8`, both as
-`StoreError::Sqlite` — exit 1, the class `integrity_verdict`
-(`crates/undercroft-cli/src/main.rs`) tells a script means "retry", on a vault
-whose answer will never change. O268 checks a restore's stage with
-`integrity_check` and classes corruption in the stage's handle as integrity; the
-live vault's `verify` is this entry.
-
-**Shape, for a ruling panel**: a storage leg on `VerifyReport` (a tenth, so every
-renderer and `rotation_blockers()` must rule it), `integrity_check` or a cheaper
-equivalent measured at 10⁵ and 10⁶, and whether SQLite's `DatabaseCorrupt` and
-`NotADatabase` join the integrity set on every command — which moves the class of
-every surface at once and is why O268 did not take it.
-
-**Gate**: the R3 flips and the two row-level corruptions each fail `verify` as a
-verdict (exit 2 / 409 integrity) on every renderer. **Counterfactual**: today, exit
-0 on the index flips and exit 1 on the others.
-
-**Amended 2026-10-08 by O231's build.** The arm this entry's ruling shares with
-O231 exists now: `VerifyReport.bad_records` is a `Vec<BadRecord>`, each a record id
-and a `BadReason` (`TagFailed`, `MetaUnparseable`), serialized as one string — a
-bare id for a failed HMAC, as before, and `"<id>: <reason>"` otherwise. An
-undecodable row joins it as a new `BadReason` variant, and the compiler then asks
-for its ruling in three exhaustive matches: `rotation_blockers()` (this entry's
-item 2 makes it a blocker, where O232's ruling keeps an O231 row out), the CLI's
-split into `hmac failures:` and `unreadable:`, and MCP's counts. One more abort
-belongs to item 2: a supersession link or a fact receipt that cites an O231 row
-makes `verify` return the cited drawer's `CorruptRow` (exit 1, a 500 on `/v1`)
-instead of a verdict, because the receipt legs read it through `get`.
-`o231_a_link_citing_the_row_answers_an_error_never_ok` pins that. Separately, the two
-receipt legs now swallow an `Integrity` refusal only while a FAILED HMAC stands —
-an emptied leg must never drop a tampered receipt from the rotation's blockers;
-that test cannot exercise it, since `get` raises `CorruptRow` there, which the
-`Integrity` arm never caught. And a third abort, found by O231's independent
-review: when a keyless writer moves a drawer's meta/content boundary to a 0x1f
-LATER in its content, `meta_json` no longer holds UTF-8, `covered_row`'s
-`as_str()` fails before the tag is checked, and `verify` and `backup create`
-return `FromSqlConversionFailure` — the row is never named, though its tag
-verifies over those bytes. It is item 2's pre-tag arm, and it is also an O231
-row, which O232's ruling keeps out of the rotation's blockers while item 2 makes
-a pre-tag finding one: this entry's build rules which (O406 carries the
-measurement).
-
-**Relations:** shares a question with O263 — two legs of one class, the file is not what this engine wrote, with two different rotation answers.
-
-**Relations:** shares a diff surface with O406 — one arm for undecodable rows and unparseable meta, and the boundary move that produces both.
-
-The closed O231's own relation marker to this entry is retired by that line; the edge now runs between this entry and O406 (made reciprocal at train 1's integration, 2026-10-12).
-
-**Relations:** shares a diff surface with O318 — both change `storage_check` and `archive_verdict` in `crates/undercroft-store/src/restore.rs`; after this build an archive's storage damage reaches that entry's `backup verify` as a failed leg, and whichever lands second adjusts.
-
-**Relations:** shares a question with O349 — this entry's REINDEX ruling's reconsideration waits on that entry.
-
-#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
-
-**The question.** Whether `verify` gains a storage leg, by what check, where it runs, whether a finding blocks a
-rotation and `backup create`, and at what cost; what `verify` does with corruption it trips over; and — handed
-here by O268's ruling of 2026-10-06 — whether a restore's stage is REINDEXed rather than refused when the damage
-looks index-only. Whether SQLite's corruption codes become integrity verdicts OUTSIDE `verify`'s own checking is
-escalated in the panel analysis that follows.
-
-**Prior rulings found, and their disposition.**
-
-- **O268's ruling of 2026-09-26, item 5** ("`integrity_check`, not `quick_check`", R3) — FOLLOWED.
-- **O268's ruling of 2026-09-26, item 9** (corruption codes are integrity only for the stage's handle) with its
-  lost option ("a global remap … is its own question (O269)") — FOLLOWED: nothing here remaps an error outside
-  `verify`'s own report; the every-command question is escalated.
-- **O268's ruling of 2026-10-06**, item 1 (no override on any refusal class) and item 3 (salvage is O318's and
-  never installs in place) — FOLLOWED; they decide the REINDEX question (item 7).
-- **O232 ruling 1** — FOLLOWED and APPLIED at its own reason ("conditions the rotation cannot make worse"): a
-  storage finding is laundered or made worse by a rotation (item 4). The brief's "block only what a rotation
-  would launder" is narrower than that reason.
-- **O256's options that lost** — FOLLOWED as ruled ("a second full verify of the archive at create" stays
-  rejected; a leg inside the one verify `backup create` already runs is not that). Its reason's clause "storage
-  corruption, which belongs to restore", read as leaving a SOURCE vault's storage damage to restore, is REFUTED
-  with evidence O256 did not have, to be recorded beside it: R3, measured after O256, shows the `verify` backup
-  gates on is blind to index damage; restore refuses every such archive; and the prune keeps ten archives by
-  count, oldest first, after every `Created` (`backup.rs` 225; `backups.rs` 30, 258), so ten backups of a
-  damaged source evict the last archive a restore accepts.
-- **O113/O253** (one report, one snapshot; the anchor read before the pin) — FOLLOWED.
-- **The 2026-09-08 versioning ruling** — APPLIED.
-
-**Ruled.**
-
-1. **A storage leg, `VerifyReport.storage`, separate from O263's schema leg** (their rotation answers differ):
-   the full `PRAGMA integrity_check`, every row read, `ok` recorded as no finding, run FIRST inside `verify_in`'s
-   snapshot — so inside `backup create`'s pinned snapshot (`backup.rs` 175), inside the rotation's exclusive hold
-   (`rotate.rs` 216-226), in `repair`'s closing verify (`manage.rs` 1880) and on every surface. Not
-   `quick_check`: blind on 7 of 7 R3 flips, because it omits index validation (sqlite3.c 140758). Not a
-   table-scoped check: it skips the freelist and page accounting (run 1's reading, 81592-81595, 81679) and FTS5's
-   `xIntegrity` pass. Not hand-written counts: R3's flips keep the counts equal. A `DatabaseCorrupt` or
-   `NotADatabase` the pragma itself raises is the leg's finding, not an error.
-
-2. **No row aborts `verify`.** Every row `verify_in` reads is read by value type and never by a typed `get`
-   that can fail: `covered_row`'s `id` and `meta_json` before the tag (`lib.rs` 10690-10694), its four mirror
-   columns after it (10718-10721), the orphan-label leg's `record_id` (10880-10887), and the graph, tunnel,
-   policy and version walks. A value of the wrong type or invalid UTF-8 is a finding naming the row (by `seq`
-   where the id does not decode) in the leg that owns the read: before a tag, `bad_records` (a blocker); a mirror
-   column after a verified tag, `mirror_drift`; an audit label, the orphan-label leg. The tag is verified over the
-   bytes. The retention sweep classes such a row `unverifiable` and never destroys it. O231's `MetaUnparseable`
-   (counted and reported nowhere, `lib.rs` 10805-10821) shares the arm. `FromSqlConversionFailure` and
-   `InvalidColumnType` are classified only at these reads and never remapped at large: a code defect raises them
-   too. This is not only corruption: one keyless `UPDATE drawers SET wing = X'…'` produces it today, because
-   `integrity_check` admits a BLOB in a TEXT column of a non-STRICT table (sqlite3.c 140704-140712), and
-   `verify` then exits 1 and reports nothing else it found.
-
-3. **Corruption a later leg trips over is the storage leg's finding, unconditionally.** Only `SqliteFailure` with
-   `DatabaseCorrupt` or `NotADatabase`, raised inside `verify_in`'s snapshot: the storage leg names the leg it
-   stopped ("<leg> not run: <error>"), that leg takes its empty value, and `chain_ok` is false if the replay
-   itself could not run (a positive claim must not survive a leg that did not run).
-
-4. **A storage finding blocks a rotation**, and every phase-3 UPDATE asserts exactly one row changed. Three
-   mechanisms, the first two read here:
-   - **An index-hidden replay is laundered** (run 1). An offline writer replays an older `wing_trust` or
-     retention row and flips one byte in the `idx_audit_record_id` cell of the newer record. `newest_record` is an
-     indexed equality (`chain.rs` 704-713), so `policy_finding` is handed the older record and reports nothing,
-     while the chain replay, a table scan in `seq` order, stays green: `verify` OK today. A rotation appends a
-     `rotate/` record that becomes the boundary, and `policy_finding` compares only records above it
-     (`retention.rs` 983), so even after the index is repaired the replayed row, re-tagged under the new key,
-     never reads as drift again.
-   - **Zero-row re-keys** (both runs). Phase 3 discards every UPDATE's row count (`rotate.rs` 851-918); a
-     missing autoindex entry on a table re-keyed by key (`kg_entities`, `kg_triples`, `tunnels`, `wing_trust`,
-     `retention_policy`, `drawer_tok`, `drawer_fde`, the meta tables) leaves that row tagged under the retired key:
-     a vault that verifies before the rotation and fails after it. The assertion refuses as `IntegrityFinding`
-     and the rotation rolls back; inside the exclusive hold no legitimate count is anything else.
-   - **Freelist reuse** (run 2's reading of `btreeGetUnusedPage`, sqlite3.c 72986-73004, not re-read): a
-     whole-vault rewrite over freelist damage spreads it.
-
-5. **`backup create` refuses on a storage finding** through its existing `Refused(report)` (O256 disposition
-   above).
-
-6. **Restore: one implementation, and the refusal says why.** `storage_check` (`restore.rs` 164-176) is deleted
-   and its call (278-280) goes; the stage's `verify` carries the leg. Today a storage refusal reaches the
-   operator as `storage_check`'s `IntegrityFinding` text naming the missing rows, while a `Refused(report)` prints
-   only "it fails integrity verification" on the CLI (`main.rs` 4594-4601) and on `/v1` (`tenant.rs` 2420-2428);
-   folding storage into the report without projecting it there would drop the only diagnostic about an archive
-   the operator cannot verify otherwise. So both `Refused` arms render the refused report's findings, every leg,
-   through the projection `verify` uses. `o268_a_corrupt_index_passes_verify_and_is_still_refused` is
-   re-expressed — every other leg passes and the storage leg names the index; the restore refuses — never
-   deleted.
-
-7. **No REINDEX on a restore's stage.** REINDEX rebuilds an index FROM its table, so it conforms the indexes to
-   damage on the table side of an indexed column instead of repairing it. One flipped byte in a `drawers`
-   leaf's rowid that keeps `seq` order reads "row N missing from index" on every index of `drawers` — the shape
-   of index-only damage — and after REINDEX passes `integrity_check` and every `verify` leg, because the drawer's
-   tag does not cover `seq`; but `drawers_fts` is keyed by `seq` (`lib.rs` 6759-6762) and so is `drawer_pq`
-   (`pqidx.rs` 634-641), and the open's FTS staleness test compares counts only (6698-6711), so the restored
-   hmac-only vault's prefilter answers a query with the orphaned row and cuts the drawer out of search
-   (6658-6660). `drawers.fp` and `filed_at` are the same shape, outside every leg. Today such an archive is
-   refused; with REINDEX it would install, silently. Salvage stays O318's, which never installs in place, and
-   O319 must not document a "REINDEX a copy, then restore it" route, which launders the same way. Reconsidered
-   only once new entry 2 below gives `verify` a leg that sees `seq`-keyed and `fp`-keyed structures against the
-   drawers they derive from — and then it is a new outcome on `backup restore`, a MINOR the maintainer decides.
-
-8. **No `immutable=1` escalation on corruption** (run 1). `connect_read_only` escalates on every probe failure
-   that is neither busy nor a deleted vault (`lib.rs` 5612-5620), and the immutable read takes the main file
-   without its WAL (the code's own comment, 5587-5594), so a vault whose bytes do not hold together is reopened
-   onto the posture whose reads are least trustworthy, announced as an unwritable directory. A `DatabaseCorrupt`
-   or `NotADatabase` from the ordinary probe is answered as itself, carved out exactly as O257 carved out busy;
-   the escalation stays for everything else. A deny-list, never an allowlist: what a write-protected mount
-   returns is unmeasured (O286).
-
-9. **Cost is measured and recorded, and never weakens the check** (integrity is not a tier). On record at ~10⁵
-   sealed: `integrity_check` alone 445 ms beside `verify` 674 ms and a backup pin of 723-757 ms (O268's and
-   O256's built records), so a pin near 1.2 s against O256's ~2 s line and `verify` near 1.1 s. That figure is
-   narrow — one sealed corpus of short notes, no derived tier, no FTS, read from an `immutable=1` archive
-   (`restore_tests.rs` 865-982) — and hmac-only is missing from every figure, where FTS5's `xIntegrity`
-   re-tokenizes every `%_content` row. The rotation's hold measured 2.56 s at 102,000 (O257's P8); +~0.45 s
-   moves the arriving open's 5 s crossover from ~2×10⁵ toward ~1.7×10⁵ drawers (run 2's arithmetic, not
-   measured). Before merge the integrator runs P-O269b and P-O269h and publishes the figures; a breach of
-   O256's ~2 s pin line or of the rotation hold's crossover is answered by scheduling, on O258's line (a waiter
-   starved past its busy budget), never by `quick_check`, a scoped check or a narrower verify on one surface. 10⁶ is a long run and needs the maintainer's go; until it runs, no surface
-   states a 10⁶ cost. The leg is also agent-callable through `undercroft_verify` (not operator-only), a cost
-   stated rather than fenced.
-
-10. **Surfaces.** The four renderers and `HAND_PROJECTED` (MCP by count, `ui.html` rows through `textContent`
-    because an index name in an `integrity_check` row is chosen by whoever wrote the file); `rotation_blockers()`
-    destructures the new field with no `..`; `docs/AGENTS.md`'s list of what `verify` checks; the stale leg
-    counts named under O263; every diagram that counts the legs (O105).
-
-11. **The remedy `UPGRADING.md` names is stated precisely.** `repair` rebuilds every index from its table (its
-    VACUUM, `manage.rs` 1870) and re-embeds every drawer, which under a served embedder sends the corpus to the
-    endpoint (O167's egress). That repairs damage confined to an index; damage on the table side of an indexed
-    column is conformed, not repaired (item 7's mechanism, which a live `repair` shares), and the text says so and
-    names the alternative: restore the newest archive whose restore is accepted.
-
-**The gate.** Each R3 flip on the LIVE vault fails `verify` as a verdict on all four renderers (exit 2,
-`"ok": false`, MCP `isError`), and `backup create` and `vault rotate` refuse it; `repair` over an R3 index flip
-brings `verify` back to OK; the UTF-8 row flip and a BLOB in `drawers.wing`, in `meta_json` and in a bare-id
-`audit.record_id` are each named by `seq` while every other leg still reports; P-L2c (the index-hidden replay:
-today `verify` passes and a rotation launders it; with the leg `verify` fails on storage and the rotation
-refuses); P-O269e (an autoindex entry removed in `kg_entities`, then a rotation: today the row stays under the
-retired key; now refused before any work); P-L2d (ten backups of an R3-flipped vault: today ten `Created` and the
-good archives pruned; now each refused); a corrupt index in an archive refuses its restore with the storage
-findings in the CLI's and `/v1`'s refusal text. A property gate: build a vault, read every TEXT column of every
-table from `table_xinfo` (O80), retype each to BLOB and to invalid UTF-8 one at a time; `verify` returns a report
-every time, never an error. **Counterfactual**: today, exit 0 on the index flips and exit 1 on the row flip. The
-truncated `vault.db` of this entry's gate may fail at OPEN, before `verify` runs — P-O269f decides whether its arm
-is met here (a truncation surfacing inside the walk is item 3's) or waits on the escalated question below; on MCP
-it is unreachable by any design, because `serve-mcp` opens its store before it serves a tool (`main.rs`
-3440-3457).
-
-**Where the two runs disagreed, and what settled it.**
-
-- **The fold of later corruption (item 3).** Run 1 folded only while the storage leg had already found damage;
-  run 2 folded unconditionally. Settled for run 2, with run 1's empty-value and `chain_ok` detail: inside one WAL
-  snapshot on a non-immutable handle a corruption code is a property of the file's bytes, and run 1's own item 5
-  ("one undecodable row does not erase the report") argues the same way; a conditional fold returns an error
-  exactly where `integrity_check`'s coverage happens to stop.
-- **REINDEX (item 7).** Run 1 escalated it, recommending it be offered automatically as a MINOR with a shape that
-  "decides nothing by SQLite's text"; run 2 ruled it out. Settled for run 2 by the `seq`-keyed reading in item 7:
-  run 1's shape accepts any damage REINDEX can make consistent, table-side damage included, and run 1's answer
-  that "a keyless writer could already make `fp` invisible" addresses a deliberate writer, not the accidental
-  damage a restore's refusal exists to stop, and misses `seq`.
-- **O256's disposition.** Run 1 "followed"; run 2 "refuted for the source". Reconciled above: followed as ruled,
-  its reason's clause refuted for the source, recorded beside O256.
-- **Cost as a condition.** Run 1 made P-O269b/h a condition of merge; run 2 recorded cost only. Reconciled in item
-  9: the measurement is owed before merge as any unit's cost is (definition of done item 6), and its result never
-  removes or narrows the leg.
-- **Item 8** was run 1's alone; run 2 neither ruled nor contradicted it. Kept on the reading above.
-
-**Options that lost, with their cost.** `quick_check`, a scoped check and hand counts (item 1). A separate command
-or flag: `verify`, `backup create` and the rotation stay blind by default — the R3 state. Keeping `storage_check`
-beside the leg: two implementations of one decision and `integrity_check` twice per restore (+445 ms at 10⁵).
-One leg merged with O263's schema leg: their rotation answers differ. Not a blocker: item 4. Run 2's lens 3's
-check of the COPY after the snapshot: the source and the copy are the same pages, `backup.rs` documents every
-failure after the verify as the I/O class, and it brings back the check of the archive O256 rejected. A
-verify-scoped remap of corruption errors at the verify door's own open (run 1's security lens): `verify` would
-answer exit 2 on bytes `search`, `stats` and `recent` answer exit 1, the per-command split `docs/AGENTS.md` records
-as the defect its one classifier fixed — escalated whole below. REINDEX in the stage: item 7.
-
-**Claims refuted, the briefs' first.** The brief frames index corruption as availability ("a scoped search or the
-dedup probe can miss a drawer"); it is integrity — item 4's hidden replay, and identity resolution:
-`delete_drawer_ruled` and `destroy_in` find a drawer through `id`'s autoindex (`manage.rs` 1015-1019, 1064-1070),
-so a missing entry makes `forget` answer that a drawer every scan still serves does not exist. The brief omits
-that corruption pushes the read-only open onto `immutable=1` (item 8). The brief's table presents 445 ms as
-"`integrity_check` at 10⁵"; it is item 9's narrow corpus. The brief calls decode failures "corruption"; a keyless
-writer produces them on purpose (item 2). The brief's "O232: block only what a rotation would launder" is narrower
-than O232's reason. This entry's own gate ("on every renderer" for the truncated file) cannot be met on MCP.
-Run 1's REINDEX claim that table damage REINDEX cannot repair "still fails the second check or a leg": refuted by
-item 7. Run 1's memory lens's "O232's criterion does not reach this leg": refuted by item 4. Run 2's lens 3's "not
-a blocker, row-count assertion only": the laundering mechanism has no per-statement guard. Run 2's lens 2's
-"fourteen tags": thirteen. Run 1's "FTS5's `xIntegrity` ignores `isQuick`" (sqlite3.c 252576) was not re-read
-here and decides nothing.
-
-**Probes owed by the build.** P-O269a: R3 on the live vault through each renderer, today and after. P-O269b: cost
-at 10⁵ with realistic chunks and the PQ and wing-PQ tiers built, both levels — `verify` alone, the check alone,
-inside backup's pin with a writer saving every 10 ms (against O256's ~2 s line), inside the rotation's hold.
-P-O269c: 10⁶, on the maintainer's go. P-O269d: one flipped `drawers_fts_data` page — `integrity_check` reports it
-through FTS5's `xIntegrity` by reading; the probe settles whether the prefilter under-returns meanwhile. P-O269e
-and P-L2c, P-L2d as in the gate. P-O269h: the hmac-only cost (FTS5's re-tokenization), a late-interaction vault, a
-read-audited vault whose `audit` is ~10× its drawers. P-O269f and P-O269g: see the analysis below. P-O286x, for
-item 8: on a write-protected mount (or O286's harness once it reaches the escalation), record the ordinary probe's
-error code and confirm it is neither `DatabaseCorrupt` nor `NotADatabase`.
-
-**Dissent.** None on the leg, its check, its placement, its blocker status or the deletion of `storage_check`.
-Run 1's position on REINDEX is recorded above and refuted on evidence.
-
-**Fails silently if**: `quick_check` or a scoped check is chosen for cost; the check runs outside `verify_in`'s
-snapshot or reads only its first row; the leg misses a renderer, or MCP prints its rows; `rotation_blockers()`
-gains a `..`; one addressed phase-3 UPDATE goes unchecked; the restore's `Refused` arms still print no findings
-once `storage_check` is gone; the `restore_tests.rs` premise is deleted rather than re-expressed; only the
-pre-tag reads move to bytes, or an undecodable row is reported nowhere, as `MetaUnparseable` is today; item 3
-folds conversion errors, or becomes conditional; item 8 becomes an allowlist; a REINDEX route appears in the stage,
-in salvage or in O319's runbook; the cost is measured on the short-note sealed corpus only, at 10³, or claimed at
-10⁶ without a run.
-
-**What remains.** The escalated class question (next subsection). Residuals stated: on an `immutable=1` handle
-beside a writer — the posture the open already warns is wrong — torn pages can read as storage findings, as they
-can already read as a broken chain; derived lookup structures keyed by `seq` or `fp` are outside every leg (new
-entry 2). Relations owed (O169), reciprocal on both entries: O269 with O231 (one arm for undecodable rows and
-unparseable meta), O269 with O318 (shares `restore.rs`'s `storage_check` and `archive_verdict`; after this build
-an archive's storage damage reaches O318's `backup verify` as a failed leg — exit 2, 200 `ok: false` — instead of
-`storage_check`'s `IntegrityFinding`, and whichever lands second adjusts), O269 with O263, and O269 with new entry
-2 (item 7's reconsideration waits on it).
-
-**Version class.** PATCH: the leg reports an existing silent defect (the 2026-09-08 ruling); a rotation or a backup
-refusing a vault that fails `verify` is their documented behaviour; and `verify` answering exit 2 rather than exit
-1 on a row that does not decode is the door's own documented "exit 2 on failure" (`docs/AGENTS.md`'s `verify`
-line) that the abort contradicted. `UPGRADING.md` owes an entry in the same unit: a vault carrying R3-class damage
-or an undecodable row now fails `verify`, and `backup create` and `vault rotate` refuse it; item 11's remedy,
-worded as stated there; `config check` opens no vault database and cannot pre-flight it — the pre-flight is the
-new binary's `verify --read-only`.
-
-#### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
-
-**The question.** When a command other than `verify`'s own checking meets SQLite corruption — at its open (the
-connector's probe, the schema batch, the read-only open's first read) or partway through — is that an integrity
-verdict (exit 2 on the CLI, 409 `class: "integrity"` on `/v1`, as one set) or the run failure it is today (exit 1;
-a 500 through `store_err`'s catch-all)? The codes are `DatabaseCorrupt` and `NotADatabase`. A truncated `vault.db`
-answered `database disk image is malformed`; where it surfaces is P-O269f's to say.
-
-**Prior ruling.** O268's ruling of 2026-09-26, item 9 — FOLLOWED: its stage-only mapping stays, and it named this
-exact question as this entry's.
-
-**Why it is escalated.** The published contract states both answers and nothing in the tree decides which binds.
-`docs/AGENTS.md` (the paragraph beginning "Exit 2 means an integrity verdict", working tree 992-1031) and the doc of
-`EXIT_FAILURE` (`main.rs` 2001-2003) list "an unreadable vault" under exit 1; the same paragraph defines exit 2 by
-retry semantics ("a compliance script may retry exit 1; retrying exit 2 only re-detects the tampering"), and
-corruption in stored bytes never heals on a retry. If "unreadable" covers malformed bytes, moving it changes a
-documented contract — MAJOR — and that release consequence is the maintainer's. 1.0.0 moved rollback-at-open from
-exit 1 to exit 2, but 1.0.0 was a version reset and is no precedent for a PATCH; the 2026-09-08 ruling covers new
-surface that reports a defect, not an existing exit code that moves.
-
-**Evidence for.** The retry rationale fits a malformed database exactly. The same sentence lists "a missing file"
-under exit 1 while a missing DATABASE beneath a manifest has been exit 2 since A33 (`DatabaseMissing`), so its
-nouns read as the run's inputs and environment rather than the vault's bytes. `archive_verdict` already classes
-these codes as integrity for the stage (`restore.rs` 106-144). A planted malformed schema object surfaces as exactly
-this code at open (O263).
-
-**Evidence against, and costs.** Every command's class moves at once (O268's stated reason). A handle escalated to
-`immutable=1` for a reason other than corruption, beside a writer, can read torn pages and raise the code on an
-intact vault (`lib.rs` 5640-5646 warns this posture is wrong beside a writer; the RULED item 8 removes only the
-escalation's corruption path). FTS5 raises `SQLITE_CORRUPT_VTAB` for a damaged accelerator, which would then page
-as tampering.
-
-**Options.**
-
-- **A — one classifier at the store's error conversion** (run 1's recommendation): `Sqlite(#[from] …)` becomes a
-  hand-written `From` mapping `DatabaseCorrupt`/`NotADatabase` to a new `StoreError::StorageCorrupt`, worded as
-  damage rather than tampering (O235), joined to the CLI's exit-2 set and `/v1`'s integrity class as one set (the
-  one-set test gains it on both sides), with an O115 mint-site row and `archive_verdict` moved onto it. It loses on
-  evidence: the conversion sees a `StoreError` only, never the handle's posture, so the `immutable=1` torn read
-  above pages a tamper verdict on every command.
-- **B — a typed integrity-family variant minted by the store at named doors, only on a non-`immutable` handle**
-  (run 2's recommendation, refined): the connector's probe and first locking statement, the writable schema batch,
-  and the read-only open's first content read. Same O115 row and one-set test. Corruption met partway through a
-  command other than `verify` stays exit 1, a residual stated: the next `verify` gives the verdict (RULED items 1
-  and 3).
-- **C — leave the class**: every open-time corruption stays exit 1, and the truncated-file arm of the gate with it
-  if P-O269f places it at the open.
-- A verify-scoped remap only: refuted in the RULED subsection.
-
-**Recommended answer:** B, as PATCH, under the retry-semantics reading, with `docs/AGENTS.md`'s sentence and
-`EXIT_FAILURE`'s doc refined in the same unit to say that "unreadable" means unreachable for a reason outside the
-file's bytes — permissions, a lock, a missing path, an I/O error — and that a database whose bytes do not hold
-together is an integrity verdict, as an absent one has been since A33; `UPGRADING.md` gains an entry. If the
-maintainer reads the sentence as covering malformed bytes, B is MAJOR and goes to `2.0.0`, C stands until then, and
-the gate's truncated arm waits for it if P-O269f places the truncation at the open. A is preferable to B only if
-P-O269g shows an `immutable=1` handle beside a writer never raises the codes, which a probe can support and never
-prove.
-
-**Probes first.** P-O269f: for each of the entry's corruptions — a truncated `vault.db`, a row byte that breaks
-UTF-8, one that does not — on both postures, the step it surfaces at (connector, schema batch, first read, the
-walk, a later leg) and the rusqlite error it raises. P-O269g: an `immutable=1` reader beside a live writer, looped
-— does it ever raise `DatabaseCorrupt` or `NotADatabase` on an intact vault.
-
-**Where the two runs disagreed.** Both escalated; run 1 recommended A, run 2 B. Settled for B on the posture
-evidence above, A kept as the alternative P-O269g could reopen.
-
-**Version class.** B: PATCH under the recommended reading, MAJOR under the literal one. A: the same. C: none.
-
-#### RULED 2026-10-08 by the maintainer
-
-**The question.** When a command other than `verify`'s own checking meets SQLite corruption (`DatabaseCorrupt`,
-`NotADatabase`) — at its open or partway through — is that an integrity verdict, or the run failure it is today?
-
-**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
-escalated questions, each shown with its panel's recommended answer, this one among them.
-
-**Decided: B, as PATCH, under the retry-semantics reading.** "A typed integrity-family variant minted by the
-store at named doors, only on a non-`immutable` handle": the connector's probe and first locking statement, the
-writable schema batch, and the read-only open's first content read, with the same O115 row and one-set test.
-Corruption met partway through a command other than `verify` stays exit 1, a residual stated: the next `verify`
-gives the verdict. In the same unit, `docs/AGENTS.md`'s sentence and `EXIT_FAILURE`'s doc are refined "to say that
-'unreadable' means unreachable for a reason outside the file's bytes — permissions, a lock, a missing path, an
-I/O error — and that a database whose bytes do not hold together is an integrity verdict, as an absent one has
-been since A33; `UPGRADING.md` gains an entry." The answer takes the retry-semantics reading, so the MAJOR branch
-the recommendation describes — B to `2.0.0`, C until then — does not arise.
-
-**What remains open.** Nothing for the maintainer. The probes come first: P-O269f places each corruption, and
-P-O269g asks whether an `immutable=1` reader beside a writer ever raises the codes. A stays the alternative
-P-O269g could reopen.
 
 ### O270 — a restore over a vault whose database is missing refuses, including a fresh host `init` has populated
 
@@ -50320,7 +50662,7 @@ states that a salvage payload imports only on the release that introduces it or 
 
 **Relations:** sequenced after O316 — the disclosure of drawers a live vault's `del/` records destroyed is defined there and reused here.
 
-**Relations:** shares a diff surface with O269 — both change `storage_check` and `archive_verdict` in `crates/undercroft-store/src/restore.rs` and the legs a report projects.
+O269's relation marker to this entry is retired, that entry having closed 2026-10-12. What it changed here: `storage_check` is gone from `crates/undercroft-store/src/restore.rs`, the stage's `verify` carrying SQLite's `integrity_check` as its storage leg, so an archive's storage damage reaches this entry's `backup verify` as a failed leg (exit 2, 200 `ok: false`) rather than as `storage_check`'s `IntegrityFinding`; `archive_verdict` gained `StoreError::StorageCorrupt`; and both surfaces' `Refused` arms print the refused report through `verify`'s projection (`print_verify_report` on the CLI, `verify_report_json` as `report` on `/v1`).
 
 **Relations:** shares a diff surface with O319 — both rewrite the archive-recovery passage of `website/src/runbook.md` and the restore entry of `UPGRADING.md`.
 
@@ -51900,7 +52242,7 @@ already computes `search_key(content)`.
 **Gate**: each substitution is named by `verify`, or stated as a residual with its argument. **Probe
 P-FTS**: rewrite one row's text through the virtual table, search a term only the original held.
 
-**Relations:** shares a question with O269 — that entry's REINDEX ruling's reconsideration waits on this.
+O269's relation marker to this entry is retired, that entry having closed 2026-10-12; its ruling's item 7 — no REINDEX on a restore's stage, reconsidered only once this entry gives `verify` a leg that sees `seq`- and `fp`-keyed structures — still waits on this one. Note what its build changed beside it: `repair` now REINDEXes the LIVE vault (item 11's remedy, which assumed the VACUUM rebuilt indexes; measured, it copies them), so the conforming hazard item 7 names applies to a live `repair` today, as item 11 says.
 
 ### O350 — a destroyed drawer's PQ code survives inside its live sealed page until a repack
 
@@ -53273,27 +53615,6 @@ stops.
 
 **Relations:** shares a question with O148 — the screen-off remedy for a row this act would destroy exists once that entry's hold lands, and this entry owns the remedies' wording (`admission::UNVERIFIABLE_REMEDIES`).
 
-### O427 — one covered column retyped offline makes `verify` and the retention sweep fail with a conversion error instead of naming the row
-
-**Filed 2026-10-12 by O221's build, after its independent review; measured by that review's probe.**
-`walk_covered` reads `meta_json` as TEXT and `content` and `tag` as BLOBs. An offline writer who
-rewrites one of them with another storage type (`UPDATE drawers SET content = 'x'`, or
-`meta_json = CAST(meta_json AS BLOB)`) leaves a row no tag can be checked over. Since O221 the walk
-yields it as `CoveredRow::Undecodable`, and the review queue's doors read it as a row that does not
-verify. `verify` and the retention sweep still raise the conversion error, as they did before O221:
-`verify` answers `sqlite error: Conversion error …` rather than an integrity verdict naming the row,
-and one such row anywhere in the vault fails every sweep. By reading, `backup create` and a rotation,
-which run `verify` first, fail with the same error (not measured).
-
-**Why it is its own entry.** It is not O221's: the review queue's doors regressed on it and are
-fixed, while `verify` and the sweep answered it the same way before. What it owes is a verdict, which
-is a ruling: a `BadReason` for `verify` beside O231's `MetaUnparseable` (and whether a rotation
-blocks on it, O232's question), and the sweep's `unverifiable` arm (O206 ruling 2's rule).
-
-**Gate**: a row whose `content` is TEXT, and one whose `meta_json` is a BLOB: `verify` names each
-with its reason and exits 2; a sweep names each as unverifiable and destroys the rest.
-**Counterfactual**: today, both fail with the conversion error.
-
 ### O428 — the export bundle's manifest drops a key it does not declare and reads no version, so a newer build's signed field reads as a bad signature
 
 **Filed 2026-10-12 by O315's build (its sibling sweep); read in code, unmeasured.** O315 fenced the erasure
@@ -53420,6 +53741,78 @@ stem and a triple subject holding `ʕΣ` and a codepoint new in Unicode 17 deriv
 triple ids under every build that compiles; counterfactual, the derivation over 1.90.0's tables.
 
 **Relations:** shares a question with O422 — the tables that entry generates are what this entry's id recipes would read, at a version this entry rules.
+
+### O433 — an open reads `meta` and `chain_meta` values with typed reads, so one retyped value refuses every open with a conversion error, exit 1, and `verify` never runs
+
+**Filed 2026-10-12 by O269's build; measured.** O269's property gate retyped every TEXT column of
+every table, one at a time, to a BLOB and to TEXT that is not UTF-8, and every column a `verify` leg
+reads now answers a report. Two tables answer before `verify` can run, because the OPEN reads them:
+a retyped `chain_meta.value` refuses both postures (`sqlite error: Invalid column type Blob at
+index: 0, name: value`, and `Conversion error from type Text … invalid utf-8` for the second form);
+a retyped `meta.value` refuses the writable open the same way, while the read-only open and its
+`verify` answer. Exit 1 on the CLI — the class a script retries — and a 500 on `/v1`, on a vault
+whose answer never changes, and a writer without the key produces it with one `UPDATE`. Neither of
+O269's rulings covers it: item 2 ruled the reads `verify` makes, and the maintainer's option B
+SQLite's corruption codes at the open's named doors; a conversion error is neither (item 2 keeps
+them classified only where a ruling names the read).
+
+**Shape, for a ruling panel.** Read the open's `meta` and `chain_meta` values by type, as `verify`'s
+walks do, and decide what a value of the wrong class IS at each read: `chain_meta`'s head and height
+already have a judgement for a value that does not hold together (O303's `head_state`, which answers
+`Inconsistent` as an integrity finding), and `meta`'s keycheck, embedder identity and migration
+markers each decide something different at the open — which of them refuses, in which class, and
+which the open should carry to `verify` instead, is the question. **Gate**: each retyped value is an
+integrity verdict naming the key, or an open that proceeds and a `verify` that names it — never a
+conversion error. **Counterfactual**: today, exit 1 with SQLite's conversion text on both postures for
+`chain_meta`, and on the writable one for `meta`.
+
+### O434 — index damage has no repair remedy: whether `repair` should rebuild an index, and what it must rule out first
+
+**Filed 2026-10-12 by the review of O269's build, for a ruling panel.** `repair` has never rebuilt an index: its
+closing VACUUM copies each index's records as they stand (the record beside O269's item 11, with the sqlite3.c
+evidence), so a `STORAGE: integrity_check: row N missing from index X` line survives it and the remedy every
+surface names is a restore. O269's first build added `REINDEX` to `repair` and its review removed it, because
+REINDEX conforms an index to its table: one byte changed on the TABLE side of an indexed column produces exactly
+the lines index damage does (O269 item 7, measured), and a rebuild then turns that edit into a vault `verify`
+calls clean — the laundering item 7 refuses for a restore's stage, performed in place on the live vault.
+
+**The question.** Restore-only, as today — the cost is a vault with no usable archive and index-only damage,
+which today has no remedy that keeps its later writes; or a rebuild, and with what detection of a table-side
+flip FIRST. The material for the second: each `missing from index` / `wrong # of entries` line names the index
+and, for a missing row, the table row; a drawer's indexed columns (`wing`, `room`, `kind`, `supersedes`) are
+mirrors of HMAC-covered meta that `verify`'s mirror-drift leg already compares, so an index over those can be
+rebuilt after a clean mirror leg proves the table side; an index over a column no tag covers (`fp`, `filed_at`,
+`seq`-keyed derived tables, O349's) has no such proof; `audit.record_id` is bound by the version-2 chain step,
+so a clean chain replay proves it. A rebuild limited to indexes whose every column a clean leg vouches for, run
+only when every other leg is clean, recorded on the chain, is one shape; the panel decides whether it is sound,
+what it says when it refuses, and whether it is `repair`'s or its own operator door.
+
+**Gate**: an index flip over a covered column, with every other leg clean, is either mended by the ruled door
+(and `verify` OK, SQLite's own check `ok`) or refused with the restore named; a TABLE-side flip of the same
+column producing the same `integrity_check` lines is never conformed — the ruled door refuses it, naming the
+mirror drift. **Counterfactual**: a bare `REINDEX` in `repair`, which conforms the table-side flip and answers
+`VERIFY OK`.
+
+### O435 — `verify` on an `immutable=1` handle beside a writer fails the chain leg on an intact vault
+
+**Filed 2026-10-12 by the review of O269's build; measured.** A read-only open escalates to `immutable=1` where
+its ordinary connection cannot open the database (a write-protected mount, a snapshot), and its start-up warning
+says that posture is WRONG if any process is still writing. Beside one, `verify` gives a false integrity verdict
+anyway: P-O269g's setup through the store (`p_o269g_verify_through_an_immutable_handle_beside_a_writer`, run by
+name) answered a report failing the chain leg on 38,350 of 38,363 verifies beside 4,857 saves, and on 16,764 of
+16,773 and 7,407 of 7,416 with the handle's cache cut to eight pages — exit 2, `chain_ok: false`, on a vault
+nothing tampered with. The handle's rows stay what it read at its open (every report checked the 306 records the
+vault held then), while `verify` reads the manifest anchor from disk on every call, so the writer's anchors move
+past the rows the replay can see. O269's review made the STORAGE leg on such a handle `StorageUnverifiable`; the
+chain leg, and any other that compares the handle's rows with something read fresh, still answers. O431 is the
+neighbouring case at the OPEN (a blind handle beside a hot `-wal`); O285 the handle whose file moved.
+
+**Shape, for a ruling.** Whether a handle that is `immutable=1` gives verdicts at all: a `verify` that answers
+the posture refusal whenever the anchor is ahead of the rows it can see; one that answers every leg's finding as
+not verifiable on such a handle; or refusing `verify` on the posture outright and naming the remedy (a copy, or a
+writable directory). **Gate**: the probe's run answers no integrity verdict on an intact vault; a vault really
+damaged or rolled back, read through the same posture with nothing writing, still answers whatever the ruled
+class is. **Counterfactual**: today's chain-leg failure on nearly every call.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

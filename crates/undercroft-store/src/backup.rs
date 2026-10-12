@@ -161,6 +161,10 @@ impl VaultStore {
             ))));
         }
         dst.pragma_update(None, "synchronous", "OFF")?;
+        // The refused report, kept outside the snapshot: ending a snapshot in
+        // which a leg met corrupt pages answers that corruption again, and the
+        // verdict must not become the run failure (ROADMAP O269 item 3).
+        let mut refused: Option<VerifyReport> = None;
         let judged = self.snapshot(|snap| {
             pause::fire(&vault_dir, Phase::Pinned);
             // O257's fence already refuses a rotation while this connection is
@@ -177,7 +181,8 @@ impl VaultStore {
             }
             let report = self.verify_in(snap, manifest.chain_head())?;
             if !report.ok() {
-                return Ok(Err(report));
+                refused = Some(report);
+                return Ok(None);
             }
             pause::fire(&vault_dir, Phase::Verified);
             // SQLite reuses the read transaction this connection holds, so
@@ -193,11 +198,16 @@ impl VaultStore {
             pause::fire(&vault_dir, Phase::Copied);
             let head = chain::require_head(snap.conn())?.head;
             let writes = chain::writes(snap.conn())?;
-            Ok(Ok((head, writes)))
-        })?;
-        let (chain_head, writes) = match judged {
-            Ok(state) => state,
-            Err(report) => return Ok(BackupOutcome::Refused(Box::new(report))),
+            Ok(Some((head, writes)))
+        });
+        if let Some(report) = refused {
+            return crate::report_despite_the_end(judged.map(|_| ()), Some(report))
+                .map(|r| BackupOutcome::Refused(Box::new(r)));
+        }
+        let Some((chain_head, writes)) = judged? else {
+            return Err(StoreError::Invalid(
+                "the backup's snapshot ended with neither a copy nor a verdict".into(),
+            ));
         };
         drop(dst);
         std::fs::OpenOptions::new()

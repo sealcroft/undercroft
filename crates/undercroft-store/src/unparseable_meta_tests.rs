@@ -152,6 +152,7 @@ fn assert_named(s: &VaultStore, id: &str) -> crate::VerifyReport {
         vec![BadRecord {
             record: id.to_string(),
             reason: BadReason::MetaUnparseable,
+            detail: String::new(),
         }],
         "{report:?}"
     );
@@ -244,6 +245,7 @@ fn o231_backup_create_refuses_it_and_a_rotation_leaves_it_detectable() {
             vec![BadRecord {
                 record: victim.id.clone(),
                 reason: BadReason::MetaUnparseable,
+                detail: String::new(),
             }]
         ),
         BackupOutcome::Created(r) => panic!("an O231 row was archived as clean: {r:?}"),
@@ -294,6 +296,7 @@ fn o231_an_archive_holding_one_refuses_to_restore() {
             vec![BadRecord {
                 record: victim.id.clone(),
                 reason: BadReason::MetaUnparseable,
+                detail: String::new(),
             }],
             "{r:?}"
         ),
@@ -307,15 +310,16 @@ fn o231_an_archive_holding_one_refuses_to_restore() {
     );
 }
 
-/// **The two receipt legs swallow a refused read only over a FAILED HMAC.**
-/// A supersession link cites the O231 row: `get` refuses it as `CorruptRow`,
-/// and `verify` answers that error rather than a verdict — never OK, never a
-/// swallowed leg (an emptied leg would drop a tampered receipt from the
-/// rotation's blockers). Turning the error into a verdict is ROADMAP O269's
-/// "no row aborts `verify`"; pinned here so that change is recorded rather
-/// than absorbed.
+/// **A link citing the row answers a VERDICT, never OK** (ROADMAP O269 item
+/// 2, "no row aborts `verify`"). A supersession link cites the O231 row: `get`
+/// refuses it as `CorruptRow`, and `verify` used to answer that error — exit
+/// 1, a 500 — which this test pinned as O269's residual. Now the drawer walk
+/// names the row and the ONE link citing it is left out of its leg, the
+/// receipt having verified: never a swallowed leg, so a TAMPERED receipt on
+/// the same link — decided before the read — is still reported and still
+/// blocks a rotation, the hazard the old swallow's condition guarded.
 #[test]
-fn o231_a_link_citing_the_row_answers_an_error_never_ok() {
+fn o231_a_link_citing_the_row_answers_a_verdict_never_ok() {
     let old = drawer("the original note a later one supersedes", 0);
     let (_dir, mut s) = vault_with(SecurityLevel::Sealed, &old);
     let mut newer = drawer("the note that supersedes it", 1);
@@ -324,9 +328,37 @@ fn o231_a_link_citing_the_row_answers_an_error_never_ok() {
     assert!(s.verify().unwrap().ok(), "premise: the link verifies");
     retag_over(&s, &old.id, r#"{"wing":"w1"}"#);
     assert_an_o231_row(&s, &old.id);
-    match s.verify() {
-        Err(StoreError::CorruptRow { id, .. }) => assert_eq!(id, old.id),
-        Err(e) => panic!("a different error: {e}"),
-        Ok(r) => panic!("the residual moved — record it under O269: {r:?}"),
-    }
+    let r = s
+        .verify()
+        .expect("a verdict, never the cited drawer's error");
+    assert!(!r.ok(), "{r:?}");
+    assert_eq!(
+        r.bad_records,
+        vec![BadRecord::meta_unparseable(old.id.clone())],
+        "{r:?}"
+    );
+    assert!(
+        r.supersessions.is_empty(),
+        "the link whose verdict needs the unreadable drawer is left out: {r:?}"
+    );
+    // The receipt itself forged: decided before the read, so reported, and a
+    // blocker the rotation sees.
+    assert_eq!(
+        s.conn
+            .execute(
+                "UPDATE drawers SET supersedes_receipt = zeroblob(32) WHERE id = ?1",
+                [&newer.id],
+            )
+            .unwrap(),
+        1
+    );
+    let r = s.verify().expect("a verdict");
+    assert_eq!(r.tampered_supersessions(), 1, "{r:?}");
+    assert!(
+        r.rotation_blockers()
+            .iter()
+            .any(|b| b.starts_with("supersession ")),
+        "{:?}",
+        r.rotation_blockers()
+    );
 }

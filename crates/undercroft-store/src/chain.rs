@@ -299,11 +299,28 @@ pub(crate) fn seed_empty(conn: &Connection) -> Result<(), StoreError> {
 
 /// Advance the live head, inside the caller's transaction.
 pub(crate) fn set_head(conn: &Connection, regime: Regime, head: &str) -> Result<(), StoreError> {
-    conn.execute(
+    let changed = conn.execute(
         "UPDATE chain_meta SET value = ?1 WHERE key = ?2",
         params![head, regime.head_key()],
     )?;
-    Ok(())
+    one_meta_row(changed, regime.head_key())
+}
+
+/// **A committed head or height moved in exactly one row** (ROADMAP O269,
+/// item 4's assertion on the rows a rotation's phase 3 writes, applied to the
+/// two every write moves). Every caller has just read the row it updates, so
+/// any other count is a `chain_meta` whose key its own index no longer finds:
+/// the head would silently not advance while the rows did. Refused in the
+/// integrity class; the caller's transaction rolls back.
+fn one_meta_row(changed: usize, key: &str) -> Result<(), StoreError> {
+    if changed == 1 {
+        return Ok(());
+    }
+    Err(StoreError::IntegrityFinding(format!(
+        "audit chain: setting `chain_meta` {key:?} changed {changed} row(s), not one — the \
+         committed head's row is not where its key says it is, so this write is refused. Run \
+         `undercroft verify`, whose storage leg names the damage (ROADMAP O269)"
+    )))
 }
 
 /// The committed record count (`chain_meta.writes`).
@@ -343,11 +360,11 @@ pub(crate) fn writes(conn: &Connection) -> Result<u64, StoreError> {
 
 /// Set the committed record count, inside the caller's transaction.
 pub(crate) fn set_writes(conn: &Connection, writes: u64) -> Result<(), StoreError> {
-    conn.execute(
+    let changed = conn.execute(
         "UPDATE chain_meta SET value = ?1 WHERE key = ?2",
         params![writes.to_string(), WRITES_KEY],
     )?;
-    Ok(())
+    one_meta_row(changed, WRITES_KEY)
 }
 
 /// The incremental commitment digest: `SHA-256(domain ‖ (lp(record_id) ‖
@@ -820,13 +837,24 @@ pub(crate) fn prefix_range(ns: Namespace) -> LabelRange {
 }
 
 /// Every distinct label a namespace's records carry, by the same selection.
+///
+/// Read by its type (ROADMAP O269 item 2): a label that is TEXT and not
+/// UTF-8 sits inside a namespace's range and made every caller — `verify`'s
+/// policy leg, the trust floor, the sweep — fail with a conversion error. It
+/// is skipped here: it can name no policy key, and `verify`'s orphan-label
+/// leg names it by `seq`. (A BLOB label sorts after every TEXT value, so no
+/// range selects one.)
 pub(crate) fn chain_keys(conn: &Connection, ns: Namespace) -> Result<Vec<String>, StoreError> {
     let (clause, ps) = prefix_range(ns).clause(1);
     let sql = format!("SELECT DISTINCT record_id FROM audit WHERE {clause} ORDER BY record_id");
     let mut stmt = conn.prepare(&sql)?;
-    let keys = stmt
-        .query_map(rusqlite::params_from_iter(ps.iter()), |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
+    let mut rows = stmt.query(rusqlite::params_from_iter(ps.iter()))?;
+    let mut keys = Vec::new();
+    while let Some(r) = rows.next()? {
+        if let Some(k) = crate::text_of(&r.get_ref(0)?) {
+            keys.push(k.to_string());
+        }
+    }
     Ok(keys)
 }
 

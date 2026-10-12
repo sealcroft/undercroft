@@ -2378,6 +2378,175 @@ check "O231: drawer delete removes it" 0 "Deleted drawer" -- \
 check "O231: and the vault verifies again" 0 "VERIFY OK" -- \
   env UNDERCROFT_HOME="$O231_HOME" "$BIN" verify --vault plain
 
+# ── ROADMAP O269: `verify` reads the file the rows live in ────────────────
+# `verify` walked tags and the chain and never the database's structure, so a
+# flipped byte in an index page (R3) passed it while SQLite's
+# `integrity_check` named the missing rows — and where `verify` did trip over
+# damage it answered SQLite's error, exit 1, the class a script retries. Now
+# a storage leg runs `integrity_check` first; a value no read takes is a
+# finding naming the row; and a file whose bytes do not hold together is an
+# integrity verdict at the open (the maintainer's option B). The flips are
+# made with `od`/`dd` on a closed vault, the retype with sqlite3 — no key.
+O269_HOME="$(mktemp -d)"
+o269() { env UNDERCROFT_HOME="$O269_HOME" "$BIN" "$@"; }
+o269 init >/dev/null 2>&1
+for i in $(seq 1 40); do
+  o269 remember "ledger note $i names cargo $i at the pier" --wing "w$((i % 2))" \
+    --room "r$((i % 3))" >/dev/null 2>&1
+done
+O269_DB="$O269_HOME/vaults/default/vault.db"
+# One byte of index $2's page in database $1 flipped, chosen so that
+# `integrity_check` names a row missing from that index and nothing worse:
+# R3's index-only damage. Prints the offset, or fails.
+o269_flip() {
+  local db="$1" idx="$2" ps root base cstart off b ic
+  ps="$(sqlite3 "$db" 'PRAGMA page_size')"
+  root="$(sqlite3 "$db" "SELECT rootpage FROM sqlite_schema WHERE name = '$idx'")"
+  base=$(( (root - 1) * ps ))
+  cstart="$(od -An -tu2 --endian=big -j $((base + 5)) -N2 "$db" | tr -d ' ')"
+  for off in $(seq "$cstart" 3 $((ps - 1))); do
+    cp "$db" "$db.cand"
+    b="$(od -An -tu1 -j $((base + off)) -N1 "$db.cand" | tr -d ' ')"
+    printf "$(printf '\\%03o' $((b ^ 1)))" \
+      | dd of="$db.cand" bs=1 seek=$((base + off)) conv=notrunc 2>/dev/null
+    ic="$(sqlite3 "$db.cand" 'PRAGMA integrity_check' 2>&1)"
+    if grep -qF -- "missing from index $idx" <<<"$ic" && ! grep -qF -- "malformed" <<<"$ic"; then
+      mv "$db.cand" "$db"; echo "$off"; return 0
+    fi
+  done
+  rm -f "$db.cand"; return 1
+}
+check "O269: premise — the vault verifies before any damage" 0 "storage:         0" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" verify
+# The archive the remedy restores, taken while the vault is intact.
+o269 backup create >/dev/null 2>&1
+O269_BK0="$(ls "$O269_HOME/backups" | grep '^default-' | head -1)"
+if O269_OFF="$(o269_flip "$O269_DB" idx_drawers_room)"; then
+  echo "ok    O269: premise — one index byte flipped, integrity_check names a missing row (offset $O269_OFF)"; PASS=$((PASS+1))
+else
+  echo "FAIL  O269: premise — no index-only flip found in idx_drawers_room"; FAIL=$((FAIL+1))
+fi
+check "O269: verify names the index on its storage leg, exit 2" 2 \
+  "STORAGE: integrity_check: row" -- env UNDERCROFT_HOME="$O269_HOME" "$BIN" verify
+check "O269: and every row leg is clean — the vault verify used to pass" 2 "hmac failures:   0" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" verify
+O269_MCP="$(printf '%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"undercroft_verify","arguments":{}}}' \
+  | env UNDERCROFT_HOME="$O269_HOME" "$BIN" serve-mcp 2>/dev/null)"
+if grep -qF '"isError":true' <<<"$O269_MCP" && grep -qE 'storage: [1-9]' <<<"$O269_MCP" \
+   && ! grep -qF 'idx_drawers_room' <<<"$O269_MCP"; then
+  echo "ok    O269: MCP verify is isError:true and counts the storage leg, naming nothing"; PASS=$((PASS+1))
+else
+  echo "FAIL  O269: MCP verify — isError, a storage count, no names"
+  echo "$O269_MCP" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+check "O269: backup create refuses the damaged vault, exit 2" 2 "refusing to back up" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" backup create
+check "O269: a rotation refuses it before any re-key, exit 2" 2 "storage integrity_check" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" vault rotate default
+# /v1, on a second vault given the same damage: the server holds `default`.
+o269 vault create idx >/dev/null 2>&1
+for i in $(seq 1 30); do
+  o269 remember "idx note $i about the weir $i" --vault idx --wing "w$((i % 2))" \
+    --room "r$((i % 3))" >/dev/null 2>&1
+done
+O269_IDX="$O269_HOME/vaults/idx/vault.db"
+o269_flip "$O269_IDX" idx_drawers_room >/dev/null
+# A third, whose file is cut in half: the open's first statement meets it.
+o269 vault create cut >/dev/null 2>&1
+o269 remember "a note in the cut vault" --vault cut --wing w --room r >/dev/null 2>&1
+O269_CUT="$O269_HOME/vaults/cut/vault.db"
+head -c $(( $(stat -c %s "$O269_CUT") / 2 )) "$O269_CUT" > "$O269_CUT.half"
+mv "$O269_CUT.half" "$O269_CUT"
+check "O269: a file cut in half is storage damage at the open, exit 2" 2 \
+  "the vault's database is damaged" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" verify --vault cut
+check "O269: on every command, not only verify (the open's door)" 2 \
+  "the writable open's first statement" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" search "note" --vault cut
+check "O269: and on the read-only posture, never escalated to immutable=1" 2 \
+  "the read-only open's first statement" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" --read-only verify --vault cut
+UNDERCROFT_HOME="$O269_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18269 >/dev/null 2>&1 &
+O269_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18269/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O269_V="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18269/v1/vaults/idx/verify)"
+O269_C="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18269/v1/vaults/cut/verify)"
+kill "$O269_PID" 2>/dev/null; wait "$O269_PID" 2>/dev/null
+if [ "$(tail -1 <<<"$O269_V")" = 200 ] && grep -qF '"ok":false' <<<"$O269_V" \
+   && grep -qF '"storage":["integrity_check: row' <<<"$O269_V" \
+   && grep -qF 'idx_drawers_room' <<<"$O269_V"; then
+  echo "ok    O269: /v1 verify answers ok:false with the storage leg naming the index"; PASS=$((PASS+1))
+else
+  echo "FAIL  O269: /v1 verify — ok:false and the storage leg"; echo "$O269_V" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+if [ "$(tail -1 <<<"$O269_C")" = 409 ] && grep -qF '"class":"integrity"' <<<"$O269_C" \
+   && grep -qF "the vault's database is damaged" <<<"$O269_C"; then
+  echo "ok    O269: /v1 answers a file cut in half 409 class integrity, never a 500"; PASS=$((PASS+1))
+else
+  echo "FAIL  O269: /v1 on a file cut in half"; echo "$O269_C" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# `repair` rebuilds no index: its VACUUM copies one as it stands, and a
+# rebuild would conform the index to a table-side edit that reads exactly like
+# this damage (O269's review; O434). The remedy `UPGRADING.md` names is
+# a restore.
+check "O269: repair leaves the index finding standing, exit 2" 2 "integrity: FAILED" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" repair
+# Read by SQLite itself, not by the binary under test.
+O269_IC="$(sqlite3 "$O269_DB" 'PRAGMA integrity_check' 2>&1)"
+if grep -qF -- "missing from index idx_drawers_room" <<<"$O269_IC"; then
+  echo "ok    O269: and SQLite's own check still names the index after repair"; PASS=$((PASS+1))
+else
+  echo "FAIL  O269: after repair SQLite reports: $O269_IC"; FAIL=$((FAIL+1))
+fi
+check "O269: the archive taken before the damage restores" 0 "Restored $O269_BK0" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" backup restore "$O269_BK0" --force
+O269_IC="$(sqlite3 "$O269_DB" 'PRAGMA integrity_check' 2>&1)"
+if [ "$O269_IC" = "ok" ]; then
+  echo "ok    O269: and SQLite's own check agrees the file holds together"; PASS=$((PASS+1))
+else
+  echo "FAIL  O269: after the restore SQLite reports: $O269_IC"; FAIL=$((FAIL+1))
+fi
+check "O269: and the vault verifies again" 0 "VERIFY OK" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" verify
+# A value no read takes, with no key: the meta retyped as a BLOB, its bytes —
+# and so its tag — intact. `verify` returned a conversion error, exit 1.
+O269_ID="$(sqlite3 "$O269_DB" "SELECT id FROM drawers ORDER BY seq LIMIT 1")"
+sqlite3 "$O269_DB" "UPDATE drawers SET meta_json = CAST(meta_json AS BLOB) WHERE id = '$O269_ID'"
+check "O269: a row no read takes is named, exit 2 — never a conversion error" 2 \
+  "UNREADABLE: $O269_ID: column meta_json holds a BLOB" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" verify
+check "O269: its tag verifies over the bytes, so it is no HMAC failure" 2 "hmac failures:   0" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" verify
+check "O269: and it blocks a rotation, which could not read it" 2 "column meta_json holds a BLOB" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" vault rotate default
+sqlite3 "$O269_DB" "UPDATE drawers SET meta_json = CAST(meta_json AS TEXT) WHERE id = '$O269_ID'"
+check "O269: retyped back, the vault verifies" 0 "VERIFY OK" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" verify
+# An ARCHIVE with an index flip: the restore refuses it, and the refusal
+# carries the storage findings on both surfaces — the one diagnostic about an
+# archive the operator cannot verify any other way (O269 item 6).
+o269 backup create >/dev/null 2>&1
+O269_BK="$(ls "$O269_HOME/backups" | grep '^default-' | grep -vxF -- "$O269_BK0" | head -1)"
+o269_flip "$O269_HOME/backups/$O269_BK/vault.db" idx_drawers_room >/dev/null
+check "O269: a restore refuses the archive and prints its storage findings, exit 2" 2 \
+  "STORAGE: integrity_check: row" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" backup restore "$O269_BK" --force
+UNDERCROFT_HOME="$O269_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18269 --vault idx >/dev/null 2>&1 &
+O269_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18269/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O269_R="$(curl -s -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d "{\"name\":\"$O269_BK\"}" http://127.0.0.1:18269/v1/vaults/default/backups/restore)"
+kill "$O269_PID" 2>/dev/null; wait "$O269_PID" 2>/dev/null
+if [ "$(tail -1 <<<"$O269_R")" = 409 ] && grep -qF '"class":"integrity"' <<<"$O269_R" \
+   && grep -qF '"report":{' <<<"$O269_R" && grep -qF 'idx_drawers_room' <<<"$O269_R"; then
+  echo "ok    O269: /v1 refuses the restore 409 integrity with the report naming the index"; PASS=$((PASS+1))
+else
+  echo "FAIL  O269: /v1 restore refusal carries the report"; echo "$O269_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -rf "$O269_HOME"
+
 # ── ROADMAP O255: a destruction beside a writer in ANOTHER process ─────────
 # Each drawer used to be destroyed in its own transaction, so another
 # writer's commit landed inside a receipt's interval — the receipt then never

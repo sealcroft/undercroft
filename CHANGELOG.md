@@ -2,9 +2,9 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and fifty-six fixes. The witness
+MINOR: one new capability, backward compatible, and fifty-eight fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Seventeen fixes change what a deployment must do: every process writing a
+start-up. Eighteen fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
@@ -33,7 +33,10 @@ answer a document carrying a field or a version this build does not know as NOT 
 exit 1 and 400 over `/v1`, where a receipt with a key added beside its signature verified
 and a newer build's signed field read as forged (O315); a `--read-only` open of a vault
 nothing has written yet exits 1, a `/v1` 409 with no class, where it exited 2 with
-`class: "integrity"`, so an alert keyed on exit 2 stops firing for it (O213); and a native
+`class: "integrity"`, so an alert keyed on exit 2 stops firing for it (O213); `verify` checks the database file itself, so a vault
+with index damage, or a file that does not hold together, which the previous binary
+verified or answered with exit 1, now exits 2 and stops `backup create` and
+`vault rotate` (O269); and a native
 source build uses the Rust 1.98.1 that `rust-toolchain.toml` pins, fetching it the first
 time, and does not compile on a standard library of another Unicode version (O294) — all in
 `UPGRADING.md`, beside O279's note that a filesystem whose inode numbers are not
@@ -61,12 +64,13 @@ O236 and O262 — "thirty-nine" until O231, and "forty" until the units of O273,
 which closed five — O273, O301, O211, O210 and O321, "forty-five" until O259's unit closed O259 and
 O260, "forty-seven" until train 3's integration, which closed six — O221, O226, O315, O308,
 O213 and O322 — and "fifty-three" until O294's unit joined that train and closed three —
-O294, O326 and O327, beside O421, which sits open under this heading;
+O294, O326 and O327, and "fifty-six" until O269's unit closed two — O269 and
+O427 — beside O421, which sits open under this heading;
 it said "Three fixes change what a deployment must do" until O283 made
 it four, "Four" until O291 made it five, "Five" until O212 made it six, "Six"
 until O287 made it seven, "Seven" until train 1 made it nine (O200, O262), "Nine" until O231 made it ten, "Ten" until those units made it fourteen (O273, O301,
-O321, O210), "Fourteen" until train 3's integration made it sixteen (O315, O213), and "Sixteen" until
-O294 made it seventeen, O221's
+O321, O210), "Fourteen" until train 3's integration made it sixteen (O315, O213), "Sixteen" until
+O294 made it seventeen, and "Seventeen" until O269 made it eighteen, O221's
 entry joining the notes beside it — every answer it moves is on a queue an offline writer
 touched, and its cost is the kind O255's note records — and O308's amending O303's there;
 O322 moves only what a refusal's message says. O303's
@@ -2425,7 +2429,9 @@ raw conversion error, where `5108dfa` answered all three. Such a row is now a ro
 verify (`CoveredRow::Undecodable`): the list reports it as `column-retyped` when either copy places
 it in the queue, the history omits its records, and the fence's unreadable arm decides it — deletable
 outside the queue, refused with its remedies inside it. `verify` and the retention sweep still raise
-the conversion error, as they did before this unit (filed as O427). A pending row whose tag
+the conversion error, as they did before this unit (filed as O427, and closed in this release by O269's
+arm below: `verify` names such a row and a sweep holds it; one whose retype also changed the bytes is
+`tag-fails` in the list, its tag being checked over them). A pending row whose tag
 verifies and whose content does not decrypt was refused with advice to use `allow`/`deny`, both of
 which refuse it; it now names the remedies and the filed explicit act (O426). The sweep's
 withheld reason named `allow`/`deny` for a row no ruling can act on; it now depends on the row. And
@@ -2733,6 +2739,64 @@ hmac-only vault its search index, keep the old tables while its queries use the 
 O421's walk exists to heal. `UPGRADING.md` carries that and the native source build: rustup now
 builds with 1.98.1 and fetches it on first use, and a build on a toolchain whose std is not Unicode
 17.0.0 fails to compile; `config check` sees neither, a build not being a declaration.
+
+### `verify` checks the file its rows live in, names a row no read can take, and a database that does not hold together is an integrity verdict (O269)
+
+`verify` walked tags and the chain and never the structure the rows live in, so one flipped byte in an
+index page passed it while SQLite's `integrity_check` named the missing rows — and an index hides a row from
+every read that finds one through it: a scoped search, the dedup probe, `forget`'s lookup by id, and the
+policy check that finds a trust row's newest assignment by its label, so a replayed policy row behind one
+damaged index entry read as current and a rotation then made it authentic. Where `verify` did trip over
+damage it answered SQLite's own error — exit 1, a 500 — the class a script retries, on a file whose answer
+never changes. Three changes, two panels' ruling and the maintainer's:
+
+- **A tenth leg, `storage`, run first**: SQLite's FULL `PRAGMA integrity_check` inside `verify`'s one
+  snapshot, so inside `backup create`'s pin, the rotation's exclusive hold and `repair`'s closing verify
+  too. Every row it returns that is not `ok` is a finding (`STORAGE: integrity_check: row 11 missing from
+  index idx_drawers_room`), on the CLI, as a count on MCP, as `"storage"` on `/v1` and in the console. It
+  fails `ok()`, so `backup create` refuses such a vault, and it blocks a key rotation, whose every phase-3
+  re-key now also asserts it changed exactly one row. Never `quick_check`, which passed all seven of the
+  filing's index flips. `backup restore`'s second check of the same thing is gone, and both surfaces now
+  print a refused archive's whole verification — the CLI after `What its verification found:`, `/v1` as
+  `report` beside its 409.
+- **No row aborts `verify`.** Every column its walks read — drawers, facts, entities, tunnels, the policy
+  rows, the audit labels — is read by its value type and the tag checked over the BYTES: a value of the
+  wrong storage class or TEXT that is not UTF-8 is `UNREADABLE: <id>: column meta_json holds a BLOB …`
+  (`drawers seq N` where the id does not decode), mirror drift, an orphan label or policy drift, in the leg
+  that owns the read, and a rotation blocker where the rotation could not read it. O406's later-0x1f move
+  is one of them. A corruption code a later leg trips over is the storage leg's finding
+  (`STORAGE: the drawer walk not run: database disk image is malformed`), and a replay that did not run
+  claims no chain.
+- **A database whose bytes do not hold together is an integrity verdict** (the maintainer's option B):
+  SQLite's `SQLITE_CORRUPT` and `SQLITE_NOTADB` at the open's first statement, the writable schema batch and
+  the read-only open's first content read, on a handle that is not `immutable=1`, are `the vault's database
+  is damaged: …` — exit 2 on every command, 409 `class: "integrity"` on `/v1`. A read-only open no longer
+  reopens such a file with `immutable=1`. Corruption met partway through another command stays exit 1, and
+  the next `verify` gives the verdict. A handle that DID open its database `immutable=1` (a write-protected
+  mount, a snapshot) reads with no lock and no WAL, so beside a writer its reads can tear: `verify` there
+  answers *the storage leg cannot be verified on this handle*, exit 1 and 409 with no class, instead of a
+  storage finding.
+
+**`repair` does not mend index damage, and never did**: its VACUUM copies each index as it stands (SQLite's
+transfer optimization), which the ruling's remedy had assumed otherwise. The remedy is a restore of an archive
+taken before the damage. A rebuild was tried in this release's own build and taken out again by its review: it
+conforms an index to its table, and one byte changed on the table side of an indexed column produces exactly
+the lines index damage does, so a rebuild could turn an edit into a clean `verify` — whether a rebuild that
+first rules that out should exist is ROADMAP O434. Fixes that were this build's own: FTS5's integrity
+pass reuses the index structure a connection cached, so a long-lived hmac-only handle beside another
+connection's writes reported its FTS table malformed on an intact vault — the leg reads each FTS5 table in its
+snapshot first, and a table that read meets damage is its own finding while the check of the rest still runs,
+keeping whatever the check named before it stopped; and every write's head and height must now move exactly
+one `chain_meta` row, or the write refuses in the integrity class. ROADMAP O427 — `verify` and the retention
+sweep failing on a retyped drawer — is closed by the same arm: such a row is named, and a sweep holds it.
+
+Measured on the LoCoMo feed mined into 64 wings (5,440 sealed drawers): `verify` 117–141 ms against 86–113 ms; one index flip that the previous binary verified as OK now exits 2 and refuses the backup, `repair` leaves it (exit 2, SQLite's own check still naming the row) and restoring the archive taken before it brings `VERIFY OK`; O406's later-0x1f move, made on 3,154 drawers by one keyless statement, exits 1 on the previous binary and names all 3,154 here. On realistic chunks the check is linear in the file and NOT cheap: at 102,000 drawers it adds 4.0–4.5 s to `verify` on a 218 MB sealed vault and 2.4–3.0 s on a 369 MB hmac-only one, and `backup create`'s pin and a rotation's hold grow by as much (ROADMAP O269 has the table; O258 the scheduling question). Gates: eighteen store tests — R3 on a live vault at both levels with its restore, a freelist, a table page and an `audit` page flipped, the retypes and a property gate over every TEXT column, the index-hidden policy replay, ten refused backups, a lost autoindex entry under a rotation, O406's move, a writer beside a long-lived handle, an `immutable=1` handle, a head or height that moves no row, a damaged FTS5 table beside an index flip, and O427's two retyped rows under a sweep — each red with its arm reverted; and twenty-three `e2e` checks through the CLI, MCP and `/v1`, seventeen of which fail against the previous binary.
+
+PATCH inside the unreleased 1.7.0, by the 2026-09-08 ruling (the leg reports an existing silent defect) and
+the maintainer's of 2026-10-08 (exit 1's "an unreadable vault" means unreachable for a reason outside the
+file's bytes). `UPGRADING.md` carries the entry: a vault with such damage, which the previous binary
+verified, now fails `verify` and stops `backup create` and `vault rotate`; `config check` opens no vault
+database, and the new binary's `verify --read-only` is the pre-flight.
 
 ## 1.6.1 — 2026-09-22
 
