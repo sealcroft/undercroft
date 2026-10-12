@@ -39205,7 +39205,10 @@ format fix piecemeal.**
   the FIRST content byte keeps the tag and leaves `meta_json` valid UTF-8, which
   O231's leg now names. Moving it to a LATER 0x1f leaves `meta_json` not UTF-8,
   so `verify` and `backup create` return `FromSqlConversionFailure` before the
-  tag is read and never name the row — ROADMAP O269 item 2's pre-tag arm.
+  tag is read and never name the row — ROADMAP O269 item 2's pre-tag arm. That
+  row is also an O231 row (its tag verifies), which O232's ruling keeps out of
+  the rotation's blockers while O269 item 2 makes a pre-tag finding one; O269's
+  build rules which.
 - **Facts (`triple_canonical`, `kg.rs`):** two separate moves, both keep the tag
   and `verify ok()=true` with `version_replay` empty. (1) `valid_to` (and
   `valid_from`) are written `unwrap_or("")`, so `UPDATE kg_triples SET valid_to=''`
