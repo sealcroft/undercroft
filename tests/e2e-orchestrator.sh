@@ -408,29 +408,34 @@ else
   fail "orchestrator CLI ops verify-forgetting: $(head -c 160 <<<"$O14_CLI")"
 fi
 # **ROADMAP O315 through the ops plane and its CLI alias.** The engine
-# answers a receipt a newer build minted with the caller's 400 — refused
-# unread, as AGE — and keeps 409 + `class: "integrity"` for a document that
-# does not describe the vault; the plane relays the engine's answer, and its
-# CLI exits 2 only on the integrity class. The dispatched gate's four
-# documents: genuine (above), a newer build's version or key, a truncated
-# one, and a forged one. Counterfactual on `5108dfa`: the extra key answered
-# 200 `verified` and the CLI alias exited 0.
+# answers a document carrying a field or a version it does not know with the
+# caller's 400 — refused unread, NOT CHECKED — and keeps 409 + `class:
+# "integrity"` for a document that does not describe the vault; the plane
+# relays the engine's answer, and its CLI exits 2 only on the integrity class.
+# The plane mints UNSIGNED receipts, so a newer build's SIGNED field is driven
+# in the engine suites; here: an unknown key (it verified before), an unknown
+# version (400 already, by the old version arm — reworded, not the defect), a
+# truncated document, a forged one, and a forgery carrying a key, the stated
+# COST. Counterfactual on `5108dfa`: the key answered 200 `verified`, its CLI
+# alias exited 0, and the forgery plus a key 409 and exit 2.
 O315_NEWER="$(sed 's/"version": *[0-9]*/"version":99/' <<<"$O14_ATT")"
-O315_ANNOTATED="$(sed 's/^{/{"archive":"1 archive(s)",/' <<<"$O14_ATT")"
+O315_ANNOTATED="$(sed 's/^{/{"ticket":"JIRA-1",/' <<<"$O14_ATT")"
 O315_TRUNCATED="${O14_ATT:0:120}"
 O315_FORGED="$(sed 's/"tag": *"[0-9a-f]*"/"tag":"00"/' <<<"$O14_ATT")"
+O315_FORGEDKEY="$(sed 's/^{/{"zz-never-declared":true,/' <<<"$O315_FORGED")"
 O315_SAME=""
-for v in O315_NEWER O315_ANNOTATED O315_TRUNCATED O315_FORGED; do
+for v in O315_NEWER O315_ANNOTATED O315_TRUNCATED O315_FORGED O315_FORGEDKEY; do
   [ "${!v}" = "$O14_ATT" ] && O315_SAME="$O315_SAME $v"
 done
+[ "$O315_FORGEDKEY" = "$O315_FORGED" ] && O315_SAME="$O315_SAME O315_FORGEDKEY(=forged)"
 if [ -z "$O315_SAME" ] && [ -n "$O14_ATT" ]; then
   ok "o315 premise: every document below differs from the genuine one"
 else
   fail "o315 premise: unchanged:$O315_SAME"
 fi
-code_is  "o315 ops: a newer build's version is the caller's 400" 400 -- -X POST "${ADMIN[@]}" \
+code_is  "o315 ops: an unknown version is the caller's 400" 400 -- -X POST "${ADMIN[@]}" \
   -d "$O315_NEWER" "$O/admin/tenants/$OPS_ID/ops/verify-forgetting"
-body_has "o315 ops: ...naming the newer build" 'a newer build of Undercroft minted it' -- \
+body_has "o315 ops: ...saying it was NOT checked" 'was NOT checked' -- \
   -X POST "${ADMIN[@]}" -d "$O315_NEWER" "$O/admin/tenants/$OPS_ID/ops/verify-forgetting"
 code_is  "o315 ops: a key this build does not know is 400" 400 -- -X POST "${ADMIN[@]}" \
   -d "$O315_ANNOTATED" "$O/admin/tenants/$OPS_ID/ops/verify-forgetting"
@@ -440,9 +445,11 @@ code_is  "o315 ops: a forged receipt is 409" 409 -- -X POST "${ADMIN[@]}" \
   -d "$O315_FORGED" "$O/admin/tenants/$OPS_ID/ops/verify-forgetting"
 body_has "o315 ops: ...with the integrity class" '"class":"integrity"' -- \
   -X POST "${ADMIN[@]}" -d "$O315_FORGED" "$O/admin/tenants/$OPS_ID/ops/verify-forgetting"
-# The CLI alias: exit 1 for the newer build's document, 2 only for the
+code_is  "o315 ops: COST — the same forgery carrying a key is 400" 400 -- -X POST "${ADMIN[@]}" \
+  -d "$O315_FORGEDKEY" "$O/admin/tenants/$OPS_ID/ops/verify-forgetting"
+# The CLI alias: exit 1 for what the engine did not check, 2 only for the
 # forged one. Captured, never piped (O287).
-for arm in "ANNOTATED:1" "TRUNCATED:1" "FORGED:2"; do
+for arm in "ANNOTATED:1" "TRUNCATED:1" "FORGED:2" "FORGEDKEY:1"; do
   doc="O315_${arm%%:*}"; want="${arm##*:}"
   out="$("$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" verify-forgetting --body "${!doc}" 2>&1)"; rc=$?
   if [ "$rc" = "$want" ]; then

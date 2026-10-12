@@ -1597,8 +1597,9 @@ mod tests {
     /// **The console calls only an INTEGRITY verdict a failed attestation**
     /// (ROADMAP O315, the fourth renderer).
     ///
-    /// The engine answers a receipt a newer build minted with the caller's
-    /// 400 — refused unread, as age — and keeps 409 + `class: "integrity"`
+    /// The engine answers a receipt carrying a field or a version it does
+    /// not know with the caller's 400 — refused unread, NOT CHECKED — and
+    /// keeps 409 + `class: "integrity"`
     /// for a document that does not describe the vault. The console toasted
     /// "ATTESTATION FAILED" on EVERY error, so it went on calling a genuine
     /// receipt forged on the surface most operators drive, after every other
@@ -1623,7 +1624,7 @@ mod tests {
             .expect("premise: the failed toast is inside verifyAttestation()");
         let gate = body.find("e.cls === \"integrity\"").expect(
             "the failed toast must be gated on the integrity class — a refusal that is not a \
-             verdict (a newer build's receipt, a malformed body) must not read as forged",
+             verdict (a receipt the engine could not read, a malformed body) must not read as forged",
         );
         assert!(
             gate < failed,

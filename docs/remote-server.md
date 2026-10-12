@@ -270,9 +270,10 @@ POST   /v1/vaults/{id}/verify-forgetting  check an attestation this vault
                                         key rotation has destroyed the replay
                                         key (exit 0 either way); 409 if the
                                         document does not describe this vault;
-                                        400 if a newer build minted it — a
+                                        400, NOT checked, if it carries a
                                         field or version this build does not
-                                        know, refused before its signature
+                                        know (a newer build's, or altered) —
+                                        refused before its signature
 
 ── maintenance / portability ────────────────────────────────────────────
 POST   /v1/vaults/{id}/refine           LLM distillation → KG

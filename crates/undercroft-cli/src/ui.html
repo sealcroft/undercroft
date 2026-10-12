@@ -598,7 +598,7 @@ async function api(method, path, opts) {
     try { const j = JSON.parse(text); msg = j.error || text; cls = j.class || null; } catch (_) {}
     // The status and the class travel on the error, not only in its text:
     // a caller that must tell an integrity verdict from a refusal (ROADMAP
-    // O315 — a receipt a newer build minted is NOT a forged one) keys on
+    // O315 — a receipt the engine could not read is NOT a forged one) keys on
     // `cls`, never on a substring of the message.
     const err = new Error(res.status + ": " + msg);
     err.status = res.status;
@@ -1661,8 +1661,9 @@ async function verifyAttestation() {
   } catch (e) {
     out.textContent = e.message;
     // **Only the integrity class is a verdict** (ROADMAP O315). This toasted
-    // "ATTESTATION FAILED" on EVERY error — a receipt a newer build minted
-    // (400: the engine refuses it unread, as age), a malformed body, a
+    // "ATTESTATION FAILED" on EVERY error — a receipt carrying a field or a
+    // version the engine does not know (400: refused unread, not checked —
+    // a newer build's, or altered), a malformed body, a
     // rejected bearer — so the console called a genuine receipt forged
     // exactly where the engine had stopped doing so.
     if (e.cls === "integrity") {

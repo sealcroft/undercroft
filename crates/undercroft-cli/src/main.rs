@@ -2993,10 +2993,14 @@ fn run(cli: Cli) -> Result<()> {
                     outln!("ATTESTATION FAILED: {why}");
                     std::process::exit(EXIT_INTEGRITY.into());
                 }
-                // Exit 1 — including the age fence's refusal of a document a
-                // NEWER build minted (ROADMAP O315): not checked, which is
-                // neither valid nor forged, and must never print the line
-                // above.
+                // Exit 1 — including the age fence's refusal of a document
+                // carrying a field or a version this build does not know
+                // (ROADMAP O315): NOT CHECKED, neither valid nor forged, and it
+                // must never print the line above. Its stated cost: a forger
+                // who adds such a key gets this exit 1 from every build, the
+                // class the paragraph above says a script retries and ignores;
+                // whether "not checked" needs its own exit class is
+                // O-NEW-O315-2, the maintainer's.
                 Err(other) => return Err(other.into()),
             };
             // Attestation fields come from a caller-supplied JSON file;

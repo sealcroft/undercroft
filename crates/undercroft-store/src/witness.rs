@@ -35,6 +35,14 @@
 //! vault is an integrity finding, because a re-created vault is an erasure
 //! and must not read as a caller's typo.
 //!
+//! **A witness this build cannot read is NOT CHECKED, never a verdict**
+//! (ROADMAP O315, the erasure receipt's age fence one document over). The
+//! version was always read before the signature; an undeclared key was not —
+//! the type dropped it, so a field a later build signs without a version
+//! bump failed the signature here and answered the integrity family, and an
+//! unsigned extra key was checked around. Both are refused first now, with
+//! the receipt's wording and class, through the receipt's two helpers.
+//!
 //! **Not offered over MCP**, by the maintainer's ruling of 2026-09-23: an
 //! agent's memory IS this vault, so it cannot hold an off-machine witness,
 //! and a check offered to the party whose rollback it would detect is no
@@ -43,6 +51,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::chain;
+use crate::forget::{not_checked_keys, not_checked_version, UnknownFields};
 use crate::{StoreError, VaultStore};
 
 /// The document format this build emits and understands.
@@ -96,6 +105,13 @@ pub struct ChainWitness {
     /// The detached Ed25519 signature (hex) over [`Self::canonical`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sig: Option<String>,
+    /// **Every key this build does not declare** (ROADMAP O315), captured
+    /// rather than dropped so [`VaultStore::witness_check`] refuses it before
+    /// the signature: dropped, a field a later build signs was recomputed out
+    /// of [`Self::canonical`] and the signature failed. Empty on every witness
+    /// this build emits, and it serialises to nothing.
+    #[serde(flatten)]
+    pub unknown: UnknownFields,
 }
 
 impl ChainWitness {
@@ -247,6 +263,7 @@ impl VaultStore {
             unhealed: self.unhealed.clone(),
             sender: None,
             sig: None,
+            unknown: UnknownFields::new(),
         })
     }
 
@@ -261,11 +278,22 @@ impl VaultStore {
     /// and a re-created vault are indistinguishable here, and the second is
     /// an erasure.
     pub fn witness_check(&self, w: &ChainWitness) -> Result<WitnessVerdict, StoreError> {
+        // **The age fence FIRST** (ROADMAP O315): a version or a key this
+        // build does not know is refused as NOT CHECKED — `Invalid`, exit 1,
+        // `/v1` 400 — before the vault, the signature or a row is read. The
+        // version arm was already here; the key arm is new, because the type
+        // dropped an undeclared key and a later build's signed field then
+        // failed the signature below as the integrity family.
         if w.version > WITNESS_VERSION {
-            return Err(StoreError::Invalid(format!(
-                "witness version {} is newer than this build understands ({WITNESS_VERSION})",
-                w.version
-            )));
+            return Err(not_checked_version(
+                "the witness",
+                w.version,
+                &format!("up to {WITNESS_VERSION}"),
+            ));
+        }
+        if !w.unknown.is_empty() {
+            let keys: Vec<String> = w.unknown.keys().cloned().collect();
+            return Err(not_checked_keys("the witness", &keys));
         }
         if w.vault != self.vault.id() {
             return Err(StoreError::IntegrityFinding(format!(
@@ -639,6 +667,7 @@ mod tests {
             unhealed: vec![],
             sender: None,
             sig: None,
+            unknown: UnknownFields::new(),
         };
         assert!(matches!(s.witness_check(&w), Err(StoreError::Invalid(_))));
     }
@@ -676,5 +705,139 @@ mod tests {
         let json = serde_json::to_string(&w).unwrap();
         let back: ChainWitness = serde_json::from_str(&json).unwrap();
         assert_eq!(back.canonical(), w.canonical());
+    }
+
+    /// **ROADMAP O315 on the witness: a key this build does not declare is
+    /// NOT CHECKED** — never the integrity family, never extended around.
+    /// The version was already read before the signature; an undeclared key
+    /// was dropped, so a later build's signed field failed the signature as
+    /// `Attestation` (exit 2, 409 + `integrity`) and a key added beside a
+    /// genuine signature was checked around, `Extends`. The witness first
+    /// ships in 1.7.0, so this costs no compatibility.
+    ///
+    /// COUNTERFACTUAL, run against `5108dfa`'s check: the signed field
+    /// answered `Attestation("witness signature: …")`, the added and the
+    /// unsigned key `Extends`, and the forgery-plus-key `Attestation`.
+    #[test]
+    fn a_witness_carrying_a_key_this_build_does_not_know_is_not_checked() {
+        let (_dir, mut s) = fresh(SecurityLevel::HmacOnly);
+        s.upsert(&drawer("first", 0)).unwrap();
+        let (secret, _) = undercroft_vault::bundle::sign_keygen();
+        let mut w = s.witness_emit().unwrap();
+        w.sign(&secret).unwrap();
+        // PREMISE: the genuine signed witness carries no undeclared key and
+        // extends — and what it serialises is exactly the declared keys, so
+        // capturing them moved no emitted byte.
+        assert!(w.unknown.is_empty());
+        assert!(matches!(
+            s.witness_check(&w).unwrap(),
+            WitnessVerdict::Extends { rows_since: 0, .. }
+        ));
+        let genuine = serde_json::to_value(&w).unwrap();
+        let mut keys: Vec<&str> = genuine
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "anchored_head",
+                "emitted_at",
+                "head",
+                "prefix_digest",
+                "regime",
+                "rows",
+                "sender",
+                "sig",
+                "vault",
+                "version",
+                "writes"
+            ]
+        );
+        let not_checked = |doc: &ChainWitness, names: &str, what: &str| match s.witness_check(doc) {
+            Err(StoreError::Invalid(why)) => assert!(
+                why.contains("was NOT checked")
+                    && why.contains("may have minted it, or it was altered")
+                    && why.contains(names),
+                "{what}: {why}"
+            ),
+            other => panic!("{what}: must be NOT CHECKED (Invalid), got {other:?}"),
+        };
+
+        // A later build's field, inside its signature, with no version bump.
+        let mut v = genuine.clone();
+        v["cadence"] = serde_json::json!("daily");
+        let mut newer_bytes = w.canonical();
+        newer_bytes.extend_from_slice("\u{1f}cadence\u{1e}daily".as_bytes());
+        v["sig"] =
+            serde_json::json!(
+                undercroft_vault::bundle::sign_detached(&secret, &newer_bytes).unwrap()
+            );
+        let newer: ChainWitness = serde_json::from_value(v).unwrap();
+        undercroft_vault::bundle::verify_detached(
+            newer.sender.as_deref().unwrap(),
+            &newer_bytes,
+            newer.sig.as_deref().unwrap(),
+        )
+        .expect("premise: genuine over the later build's bytes");
+        assert!(
+            undercroft_vault::bundle::verify_detached(
+                newer.sender.as_deref().unwrap(),
+                &newer.canonical(),
+                newer.sig.as_deref().unwrap(),
+            )
+            .is_err(),
+            "premise: over the bytes this build recomputes, the signature fails"
+        );
+        not_checked(&newer, "\"cadence\"", "a later build's signed field");
+
+        // A key added beside a genuine signature, and one on an unsigned
+        // witness: both were checked around before.
+        let mut v = genuine.clone();
+        v["note"] = serde_json::json!("kept in the safe");
+        not_checked(
+            &serde_json::from_value(v).unwrap(),
+            "\"note\"",
+            "a key added beside the signature",
+        );
+        let mut unsigned = w.clone();
+        unsigned.sender = None;
+        unsigned.sig = None;
+        let mut v = serde_json::to_value(&unsigned).unwrap();
+        v["note"] = serde_json::json!("x");
+        not_checked(
+            &serde_json::from_value(v).unwrap(),
+            "\"note\"",
+            "an unsigned extra key",
+        );
+
+        // A version this build does not know, re-signed: refused by the
+        // version arm, which was already first — reworded, not the defect.
+        let mut bumped = w.clone();
+        bumped.version = WITNESS_VERSION + 1;
+        bumped.sign(&secret).unwrap();
+        match s.witness_check(&bumped) {
+            Err(StoreError::Invalid(why)) => assert!(why.contains("was NOT checked"), "{why}"),
+            other => panic!("an unknown version is not checked: {other:?}"),
+        }
+
+        // A forgery with every key known is still the integrity family; a
+        // forgery that ALSO adds a key is not checked — the cost, pinned.
+        let mut forged = w.clone();
+        forged.rows += 1;
+        assert!(matches!(
+            s.witness_check(&forged),
+            Err(StoreError::Attestation(_))
+        ));
+        let mut v = serde_json::to_value(&forged).unwrap();
+        v["zz-never-declared"] = serde_json::json!(true);
+        not_checked(
+            &serde_json::from_value(v).unwrap(),
+            "\"zz-never-declared\"",
+            "a forgery that adds a key (the cost)",
+        );
     }
 }

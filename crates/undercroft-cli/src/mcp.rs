@@ -1868,9 +1868,10 @@ mod tests {
         );
     }
 
-    /// **ROADMAP O315 on the agent surface.** A receipt a newer build minted
-    /// — one more field, signed — is an error naming the newer build, never
-    /// the attestation (tamper) verdict; the genuine receipt still verifies
+    /// **ROADMAP O315 on the agent surface.** A receipt carrying a field this
+    /// build does not know — a newer build's, signed — is an error saying it
+    /// was NOT checked, never the attestation (tamper) verdict and never a
+    /// claim about who minted it; the genuine receipt still verifies
     /// and a forged one is still that verdict, so the refusal is the fence
     /// and nothing else. The agent surface carries the store's error as text,
     /// so the words ARE the class here.
@@ -1917,9 +1918,8 @@ mod tests {
             .expect_err("a newer build's receipt is refused")
             .to_string();
         assert!(
-            err.contains("a newer build of Undercroft minted it")
-                && !err.contains("attestation failed"),
-            "age, never the tamper verdict: {err}"
+            err.contains("was NOT checked") && !err.contains("attestation failed"),
+            "not checked, never the tamper verdict: {err}"
         );
         // The same key added outside the signature: it verified before.
         let mut annotated = genuine.clone();

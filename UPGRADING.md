@@ -452,35 +452,41 @@ reader left": it is not a failed run to retry, because a retry of a write that
 committed files it again. `undercroft config check` cannot detect this:
 nothing in an environment predicts a reader closing.
 
-### `verify-forgetting` answers a receipt carrying a field or a version it does not know with exit 1, "a newer build of Undercroft minted it" (O315)
+### `verify-forgetting` answers a receipt carrying a field or a version it does not know with exit 1, "NOT checked" (O315)
 
 **Symptom:** `undercroft verify-forgetting <receipt>` exits **1** with *"invalid operation: the attestation
-carries 1 field(s) this build does not know ("…"): a newer build of Undercroft minted it. Not checked, and
-not a verdict on the document — check it with that build or a later one"*, or *"attestation version N is
-newer than this build understands …"*. `POST /v1/vaults/{id}/verify-forgetting` answers **400** with that
-message and no `class`, the orchestrator's `ops/verify-forgetting` relays the 400 and its CLI alias exits
-1, MCP's `undercroft_check_erasure_receipt` answers an error, and the admin console says "NOT CHECKED".
-Before 1.7.0 the same documents answered differently: a SIGNED receipt carrying such a field, or a
-version above 2, exited **2** with `ATTESTATION FAILED: signature: …` (409 + `class: "integrity"` on
-`/v1`); an UNSIGNED one, or a signed one whose extra key sat outside the signature, exited **0**
-`ATTESTATION VERIFIED`, the extra key ignored.
+carries 1 field(s) this build does not know ("…"), so the document was NOT checked: a newer build of
+Undercroft may have minted it, or it was altered. Neither valid nor forged …"*, or *"the attestation
+declares version N, which this build does not know …"*. `POST /v1/vaults/{id}/verify-forgetting` answers
+**400** with that message and no `class`, the orchestrator's `ops/verify-forgetting` relays the 400 and
+its CLI alias exits 1, MCP's `undercroft_check_erasure_receipt` answers an error, and the admin console
+says "NOT CHECKED". Before 1.7.0 the same documents answered differently: a SIGNED receipt carrying a
+field this build does not know — alone or beside a version above 2 — exited **2** with `ATTESTATION
+FAILED: signature: …` (409 + `class: "integrity"` on `/v1`); a receipt with a key added beside its
+signature, or an unsigned one with an extra key, exited **0** `ATTESTATION VERIFIED`, the key ignored;
+and a FORGED receipt whose `version` was also edited exited 2 and now exits 1 — see the cost below. A
+version above 2 alone, genuinely signed, exited 1 before as it does now.
 
 **Cause:** the signature was checked before the version, over a type that dropped every key it did not
 declare, so a genuine receipt from a newer build read as forged (ROADMAP O315). An age fence now reads the
-version and every key first and refuses what it does not know as a newer build's — never as forged, never
-as verified. A document a release of Undercroft minted carries only keys every build from 1.7.0 knows, so
-nothing you were issued is refused by this.
+version and every key first and refuses what it does not know unread — NOT CHECKED, never forged and never
+verified, and without claiming who minted it. A document a release of Undercroft minted carries only keys
+every build from 1.7.0 knows, so nothing you were issued is refused by this.
 
 **Fix:** check such a receipt with the build that minted it or a later one. Do not add keys to a receipt —
 a ticket number or a note belongs beside the document, not inside it; a receipt carrying one is now
-refused as unread rather than verified around it. A compliance script must not read exit 1 here as "valid"
-or as "forged": it is "not checked". `undercroft config check` cannot detect this: it is a document, not a
+refused unread rather than verified around it. **A compliance script must not read exit 1 here as
+"valid", and must not merely retry it**: it is "not checked", and that has a cost — a forger who adds a
+key no build will ever declare, or a version none will ever mint, gets this exit 1 from every build,
+present and future, where the same forgery without it is exit 2. Treat a "NOT checked" answer that
+persists on the newest build as a document to investigate. Whether it deserves an exit class of its own is
+filed for the maintainer (ROADMAP). `undercroft config check` cannot detect this: it is a document, not a
 declaration.
 
 **Which release the fence starts in, the fact a future upgrade needs.** 1.7.0 is the first release that
-answers a newer build's receipt as age. A receipt carrying a field signed by a release after 1.7.0 is
-refused as "a newer build minted it" by every build from 1.7.0 on, and read as **forged**, exit 2, by 1.6.1
-and older; and every build before 1.1.0 already reads 1.1.0's signed `mirror` note that way.
+answers a newer build's receipt as not checked. A receipt carrying a field signed by a release after
+1.7.0 is refused that way by every build from 1.7.0 up to that release, and read as **forged**, exit 2,
+by 1.6.1 and older; and every build before 1.1.0 already reads 1.1.0's signed `mirror` note that way.
 
 ## 1.6.1 (released 2026-09-22)
 

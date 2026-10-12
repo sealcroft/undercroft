@@ -864,51 +864,164 @@ fi
 check "forged tag still exits 2"  2 "ATTESTATION FAILED"             -- \
   "$BIN" verify-forgetting "$ATT.forged"
 
-# **ROADMAP O315 — a receipt a NEWER build minted reads as newer, never as
-# forged.** The signature was checked BEFORE the version, over a type that
-# dropped every key it did not declare: a field a newer build signs, or a
-# version it bumps inside the signature, made this binary answer
-# `ATTESTATION FAILED` with exit 2 over a genuine receipt, and a key added
-# beside the signature was ignored while the document VERIFIED. The age fence
-# answers both with exit 1, naming the newer build, before the signature is
-# read. A shell cannot sign a newer build's EXTRA field, so the signed arm
-# here is the version bump; the unit and `cli.rs` suites sign the field
-# itself. Counterfactual on `5108dfa`: the bump exits 2 and the extra key 0.
-O315_KEY="$UNDERCROFT_HOME/o315-sign.key"
+# **ROADMAP O315 — a document carrying a field or a version this build does
+# not know is NOT CHECKED (exit 1), never forged and never verified.** The
+# signature was checked BEFORE the version, over a type that dropped every key
+# it did not declare: a field a newer build SIGNS made this binary answer
+# `ATTESTATION FAILED`, exit 2, over a genuine receipt, and a key added beside
+# a signature was ignored while the document VERIFIED.
+#
+# The newer build's document is made here the way a newer build makes it: the
+# receipt's canonical is rebuilt from its JSON, PROVED against the binary's
+# own signature with openssl, then re-signed with one more field. A `sed` on a
+# signed receipt is a FORGERY — `version` sits inside the signature — so the
+# forged arms are labelled as such, and the one that also carries something no
+# build knows is the stated COST: exit 1, where the same forgery without it is
+# exit 2. Counterfactual on `5108dfa`: the re-signed field exits 2, the field
+# plus a bump 2, the annotated receipt 0, the forgery plus a bump 2, and on the
+# witness the re-signed field 2 and the annotated one 0.
+O315_DIR="$UNDERCROFT_HOME/o315"; mkdir -p "$O315_DIR"
+o315_hex2bin() { printf '%b' "$(sed 's/../\\x&/g' <<<"$1")"; }
+# The receipt's canonical, from `forget --out`'s pretty JSON: the fixed prefix,
+# each drawer's id and fingerprint, each record's label, tag and time, the
+# mirror note, then an optional extension — `ForgetAttestation::canonical`.
+o315_canon_att() { # <receipt> [extension]
+  awk -v ext="${2:-}" '
+    function val(l) { sub(/^[^:]*: */, "", l); sub(/,$/, "", l); gsub(/"/, "", l); return l }
+    /^  "version":/        { v = val($0) }
+    /^  "vault":/          { vault = val($0) }
+    /^  "created_at":/     { ca = val($0) }
+    /^  "head_before":/    { hb = val($0) }
+    /^  "head_after":/     { ha = val($0) }
+    /^  "sender":/         { snd = val($0) }
+    /^  "mirror":/         { mir = val($0); hasmir = 1 }
+    /^      "id":/         { did = val($0) }
+    /^      "content_fp":/ { d[nd++] = did "\036" val($0) }
+    /^      "record_id":/  { rid = val($0) }
+    /^      "tag":/        { rtag = val($0) }
+    /^      "at":/         { r[nr++] = rid "\036" rtag "\036" val($0) }
+    END {
+      out = v "\037" vault "\037" ca "\037" hb "\037" ha "\037" snd
+      for (i = 0; i < nd; i++) out = out "\037" d[i]
+      for (i = 0; i < nr; i++) out = out "\037" r[i]
+      if (hasmir) out = out "\037mirror\036" mir
+      if (ext != "") out = out "\037" ext
+      printf "%s", out
+    }' "$1"
+}
+# The witness's canonical, from `witness emit`'s JSON — `ChainWitness::canonical`
+# (no `sender` in it; an `unhealed` list would be an extension, and the premise
+# below fails if the rebuild is wrong for any reason).
+o315_canon_wit() { # <witness> [extension]
+  awk -v ext="${2:-}" '
+    function val(l) { sub(/^[^:]*: */, "", l); sub(/,$/, "", l); gsub(/"/, "", l); return l }
+    /^  "version":/       { v = val($0) }
+    /^  "vault":/         { vault = val($0) }
+    /^  "rows":/          { rows = val($0) }
+    /^  "prefix_digest":/ { pd = val($0) }
+    /^  "head":/          { hd = val($0) }
+    /^  "regime":/        { rg = val($0) }
+    /^  "writes":/        { wr = val($0) }
+    /^  "anchored_head":/ { ah = val($0) }
+    /^  "emitted_at":/    { ea = val($0) }
+    END {
+      out = "undercroft-witness/" v "\037" vault "\037" rows "\037" pd "\037" hd "\037" rg "\037" wr "\037" ah "\037" ea
+      if (ext != "") out = out "\037" ext
+      printf "%s", out
+    }' "$1"
+}
+o315_sign() { # <secret-hex> <bytes-file>  -> signature hex
+  { o315_hex2bin 302e020100300506032b657004220420; o315_hex2bin "$1"; } > "$O315_DIR/sk.der"
+  openssl pkeyutl -sign -inkey "$O315_DIR/sk.der" -keyform DER -rawin -in "$2" | od -An -tx1 | tr -d ' \n'
+}
+o315_verifies() { # <document> <canon-fn> [extension]: does the rebuilt canonical verify ITS signature?
+  local sender sig
+  sender="$(sed -n 's/.*"sender": "\([0-9a-f]*\)".*/\1/p' "$1")"
+  sig="$(sed -n 's/.*"sig": "\([0-9a-f]*\)".*/\1/p' "$1")"
+  [ -n "$sender" ] && [ -n "$sig" ] || return 1
+  { o315_hex2bin 302a300506032b6570032100; o315_hex2bin "$sender"; } > "$O315_DIR/pk.der"
+  o315_hex2bin "$sig" > "$O315_DIR/sig.bin"
+  "$2" "$1" "${3:-}" > "$O315_DIR/canon.bin"
+  openssl pkeyutl -verify -pubin -inkey "$O315_DIR/pk.der" -keyform DER -rawin \
+    -in "$O315_DIR/canon.bin" -sigfile "$O315_DIR/sig.bin" >/dev/null 2>&1
+}
+o315_newer() { # <document> <canon-fn> <secret-hex> <out>: one more SIGNED field
+  "$2" "$1" "$(printf 'archive\036%s' '1 archive(s), oldest 2026-10-01')" > "$O315_DIR/new.bin"
+  local sig; sig="$(o315_sign "$3" "$O315_DIR/new.bin")"
+  sed -e '1s/^{$/{\n  "archive": "1 archive(s), oldest 2026-10-01",/' \
+      -e "s/\"sig\": \"[0-9a-f]*\"/\"sig\": \"$sig\"/" "$1" > "$4"
+}
+O315_KEY="$O315_DIR/sign.key"
 check "o315 signing identity"     0 "Sender"                        -- \
   "$BIN" bundle sign-keygen --out "$O315_KEY"
+O315_SECRET="$(tr -d ' \r\n' < "$O315_KEY")"
 O315_ID="$("$BIN" remember "a note the subject will ask us to erase, receipted and signed" \
   --wing eng --room tmp | sed -n 's/^Filed drawer \([0-9a-f]*\) .*/\1/p')"
-O315_ATT="$UNDERCROFT_HOME/o315-attestation.json"
+O315_ATT="$O315_DIR/att.json"
 check "o315 a signed receipt"     0 "attestation written to"        -- \
   "$BIN" forget "$O315_ID" --sign "$O315_KEY" --out "$O315_ATT"
 check "o315 the genuine receipt verifies" 0 "ATTESTATION VERIFIED"  -- \
   "$BIN" verify-forgetting "$O315_ATT"
-sed 's/"version": *[0-9]*/"version": 99/' "$O315_ATT" > "$O315_ATT.newer"
-sed '1s/^{$/{ "archive": "1 archive(s), oldest 2026-10-01",/' "$O315_ATT" > "$O315_ATT.annotated"
-head -c 200 "$O315_ATT" > "$O315_ATT.truncated"
+# The documents. `newer` and `newer-bumped` are re-signed; the rest are edits.
+o315_newer "$O315_ATT" o315_canon_att "$O315_SECRET" "$O315_ATT.newer"
+sed 's/"version": *[0-9]*/"version": 3/' "$O315_ATT" > "$O315_ATT.bumped-unsigned"
+o315_newer "$O315_ATT.bumped-unsigned" o315_canon_att "$O315_SECRET" "$O315_ATT.newer-bumped"
+sed '1s/^{$/{ "ticket": "JIRA-1",/' "$O315_ATT" > "$O315_ATT.annotated"
 sed 's/"head_after": *"[0-9a-f]*"/"head_after": "00"/' "$O315_ATT" > "$O315_ATT.forged"
-# Premise, per document: an edit that changed nothing would make its check
-# below measure the genuine receipt.
+sed 's/"version": *[0-9]*/"version": 99/' "$O315_ATT.forged" > "$O315_ATT.forged-bumped"
+head -c 200 "$O315_ATT" > "$O315_ATT.truncated"
+# Premise, three parts: the canonical rebuild verifies the binary's OWN
+# signature (so the re-signed documents are what a newer build would sign, not
+# garbage that fails for another reason); each re-signed document verifies
+# over its own rebuilt canonical; and every edit landed.
 O315_SAME=""
-for f in newer annotated truncated forged; do
+for f in newer newer-bumped annotated forged forged-bumped truncated; do
   cmp -s "$O315_ATT" "$O315_ATT.$f" && O315_SAME="$O315_SAME $f"
 done
-if [ -z "$O315_SAME" ] && grep -q '"sig"' "$O315_ATT"; then
-  echo "ok    o315 premise: a signed receipt, and every edit below landed"; PASS=$((PASS+1))
+o315_ext="$(printf 'archive\036%s' '1 archive(s), oldest 2026-10-01')"
+if o315_verifies "$O315_ATT" o315_canon_att \
+   && o315_verifies "$O315_ATT.newer" o315_canon_att "$o315_ext" \
+   && o315_verifies "$O315_ATT.newer-bumped" o315_canon_att "$o315_ext" \
+   && [ -z "$O315_SAME" ]; then
+  echo "ok    o315 premise: the rebuilt canonical verifies the binary's own signature, and every edit landed"; PASS=$((PASS+1))
 else
-  echo "FAIL  o315 premise — unsigned receipt, or unchanged:$O315_SAME"; FAIL=$((FAIL+1))
+  echo "FAIL  o315 premise — openssl $(openssl version 2>&1), unchanged:$O315_SAME"; FAIL=$((FAIL+1))
 fi
-check "o315 a newer build's version is exit 1, not 2" 1 "a newer build of Undercroft minted it" -- \
+check "o315 a newer build's signed field is exit 1, NOT checked" 1 "was NOT checked" -- \
   "$BIN" verify-forgetting "$O315_ATT.newer"
-check "o315 a key this build does not know is exit 1" 1 "a newer build of Undercroft minted it" -- \
+check "o315 ...naming both readings, never a verdict" 1 "may have minted it, or it was altered" -- \
+  "$BIN" verify-forgetting "$O315_ATT.newer"
+check "o315 a signed field plus a version bump is exit 1" 1 "was NOT checked" -- \
+  "$BIN" verify-forgetting "$O315_ATT.newer-bumped"
+check "o315 a key added beside the signature is exit 1" 1 '"ticket"'  -- \
   "$BIN" verify-forgetting "$O315_ATT.annotated"
-check "o315 ...and the key is named"  1 '"archive"'                   -- \
-  "$BIN" verify-forgetting "$O315_ATT.annotated"
+check "o315 a forged receipt, every key known, is still exit 2" 2 "ATTESTATION FAILED" -- \
+  "$BIN" verify-forgetting "$O315_ATT.forged"
+check "o315 COST: the same forgery with a version no build knows is exit 1" 1 "was NOT checked" -- \
+  "$BIN" verify-forgetting "$O315_ATT.forged-bumped"
 check "o315 a truncated receipt is exit 1" 1 "is not an attestation" -- \
   "$BIN" verify-forgetting "$O315_ATT.truncated"
-check "o315 a forged receipt is still exit 2" 2 "ATTESTATION FAILED" -- \
-  "$BIN" verify-forgetting "$O315_ATT.forged"
+# The witness shares the fence (its version was already read first; an
+# undeclared key was dropped).
+O315_W="$O315_DIR/w.json"
+check "o315 a signed witness"     0 ""                               -- \
+  "$BIN" witness emit --sign "$O315_KEY" --out "$O315_W"
+o315_newer "$O315_W" o315_canon_wit "$O315_SECRET" "$O315_W.newer"
+sed '1s/^{$/{ "note": "kept in the safe",/' "$O315_W" > "$O315_W.annotated"
+if o315_verifies "$O315_W" o315_canon_wit \
+   && o315_verifies "$O315_W.newer" o315_canon_wit "$o315_ext" \
+   && ! cmp -s "$O315_W" "$O315_W.newer" \
+   && ! cmp -s "$O315_W" "$O315_W.annotated"; then
+  echo "ok    o315 premise: the witness canonical rebuild verifies its own signature"; PASS=$((PASS+1))
+else
+  echo "FAIL  o315 premise: the witness canonical rebuild does not verify"; FAIL=$((FAIL+1))
+fi
+check "o315 the genuine witness extends" 0 "WITNESS OK"              -- \
+  "$BIN" witness check "$O315_W"
+check "o315 a newer build's signed witness field is exit 1" 1 "was NOT checked" -- \
+  "$BIN" witness check "$O315_W.newer"
+check "o315 a key added beside a witness's signature is exit 1" 1 '"note"' -- \
+  "$BIN" witness check "$O315_W.annotated"
 
 # **UNDERCROFT_TRUST_FLOOR — the declared VAULT floor, end to end.** The
 # REQUEST floor (`--min-trust`, `min_trust`) is exercised on `/v1` below;
@@ -3492,53 +3605,71 @@ rest_code "a malformed receipt is 400" 400 -- -X POST "$API/vaults/erasure/verif
 # disagreement is a real one rather than two vaults being compared.
 check "the CLI agrees with the route" 0 "ATTESTATION VERIFIED" -- \
   env UNDERCROFT_HOME="$REST_HOME" "$BIN" verify-forgetting "$O14_ATT" --vault erasure
-# **ROADMAP O315 on `/v1`.** A receipt a newer build minted is the CALLER's
-# 400, naming the newer build — never 409 + `class: "integrity"`, which the
-# fleet's ops door exits 2 on. The plane mints unsigned, so the signed
-# document is minted by the CLI against this server's own vault and its
-# version bumped. Counterfactual on `5108dfa`: 409 + integrity for the bump,
-# 200 `verified` for the extra key.
+# **ROADMAP O315 on `/v1`.** A document carrying a field or a version this
+# build does not know is the CALLER's 400, NOT CHECKED — never 409 + `class:
+# "integrity"`, which the fleet's ops door exits 2 on, and never 200. The plane
+# mints unsigned, so the signed receipt is minted by the CLI against this
+# server's own vault and re-signed with one more field the way a newer build
+# would (the helpers and the openssl premise are the CLI block's, above).
+# Counterfactual on `5108dfa`: 409 + `integrity` for the re-signed field, 200
+# `verified` for the annotated receipt, 409 for the forgery plus a bump, and
+# 200 for the annotated witness.
 O315_V1_ID="$(curl -s -X POST "$API/vaults/erasure/drawers" -H "X-Vault-Assertion: $(sign erasure)" \
   -d '{"text":"a second note the data subject will ask us to erase, signed this time","wing":"eng","room":"tmp"}' \
   | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
-O315_V1_ATT="$UNDERCROFT_HOME/o315-v1-attestation.json"
+O315_V1_ATT="$O315_DIR/v1-att.json"
 check "o315 a signed receipt for the served vault" 0 "attestation written to" -- \
   env UNDERCROFT_HOME="$REST_HOME" "$BIN" forget "$O315_V1_ID" --vault erasure \
   --sign "$O315_KEY" --out "$O315_V1_ATT"
 rest_body "o315 v1 verifies the genuine signed receipt" '"verdict":"verified"' -- \
   -X POST "$API/vaults/erasure/verify-forgetting" \
   -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT"
-sed 's/"version": *[0-9]*/"version": 99/' "$O315_V1_ATT" > "$O315_V1_ATT.newer"
-sed '1s/^{$/{ "archive": "1 archive(s)",/' "$O315_V1_ATT" > "$O315_V1_ATT.annotated"
+o315_newer "$O315_V1_ATT" o315_canon_att "$O315_SECRET" "$O315_V1_ATT.newer"
+sed '1s/^{$/{ "ticket": "JIRA-1",/' "$O315_V1_ATT" > "$O315_V1_ATT.annotated"
+sed -e 's/"head_after": *"[0-9a-f]*"/"head_after": "00"/' \
+    -e 's/"version": *[0-9]*/"version": 99/' "$O315_V1_ATT" > "$O315_V1_ATT.forged-bumped"
 head -c 200 "$O315_V1_ATT" > "$O315_V1_ATT.truncated"
 O315_SAME=""
-for f in newer annotated truncated; do
+for f in newer annotated forged-bumped truncated; do
   cmp -s "$O315_V1_ATT" "$O315_V1_ATT.$f" && O315_SAME="$O315_SAME $f"
 done
-if [ -n "$O315_V1_ID" ] && [ -z "$O315_SAME" ] && grep -q '"sig"' "$O315_V1_ATT"; then
-  echo "ok    o315 v1 premise: a signed receipt, and every edit below landed"; PASS=$((PASS+1))
+if [ -n "$O315_V1_ID" ] && [ -z "$O315_SAME" ] \
+   && o315_verifies "$O315_V1_ATT" o315_canon_att \
+   && o315_verifies "$O315_V1_ATT.newer" o315_canon_att "$o315_ext"; then
+  echo "ok    o315 v1 premise: a signed receipt, a genuine re-signature, and every edit landed"; PASS=$((PASS+1))
 else
-  echo "FAIL  o315 v1 premise — id='$O315_V1_ID', unsigned, or unchanged:$O315_SAME"
+  echo "FAIL  o315 v1 premise — id='$O315_V1_ID', unchanged:$O315_SAME, or a signature that does not verify"
   FAIL=$((FAIL+1))
 fi
-rest_code "o315 a newer build's version is the caller's 400" 400 -- \
+rest_code "o315 a newer build's signed field is the caller's 400" 400 -- \
   -X POST "$API/vaults/erasure/verify-forgetting" \
   -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.newer"
-rest_body "o315 ...naming the newer build" "a newer build of Undercroft minted it" -- \
+rest_body "o315 ...saying it was NOT checked" "was NOT checked" -- \
   -X POST "$API/vaults/erasure/verify-forgetting" \
   -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.newer"
 rest_body_lacks "o315 ...and no integrity class" '"class"' -- \
   -X POST "$API/vaults/erasure/verify-forgetting" \
   -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.newer"
-rest_code "o315 a key this build does not know is 400" 400 -- \
+rest_code "o315 a key added beside the signature is 400" 400 -- \
   -X POST "$API/vaults/erasure/verify-forgetting" \
   -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.annotated"
-rest_body_lacks "o315 ...and no integrity class either" '"class"' -- \
+rest_code "o315 COST: a forgery with a version no build knows is 400, not 409" 400 -- \
   -X POST "$API/vaults/erasure/verify-forgetting" \
-  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.annotated"
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.forged-bumped"
 rest_code "o315 a truncated receipt is 400" 400 -- \
   -X POST "$API/vaults/erasure/verify-forgetting" \
   -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.truncated"
+# The witness route shares the fence: an emitted witness with a key added.
+O315_V1_W="$(curl -s "$API/vaults/erasure/witness" -H "X-Vault-Assertion: $(sign erasure)")"
+O315_V1_WA="$(sed 's/^{/{"note":"kept in the safe",/' <<<"$O315_V1_W")"
+if grep -q '"prefix_digest"' <<<"$O315_V1_W" && [ "$O315_V1_W" != "$O315_V1_WA" ]; then
+  echo "ok    o315 v1 premise: the plane emitted a witness, and the key landed"; PASS=$((PASS+1))
+else
+  echo "FAIL  o315 v1 premise: no witness, or the edit changed nothing"; FAIL=$((FAIL+1))
+fi
+rest_code "o315 a key added to a witness is 400 on /v1" 400 -- \
+  -X POST "$API/vaults/erasure/witness" \
+  -H "X-Vault-Assertion: $(sign erasure)" -d "$O315_V1_WA"
 # Arm 4: across a rotation the verdict REDUCES and says so, rather than
 # becoming the tamper verdict (O13). Reachable from the HTTP plane only
 # because this route exists.

@@ -37,19 +37,27 @@
 //! **A document this build cannot read is never called forged** (ROADMAP
 //! O315). Before anything else — the vault, the signature, a single tag — the
 //! verifier runs an AGE FENCE: a `version` it does not know, or a field it
-//! does not know anywhere in the document, is refused as "a newer build minted
-//! it", an input error (exit 1, `/v1` 400), never the tamper verdict. The
-//! order is the whole of it. The type used to DROP a key it did not declare,
-//! so a field a newer build signs was recomputed out of the canonical, the
-//! signature failed, and an older build answered `ATTESTATION FAILED`, exit 2,
-//! on a genuine receipt — which a version bump does not prevent, the version
-//! being inside the same signature. It happened once: every build before
-//! 1.1.0 reads a genuine signed receipt carrying 1.1.0's `mirror` note as
-//! forged. Reading `version` and the key set ahead of the signature is sound
-//! in one direction only, O238's: it can buy a refusal and never an
-//! acceptance. Its cost, stated: a forger who adds a key buys "not checked"
-//! where the up-to-date verdict is "forged" — exit 1 instead of 2, and still
-//! never a verdict that the document is genuine.
+//! does not know anywhere in the document, is refused as NOT CHECKED — "a
+//! newer build may have minted it, or it was altered" — an input error (exit
+//! 1, `/v1` 400), never the tamper verdict and never a claim about who minted
+//! it. The order is the whole of it. The type used to DROP a key it did not
+//! declare, so a field a newer build signs was recomputed out of the
+//! canonical, the signature failed, and an older build answered `ATTESTATION
+//! FAILED`, exit 2, on a genuine receipt — which a version bump does not
+//! prevent, the version being inside the same signature. It happened once:
+//! every build before 1.1.0 reads a genuine signed receipt carrying 1.1.0's
+//! `mirror` note as forged. Reading `version` and the key set ahead of the
+//! signature is sound in one direction only, O238's: it can buy a refusal and
+//! never an acceptance.
+//!
+//! **Its cost, stated exactly.** A forger who adds a key no build will ever
+//! declare, or a version no build will ever mint, gets exit 1, "not checked",
+//! from EVERY build, present and future — never exit 2, and never acceptance.
+//! Exit 1 is the class a compliance script may retry and then ignore, which
+//! is the shape this command's exit 2 was introduced to close (the comment on
+//! the CLI's `verify-forgetting` arm). Whether "not checked" deserves an exit
+//! class of its own is a documented exit contract and the maintainer's,
+//! filed as O-NEW-O315-2.
 //!
 //! What "destroyed" means here is what the one destruction body ships
 //! (`manage.rs`, `destroy_in`): the row and its derived artifacts gone and a
@@ -77,16 +85,57 @@ use crate::{StoreError, VaultStore};
 /// build's (ROADMAP O315).
 pub const ATTESTATION_VERSION: u32 = 2;
 
-/// The keys of an attestation document that this build does NOT declare,
-/// captured rather than dropped (ROADMAP O315).
+/// The keys of a signed document that this build does NOT declare, captured
+/// rather than dropped (ROADMAP O315) — on an erasure receipt's three types
+/// and on the chain witness.
 ///
 /// Empty on every document any released build has minted — every key any of
-/// them wrote is declared here, counted across every tag — so on a genuine
-/// receipt this is always empty, and it serialises to nothing. It is the
+/// them wrote is declared, counted across every tag — so on a genuine
+/// document this is always empty, and it serialises to nothing. It is the
 /// observable the age fence reads: a key a newer build adds lands here, where
 /// the type used to discard it silently and then recompute a signed canonical
 /// without it.
 pub type UnknownFields = std::collections::BTreeMap<String, serde_json::Value>;
+
+/// The age fence's refusal for a `version` this build does not know (ROADMAP
+/// O315), shared by the erasure receipt and the chain witness so the two
+/// cannot word one decision two ways.
+///
+/// It claims NOTHING about the document, because nothing in it was read: a
+/// newer build may have minted it, or it was altered. Never "a newer build
+/// minted it" alone, which is a verdict over bytes no check examined.
+pub(crate) fn not_checked_version(what: &str, version: u32, known: &str) -> StoreError {
+    StoreError::Invalid(format!(
+        "{what} declares version {version}, which this build does not know (it checks {known}), \
+         so the document was NOT checked: a newer build of Undercroft may have minted it, or it \
+         was altered. Neither valid nor forged — check it with a build that knows that version \
+         (ROADMAP O315)"
+    ))
+}
+
+/// The age fence's refusal for keys this build does not declare (ROADMAP
+/// O315), the same claim as [`not_checked_version`]. The keys are the
+/// caller's bytes, so each is cut to 64 characters on a character boundary
+/// and printed through `Debug`, which escapes a control character a terminal
+/// would otherwise act on; three are named and the rest counted.
+pub(crate) fn not_checked_keys(what: &str, keys: &[String]) -> StoreError {
+    let named: Vec<String> = keys
+        .iter()
+        .take(3)
+        .map(|k| format!("{:?}", k.chars().take(64).collect::<String>()))
+        .collect();
+    let more = match keys.len() {
+        n if n > 3 => format!(" and {} more", n - 3),
+        _ => String::new(),
+    };
+    StoreError::Invalid(format!(
+        "{what} carries {} field(s) this build does not know ({}{more}), so the document was NOT \
+         checked: a newer build of Undercroft may have minted it, or it was altered. Neither \
+         valid nor forged — check it with the build that minted it or a later one (ROADMAP O315)",
+        keys.len(),
+        named.join(", ")
+    ))
+}
 
 /// Whether this destruction also issued a delete to a remote mirror.
 ///
@@ -279,7 +328,7 @@ pub struct ForgetAttestation {
 impl ForgetAttestation {
     /// **The age fence** (ROADMAP O315; O267 ruling 4, on the O241 ruling 4
     /// and O238 precedent): the chain step this document's heads were
-    /// computed with, or a refusal saying a newer build minted it.
+    /// computed with, or a refusal saying the document was NOT checked.
     ///
     /// Run FIRST by [`VaultStore::verify_forget_attestation`], before the
     /// vault, the signature or any tag, because what it refuses is a document
@@ -290,11 +339,20 @@ impl ForgetAttestation {
     /// would recompute out of it — so trusting either can buy a refusal and
     /// never an acceptance.
     ///
-    /// The refusal is [`StoreError::Invalid`] — the class this function's
-    /// version arm always answered, and the witness's (`witness_check`): exit
-    /// 1 on the CLI, 400 on `/v1`, an error on MCP — never
-    /// [`StoreError::Attestation`], the tamper verdict. Version `0` is refused
-    /// in the same class without the claim, since no build ever minted it.
+    /// The refusal claims nothing about the document, because nothing in it
+    /// was read: a newer build may have minted it, or it was altered, and the
+    /// message says both ([`not_checked_version`], [`not_checked_keys`]). Its
+    /// class is [`StoreError::Invalid`] — the class this function's version
+    /// arm always answered, and the witness's: exit 1 on the CLI, 400 on
+    /// `/v1`, an error on MCP — never [`StoreError::Attestation`], the tamper
+    /// verdict. **That class is the cost**: a forger who adds a key no build
+    /// will ever declare, or a version no build will ever mint, gets exit 1
+    /// from EVERY build, present and future, never exit 2 — and exit 1 is the
+    /// class a compliance script may retry and then ignore, the shape exit 2
+    /// was given to this command to close. Whether "not checked" needs a class
+    /// of its own is the maintainer's question, filed as O-NEW-O315-2.
+    /// Version `0` is refused in the same class without the "newer build"
+    /// half, since no build ever minted it.
     pub(crate) fn age_fence(&self) -> Result<undercroft_vault::ChainStep, StoreError> {
         let step = match self.version {
             1 => undercroft_vault::ChainStep::V1,
@@ -302,40 +360,21 @@ impl ForgetAttestation {
             0 => {
                 return Err(StoreError::Invalid(format!(
                     "attestation version 0 is not one any build of Undercroft mints (this build \
-                     checks 1 to {ATTESTATION_VERSION}); not checked"
+                     checks 1 to {ATTESTATION_VERSION}), so the document was NOT checked \
+                     (ROADMAP O315)"
                 )))
             }
             v => {
-                return Err(StoreError::Invalid(format!(
-                    "attestation version {v} is newer than this build understands (it checks 1 \
-                     to {ATTESTATION_VERSION}): a newer build of Undercroft minted it. Not \
-                     checked, and not a verdict on the document — check it with that build or a \
-                     later one (ROADMAP O315)"
-                )))
+                return Err(not_checked_version(
+                    "the attestation",
+                    v,
+                    &format!("1 to {ATTESTATION_VERSION}"),
+                ))
             }
         };
         let unknown = self.unknown_fields();
         if !unknown.is_empty() {
-            // Named, never echoed raw: the keys are the caller's bytes, so
-            // each is cut to 64 characters on a character boundary and
-            // printed through `Debug`, which escapes a control character a
-            // terminal would otherwise act on. Three named, the rest counted.
-            let named: Vec<String> = unknown
-                .iter()
-                .take(3)
-                .map(|k| format!("{:?}", k.chars().take(64).collect::<String>()))
-                .collect();
-            let more = match unknown.len() {
-                n if n > 3 => format!(" and {} more", n - 3),
-                _ => String::new(),
-            };
-            return Err(StoreError::Invalid(format!(
-                "the attestation carries {} field(s) this build does not know ({}{more}): a \
-                 newer build of Undercroft minted it. Not checked, and not a verdict on the \
-                 document — check it with that build or a later one (ROADMAP O315)",
-                unknown.len(),
-                named.join(", ")
-            )));
+            return Err(not_checked_keys("the attestation", &unknown));
         }
         Ok(step)
     }
@@ -388,10 +427,11 @@ impl ForgetAttestation {
         // (ROADMAP O315). This one shipped in 1.1.0 with no version change,
         // and every build before it drops the key, recomputes these bytes
         // without it, and reads a genuine signed receipt as forged. From
-        // 1.7.0 the age fence answers a key it does not know as a newer
-        // build's, before the signature — so the NEXT extension is safe for
-        // verifiers from 1.7.0 on and still a forgery verdict on 1.6.1 and
-        // older, which is what its `UPGRADING.md` entry owes the reader.
+        // 1.7.0 the age fence answers a key it does not know as NOT CHECKED,
+        // before the signature — so the NEXT extension reads as "not
+        // checked" on verifiers from 1.7.0 up to the release that adds it,
+        // and still as forged on 1.6.1 and older, which is what its
+        // `UPGRADING.md` entry owes the reader.
         if let Some(m) = &self.mirror {
             parts.push(format!("mirror\u{1e}{m}"));
         }
@@ -778,7 +818,7 @@ impl VaultStore {
         att: &ForgetAttestation,
     ) -> Result<AttestationVerdict, StoreError> {
         // **The age fence FIRST** (ROADMAP O315): a version or a field this
-        // build does not know is refused as a newer build's, an input error,
+        // build does not know is refused as NOT CHECKED, an input error,
         // before anything below can read the document as forged. It came
         // after the signature until O315, so a field a newer build signs was
         // dropped by the parse, recomputed out of the canonical, and answered
@@ -1456,7 +1496,10 @@ mod tests {
         serde_json::from_value(v).unwrap()
     }
 
-    fn assert_age_refusal(
+    /// The fence's refusal: `Invalid`, saying the document was NOT checked
+    /// and naming both readings — never "a newer build minted it" alone,
+    /// which would be a verdict over bytes nothing examined.
+    fn assert_not_checked(
         store: &VaultStore,
         doc: &ForgetAttestation,
         names: &str,
@@ -1465,34 +1508,39 @@ mod tests {
         match store.verify_forget_attestation(doc) {
             Err(StoreError::Invalid(why)) => {
                 assert!(
-                    why.contains("a newer build of Undercroft minted it") && why.contains(names),
-                    "{what}: refused as a newer build's, naming {names:?}: {why}"
+                    why.contains("was NOT checked")
+                        && why.contains("may have minted it, or it was altered")
+                        && why.contains(names),
+                    "{what}: refused as not checked, naming {names:?}: {why}"
                 );
                 why
             }
             other => panic!(
-                "{what}: a document a newer build minted must be refused as AGE (Invalid, \
-                 exit 1), never as forged and never accepted — got {other:?}"
+                "{what}: a document carrying what this build does not know must be refused as \
+                 NOT CHECKED (Invalid, exit 1) — never as forged, never accepted — got {other:?}"
             ),
         }
     }
 
-    /// **ROADMAP O315: a document a newer build minted reads as "newer than
-    /// this build", never as forged** (O267 ruling 4; the O241 ruling 4 and
-    /// O238 precedent).
+    /// **ROADMAP O315: a document carrying a version or a field this build
+    /// does not know is NOT CHECKED, never forged and never verified** (O267
+    /// ruling 4; the O241 ruling 4 and O238 precedent).
     ///
     /// The defect was the ORDER: the signature was checked over a canonical
     /// recomputed from a type that drops keys it does not declare, and the
     /// version was read only afterwards. So a field a newer build signs made
     /// every older build answer `ATTESTATION FAILED`, exit 2, on a genuine
-    /// receipt, and a version bump could not help — the version is inside the
-    /// same signature. Every arm below names a state the old order conflated.
+    /// receipt — and a version bump could not help, the version being inside
+    /// the same signature. A version bump ALONE, genuinely re-signed, was
+    /// already answered by the version arm (exit 1): it is arm 4's first half
+    /// and it is not the defect.
     ///
     /// COUNTERFACTUAL, run against `5108dfa`'s verifier (the version read
     /// after the signature, and no key captured): arms 1-3 and the
-    /// bump-plus-field half of arm 4 answer `Attestation("signature: …")`,
-    /// the tamper verdict, and arms 5 and 6 answer `Ok(Verified)` with the
-    /// extra key silently ignored.
+    /// field-plus-bump half of arm 4 answer `Attestation("signature: …")`,
+    /// the tamper verdict; arms 5 and 6 answer `Ok(Verified)` with the
+    /// extra key silently ignored; arm 8 (a forgery that adds a key) answered
+    /// `Attestation` there and answers `Invalid` here — the stated COST.
     #[test]
     fn a_document_a_newer_build_minted_is_refused_as_age_before_the_signature() {
         use undercroft_vault::{SecurityLevel, VaultManager};
@@ -1555,20 +1603,20 @@ mod tests {
              old order's `ATTESTATION FAILED`"
         );
         assert_eq!(newer.unknown_fields(), vec!["archive".to_string()]);
-        assert_age_refusal(&store, &newer, "\"archive\"", "a signed top-level field");
+        assert_not_checked(&store, &newer, "\"archive\"", "a signed top-level field");
 
         // ARMS 2 and 3 — the same inside a record and inside a drawer, named
         // by path, because a newer build may extend either and the type
         // dropped keys at every level.
         let in_record = as_newer_build(&att, &secret, Place::Record(1), "kind", "tombstone");
-        assert_age_refusal(
+        assert_not_checked(
             &store,
             &in_record,
             "records[1].kind",
             "a signed record field",
         );
         let in_drawer = as_newer_build(&att, &secret, Place::Drawer(0), "note", "x");
-        assert_age_refusal(
+        assert_not_checked(
             &store,
             &in_drawer,
             "drawers[0].note",
@@ -1576,25 +1624,26 @@ mod tests {
         );
 
         // ARM 4 — a version bump, re-signed as its minter would: refused by
-        // version, before the signature. Under the old order the bump alone
-        // verified the signature and then refused by version (exit 1), and
-        // the bump plus a field refused by signature (exit 2).
+        // version, before the signature. The old order answered the bump
+        // alone exactly so (the signature verified, then the version arm
+        // refused, exit 1) — so that half is NOT the defect — and answered
+        // the bump plus a field by signature (exit 2), which is.
         let mut bumped = att.clone();
         bumped.version = ATTESTATION_VERSION + 1;
         bumped.sign(&secret).unwrap();
         match store.verify_forget_attestation(&bumped) {
             Err(StoreError::Invalid(why)) => assert!(
                 why.contains(&format!("version {}", ATTESTATION_VERSION + 1))
-                    && why.contains("a newer build of Undercroft minted it"),
-                "a newer version is named as one: {why}"
+                    && why.contains("was NOT checked"),
+                "an unknown version is named, and not checked: {why}"
             ),
-            other => panic!("a newer version must be refused as age: {other:?}"),
+            other => panic!("an unknown version must be refused as not checked: {other:?}"),
         }
         let bumped_and_extended =
             as_newer_build(&bumped, &secret, Place::Top, "archive", "1 archive(s)");
         match store.verify_forget_attestation(&bumped_and_extended) {
-            Err(StoreError::Invalid(why)) => assert!(why.contains("version"), "{why}"),
-            other => panic!("a bump plus a field is age, never forged: {other:?}"),
+            Err(StoreError::Invalid(why)) => assert!(why.contains("was NOT checked"), "{why}"),
+            other => panic!("a bump plus a signed field is not checked, never forged: {other:?}"),
         }
 
         // ARM 5 — an UNSIGNED document carrying a key this build does not
@@ -1606,51 +1655,76 @@ mod tests {
         let mut v = serde_json::to_value(&unsigned).unwrap();
         v["archive"] = serde_json::json!("x");
         let unsigned_extra: ForgetAttestation = serde_json::from_value(v).unwrap();
-        assert_age_refusal(
+        assert_not_checked(
             &store,
             &unsigned_extra,
             "\"archive\"",
             "an unsigned extra key",
         );
 
-        // ARM 6 — a key added beside a genuine signature, outside it. The
+        // ARM 6 — a key ADDED to a genuine signed receipt, outside its
+        // signature: an alteration, not a newer build's document. The
         // signature verifies over the known fields, so the old order said
         // VERIFIED and printed "signature verified" over a field it never
-        // read.
+        // read; now it is refused unread, as not checked.
         let mut v = serde_json::to_value(&att).unwrap();
         v["ticket"] = serde_json::json!("JIRA-1");
         let annotated: ForgetAttestation = serde_json::from_value(v).unwrap();
-        assert_age_refusal(
+        assert_not_checked(
             &store,
             &annotated,
             "\"ticket\"",
-            "a key beside the signature",
+            "a key added beside the signature",
         );
 
-        // ARM 7 — version 0 is refused in the same class WITHOUT the claim:
-        // no build minted it, so "a newer build minted it" would be false.
+        // ARM 7 — version 0 is refused in the same class WITHOUT the "newer
+        // build" half: no build minted it.
         let mut zero = att.clone();
         zero.version = 0;
         match store.verify_forget_attestation(&zero) {
             Err(StoreError::Invalid(why)) => assert!(
-                why.contains("version 0") && !why.contains("newer build"),
+                why.contains("version 0")
+                    && why.contains("was NOT checked")
+                    && !why.contains("newer build"),
                 "{why}"
             ),
             other => panic!("version 0 is an input error: {other:?}"),
         }
 
-        // ARM 8 — the fence is FIRST, ahead of the vault check too: a newer
-        // build's document naming another vault is age, not "attests vault
-        // …". Pinned with its cost, which the module header states: a forger
-        // who adds a key buys an exit-1 refusal where the up-to-date verdict
-        // is exit 2 — never an acceptance.
+        // ARM 8 — the COST, pinned: a FORGERY that also carries something no
+        // build knows is refused unread, exit 1, where without that key it
+        // is the tamper verdict (arm 9). A key no build will ever declare, or
+        // a version none will ever mint, gets this answer from every build,
+        // present and future. Ahead of the vault check too, so a forgery
+        // naming another vault buys the same.
+        let mut forged_and_keyed = att.clone();
+        forged_and_keyed.head_after = "00".repeat(32);
+        let mut v = serde_json::to_value(&forged_and_keyed).unwrap();
+        v["zz-never-declared"] = serde_json::json!(true);
+        let forged_and_keyed: ForgetAttestation = serde_json::from_value(v).unwrap();
+        assert_not_checked(
+            &store,
+            &forged_and_keyed,
+            "\"zz-never-declared\"",
+            "a forgery that adds a key (the cost)",
+        );
+        let mut forged_and_bumped = att.clone();
+        forged_and_bumped.head_after = "00".repeat(32);
+        forged_and_bumped.version = 99;
+        assert!(
+            matches!(
+                store.verify_forget_attestation(&forged_and_bumped),
+                Err(StoreError::Invalid(_))
+            ),
+            "a forgery that bumps the version is not checked (the cost)"
+        );
         let mut foreign = as_newer_build(&att, &secret, Place::Top, "archive", "x");
         foreign.vault = "elsewhere".into();
-        assert_age_refusal(
+        assert_not_checked(
             &store,
             &foreign,
             "\"archive\"",
-            "a newer document naming another vault",
+            "a document naming another vault and carrying an unknown key",
         );
 
         // ARM 9 — the fence is not a softening of the tamper verdict: with
@@ -1690,7 +1764,7 @@ mod tests {
         v["\u{1b}[2Jx"] = serde_json::json!(1);
         v["k".repeat(4096)] = serde_json::json!(1);
         let hostile: ForgetAttestation = serde_json::from_value(v).unwrap();
-        let why = assert_age_refusal(&store, &hostile, "2 field(s)", "hostile keys");
+        let why = assert_not_checked(&store, &hostile, "2 field(s)", "hostile keys");
         assert!(
             !why.contains('\u{1b}'),
             "a raw escape reached the message: {why:?}"
@@ -1724,7 +1798,7 @@ mod tests {
     /// and nothing it mints moves by a byte** (ROADMAP O315).
     ///
     /// The fence's one way to fail silently is the other direction: refusing
-    /// a GENUINE OLD receipt as a newer build's, because some release wrote a
+    /// a GENUINE OLD receipt as not checked, because some release wrote a
     /// key this build no longer declares. Counted across every tag from
     /// `v1.0.0` to `v1.6.1` and every revision of this file: no field was
     /// ever removed, and the only one ever added is `mirror` (1.1.0). The key
