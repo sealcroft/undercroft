@@ -455,6 +455,7 @@ impl VaultStore {
     ) -> Result<(ForgetAttestation, Vec<crate::manage::Destroyed>), StoreError> {
         let conn = snap.conn();
         let mut drawers = Vec::with_capacity(ids.len());
+        let mut fenced = Vec::with_capacity(ids.len());
         for id in ids {
             let d = self
                 .get(id, crate::Read::Internal(crate::InternalRead::Verification))?
@@ -462,19 +463,9 @@ impl VaultStore {
                 // across every route (cluster: write-validation).
                 .ok_or_else(|| StoreError::NotFound(id.clone()))?;
             // ...and pending review evidence is not deletable through the
-            // forgetting path either (cluster: ops-boundaries). Decided by
-            // the destruction fence's one rule on the meta this lock just
-            // VERIFIED (ROADMAP O221): it asked the clear column after
-            // verifying the row, so a pending row whose column was flipped
-            // away was destroyed under a third-party-verifiable receipt.
-            if evidence == crate::manage::PendingEvidence::Protect
-                && crate::admission::QueueStanding::of_covered(&d.meta)
-                    == crate::admission::QueueStanding::Pending
-            {
-                return Err(StoreError::Invalid(format!(
-                    "{id} is quarantine-pending — rule on it with `admission allow`/`deny`; pending review evidence is not deletable"
-                )));
-            }
+            // forgetting path either (cluster: ops-boundaries) — asked through
+            // the fence, whose witness is what `destroy_in` takes.
+            fenced.push(self.fence(snap, id, evidence)?);
             drawers.push(ForgottenDrawer {
                 id: id.clone(),
                 content_fp: hex::encode(crate::kg::content_fp(&d.content)),
@@ -494,8 +485,8 @@ impl VaultStore {
         let seq_before: i64 =
             conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM audit", [], |r| r.get(0))?;
         let mut destroyed = Vec::with_capacity(ids.len());
-        for id in ids {
-            destroyed.push(self.destroy_in(snap, &tables, id)?);
+        for f in fenced {
+            destroyed.push(self.destroy_in(snap, &tables, f)?);
         }
         self.settle_derived(snap, &tables, &destroyed)?;
         let head_after = crate::chain::require_head(conn)?.head;

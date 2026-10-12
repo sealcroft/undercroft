@@ -404,7 +404,7 @@ impl VaultStore {
             // The walk reads through the handle's connection, which is inside
             // `snap`'s transaction: the same state as the policies.
             self.walk_covered(|row| {
-                match classify(row, &policies, &cutoffs) {
+                match classify(row, &policies, &cutoffs)? {
                     Member::Outside => {}
                     Member::Unverifiable(u) => unverifiable.push(u),
                     Member::Undatable(w, drift) => undatable.push((w, drift)),
@@ -448,7 +448,7 @@ impl VaultStore {
                 Settle::Recheck => match self.covered_one(snap.conn(), &m.id)? {
                     // Destroyed by another handle since the walk.
                     None => continue,
-                    Some(row) => match classify(row, &decided.policies, &decided.cutoffs) {
+                    Some(row) => match classify(row, &decided.policies, &decided.cutoffs)? {
                         // Corrected out of scope, or kept by the policy.
                         Member::Outside => continue,
                         Member::Unverifiable(u) => {
@@ -481,15 +481,24 @@ impl VaultStore {
             // whole sweep. By reading, each settle path decides the member in
             // the state it fences it in (the recheck re-classifies it out of
             // scope first), so this is a backstop, not a door.
-            if self.queue_standing(snap.conn(), &m.id)?
-                != crate::admission::QueueStanding::NotPending
-            {
+            let standing = self.queue_standing(snap.conn(), &m.id)?;
+            if standing != crate::admission::QueueStanding::NotPending {
+                // The exit depends on which arm holds it: a ruling for review
+                // evidence a ruling can act on, the remedies for a row that
+                // does not verify (O221's review).
+                let exit = if standing == crate::admission::QueueStanding::Pending {
+                    "Rule on it with `admission allow`/`deny`, then sweep again".to_string()
+                } else {
+                    format!(
+                        "It does not verify, so no ruling door can act on it: {}",
+                        crate::admission::UNVERIFIABLE_REMEDIES
+                    )
+                };
                 withheld.push(RetentionWithheld {
                     reason: format!(
                         "it became review evidence in the admission queue ({QUARANTINE_WING}) \
                          after this sweep decided it was a member of a policy on {}; the \
-                         pending-evidence fence refuses it, so no sweep destroys it. Rule \
-                         on it with `admission allow`/`deny`, then sweep again",
+                         pending-evidence fence refuses it, so no sweep destroys it. {exit}",
                         m.wing
                     ),
                     id: m.id.clone(),
@@ -818,21 +827,24 @@ fn classify(
     row: crate::CoveredRow,
     policies: &[RetentionPolicy],
     cutoffs: &[OffsetDateTime],
-) -> Member {
+) -> Result<Member, StoreError> {
     let (id, meta, drift) = match row {
+        // As before ROADMAP O221 split it out: a retyped column fails the
+        // sweep with its conversion error (ROADMAP O-NEW-o221-2).
+        crate::CoveredRow::Undecodable { error, .. } => return Err(error),
         crate::CoveredRow::TagFailed { id, .. } => {
-            return Member::Unverifiable(RetentionUnverifiable {
+            return Ok(Member::Unverifiable(RetentionUnverifiable {
                 id,
                 reason: "its record HMAC does not verify, so neither copy of its scope or its \
                          clock is authentic; `verify` names it"
                     .into(),
-            });
+            }));
         }
         crate::CoveredRow::MetaUnparseable { id, .. } => {
-            return Member::Unverifiable(RetentionUnverifiable {
+            return Ok(Member::Unverifiable(RetentionUnverifiable {
                 id,
-                reason: "its HMAC-covered meta does not parse".into(),
-            });
+                reason: "its HMAC-covered meta does not parse; `verify` names it".into(),
+            }));
         }
         crate::CoveredRow::Verified { id, meta, drift } => (id, meta, drift),
     };
@@ -843,7 +855,7 @@ fn classify(
         .map(|(i, _)| i)
         .collect();
     if covers.is_empty() {
-        return Member::Outside;
+        return Ok(Member::Outside);
     }
     let filed = match OffsetDateTime::parse(&meta.filed_at, &Rfc3339) {
         Ok(t) => t,
@@ -853,7 +865,7 @@ fn classify(
                  destroy it with `forget` if its policy applies",
                 meta.filed_at
             );
-            return Member::Undatable(
+            return Ok(Member::Undatable(
                 RetentionWithheld {
                     id,
                     wing: meta.wing,
@@ -861,20 +873,20 @@ fn classify(
                     reason,
                 },
                 drift,
-            );
+            ));
         }
     };
     let past: Vec<usize> = covers.into_iter().filter(|&i| filed < cutoffs[i]).collect();
     if past.is_empty() {
-        return Member::Outside;
+        return Ok(Member::Outside);
     }
-    Member::Expired(ExpiredMember {
+    Ok(Member::Expired(ExpiredMember {
         id,
         wing: meta.wing,
         room: meta.room,
         drift,
         covers: past,
-    })
+    }))
 }
 
 /// How a READER of a policy table refuses (ROADMAP O230): a failed tag keeps
