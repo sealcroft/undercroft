@@ -3908,6 +3908,12 @@ fn store_err(e: StoreError) -> RestError {
         StoreError::DatabaseMissing { .. }
         | StoreError::DatabaseAmbiguous { .. }
         | StoreError::ReadOnlyUnmigrated { .. } => 409,
+        // ROADMAP O213: a read-only open of a vault whose manifest records no
+        // anchored write — what `init` and `POST /v1/vaults` leave until a
+        // writable open starts it. A posture refusal like its neighbour above:
+        // 409 with no class. A server caches only a successful open, so the
+        // first request after a writer creates the database succeeds.
+        StoreError::ReadOnlyNoAnchoredWrite { .. } => 409,
         // Two conditions of the vault's CURRENT state rather than of the
         // request, and neither a verdict about stored evidence (ROADMAP
         // O257): another process holds the vault (a rotation refused beside a
@@ -4206,6 +4212,9 @@ mod tests {
                 || S::DatabaseMissing {
                     id: "acme".into(),
                     path: "/vaults/acme/vault.db".into(),
+                    writes: 3,
+                    wal: None,
+                    staged: false,
                 },
                 true,
             ),
@@ -4229,6 +4238,15 @@ mod tests {
                 },
                 false,
             ),
+            // ROADMAP O213: a read-only open of a vault whose manifest records
+            // no anchored write. A posture refusal on both surfaces — and the
+            // status is pinned too, because `store_err`'s catch-all 500 is what
+            // a forgotten arm becomes (O238's founding defect).
+            (
+                "ReadOnlyNoAnchoredWrite",
+                || S::ReadOnlyNoAnchoredWrite { id: "acme".into() },
+                false,
+            ),
             ("Invalid", || S::Invalid("unknown kind".into()), false),
             ("NotFound", || S::NotFound("drawer".into()), false),
             ("ExternalVault", || S::ExternalVault, false),
@@ -4242,6 +4260,14 @@ mod tests {
             );
             assert_eq!(cli, *expected, "{name}: verdict moved");
         }
+        // ROADMAP O213: the posture refusal's STATUS, beside its class. With
+        // no arm in `store_err` it would fall to the catch-all 500, which a
+        // class comparison alone passes over.
+        assert_eq!(
+            store_err(S::ReadOnlyNoAnchoredWrite { id: "acme".into() }).code,
+            409,
+            "ReadOnlyNoAnchoredWrite: status"
+        );
 
         // `vault_err` is the other door, and the one `store_for` unlocks
         // through — a bare `VaultError` never reaches `store_err` at all.

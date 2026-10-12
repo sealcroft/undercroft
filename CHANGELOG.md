@@ -1757,6 +1757,77 @@ PATCH inside the unreleased 1.7.0, by the 2026-09-08 versioning ruling: the defe
 undefined panic status, and the new class reports a condition that was undefined; 0, 1 and 2 keep
 their meanings. `UPGRADING.md` carries the entry; `config check` cannot detect it.
 
+### No open creates a database beside a manifest that records history; a vault nothing has written is a posture refusal on the read-only posture; and an open-path refusal says only what it left as found (O308, O213, O322)
+
+**O308.** A writable open of a vault whose `vault.db` had been deleted, beside a manifest past
+genesis, opened with `SQLITE_OPEN_CREATE`, committed the schema batch, and only then judged the
+empty trail `Headless::Erased` and refused `ManifestTampered` — leaving the file, so every later
+open of either posture read a missing file as tampering. One door now decides what an open may do
+with a vault directory holding no database content (`absent.rs`): a survey that FOLLOWS a link and
+propagates every stat error but not-found, where "no content" is no main file at either name or the
+one main file a regular file of length 0 — not inside `DbLayout::of`, which O291's delete asks while
+holding the zero-length file it made. In the ruling's order: the vault directory gone is O291's
+reopen class; the unlock's verified values must still describe `vault.json` (its digest compared
+with `manifest_seen` — a strict MAC re-read would page a tamper event for a delete and `create` of
+the same id racing the open; that race is now the reopen class); a NON-EMPTY `-wal` beside no
+content is `DatabaseMissing` naming it, nothing opened (SQLite's first lock on a zero-page main file
+deletes the `-wal` beside it, read-only connections included); a manifest that records history is
+`DatabaseMissing`; one no build writes is `ManifestTampered`; one that records no anchored write
+starts on the writable posture. ONE predicate in `undercroft-vault`, `ManifestHistory::of(head,
+writes, staged)` — *Fresh*, *Mixed*, *History*, an attached AUTHENTICATED `vault.json.next` counting
+as history and an unauthenticated one deciding nothing (O257) — replaces the restore stage's
+`writes() > 0` and `adopt_empty_chain`'s `writes() == 0`. The door is asked in `recorded_embedder`
+(which answers `None` without opening anything on a fresh vault), at the head of both opens before
+O7's rename can open a file, and on `connect_writable`'s single layout read, where the crate's one
+`SQLITE_OPEN_CREATE` is granted only on its *Fresh*-and-absent answer. `DatabaseMissing` is
+posture-neutral now: it names the recorded height, any `-wal` or staged manifest ("do NOT delete
+it"), and O270's remedy, and never advises deleting a file.
+
+**O213.** A vault `init`, `vault create` or `POST /v1/vaults` had just made was A33's integrity
+verdict on the read-only posture — exit 2, `/v1` 409 `class: "integrity"` — while its own MAC-covered
+manifest records no write. It is `ReadOnlyNoAnchoredWrite` now: exit 1, a 409 with no class, its
+text stating only evidence (the manifest records no anchored write; a read-only open neither creates,
+seeds nor migrates; a writable open starts it) and the second reading O204 requires (if this vault
+ever held data, do not open it writable — restore it). One never-anchored vault answers it wherever
+the read-only open can see nothing was migrated: no database, a zero-length one, one holding none of
+the read schema's tables, and an EMPTY chain (it was `ReadOnlyUnmigrated`, as O303's note bound it);
+part of a schema keeps `ReadOnlyUnmigrated`. A database with no `audit` table beside a manifest that
+records something is the erased trail, `ManifestTampered`, on the read-only posture too (it returned
+early and answered exit 1), and an empty chain beside a *Mixed* manifest likewise. Registered on every
+surface: `store_err`'s 409 list (its catch-all is 500), a `false` row in the cross-surface identity
+test, absent from `integrity_verdict`.
+
+**O322.** The `Orphaned` refusal, `foreign_race`, both `settle_foreign` texts, `init_chain`'s
+re-adoption race and `chain::writes`'s two texts said "Nothing was written" after O7's rename, the
+schema batch and the initialisers could have run. Each now says what it guarantees, from one
+constant — `CHAIN_AS_FOUND`, the `audit` rows and `chain_meta` as found — the rotation reconcile's
+lock-path sites adding `vault.json`, `vault.json.next` and the key-generation marker; the vault
+crate's `ManifestMoved`, `StagedLost` and `absent()` say their own read or promote wrote no file,
+true on the anchor door and `verify` too. The `Orphaned` remedy names both readings. A source gate
+counts every "nothing was written" literal in both crates' production code, wrapped literals joined,
+against an allowlist of nine sites (eleven literals) with reasons — and found two neither ruling run listed
+(`vault_db::close`, `keys.rs`'s `material_missing_message`), both true where raised.
+
+**Measured.** 13 store tests (`absent_tests.rs`) and one `tests/cli.rs` surface test, each red on the
+unfixed shape by counterfactual, and eleven e2e checks run on the build: the door reverted to the
+pre-O308 behaviour turned twelve tests red (the writable open created `vault.db` and answered `ManifestTampered`; a vault
+replaced beneath the open answered `ManifestTampered`, the tamper page for a race); the fix's own
+choices — a strict MAC re-read for the binding, `.next`'s presence for the predicate, `writes` alone —
+each turned its own test red. On a mined LoCoMo corpus (340 drawers in four wings at both security
+levels): a deleted, a zero-length, and a `-wal`-only database each exit 2 on both postures with the
+directory and the manifest's SHA-256 unchanged and the `-wal` kept byte for byte; `verify` OK once
+the database is put back; a fresh sibling exits 1 and `--read-only vault list` exits 0. An existing
+e2e arm measured A33 on a vault that was in fact FRESH (`UNDERCROFT_VAULT=` selects nothing), the
+"A33 fixtures stay on fresh vaults only" trap the ruling names; it writes through `--vault` now, with
+a premise check. P-LINK, measured: a dangling link at `vault.db` beside a fresh manifest makes the
+writable open create the link's target outside the vault directory, on this build as before it;
+filed for a ruling, pinned as a cost.
+
+PATCH inside the unreleased 1.7.0 (O204's precedent): exit 2 becomes exit 1 for a state the
+documentation already described as a posture refusal, and a deleted database keeps its class with
+nothing created. `UPGRADING.md` carries O213's entry and amends O303's; `config check` cannot see
+either state.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

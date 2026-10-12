@@ -1737,13 +1737,29 @@ Consequences that are binding, not advisory:
   reads the height, a head without one `Inconsistent`. Only `Empty` is
   adopted, in `adopt_empty_chain`, under the write lock, judged again there,
   with `chain::seed_empty`, which takes no value at all; the read-only open
-  answers it `ReadOnlyUnmigrated`. Seeding the REPLAYED head (the filing's
+  answers it O213's posture refusal, `ReadOnlyNoAnchoredWrite` (it was
+  `ReadOnlyUnmigrated`). Seeding the REPLAYED head (the filing's
   shape) was measured worse: the store computed the keyed head over a row a
   writer without the key appended, and the switch bound its label. A
   database a source build older than 0.19.0 wrote — this repository's
   history was rewritten at the rename and derives the same keys — is refused
-  with them (a `vault.db` deleted outright is still created by the
-  writable connect before the refusal, O308). Test pause points live in
+  with them. **And no open creates a database beside a manifest that
+  records history (O308)**: one door, `absent.rs`, asked in
+  `recorded_embedder`, at the head of both opens and on `connect_writable`'s
+  one layout read — the crate's only `SQLITE_OPEN_CREATE` grant — surveys the
+  directory by a stat that follows a link (no main file, or one of length 0,
+  is no content), binds the unlock's values to `vault.json`'s bytes (a vault
+  deleted and created again beneath the open is the reopen class, never a
+  tamper page), names and keeps a non-empty `-wal`, and asks ONE predicate,
+  `undercroft_vault::ManifestHistory` over the MAC-covered head and height:
+  *History* is `DatabaseMissing` on both postures with nothing created, *Mixed*
+  `ManifestTampered`, *Fresh* starts writable and is the read-only posture
+  refusal (O213). Every open-path refusal after O7's rename or the schema
+  batch says what it leaves as found (`CHAIN_AS_FOUND`, O322), never "nothing
+  was written", and a source gate classifies every such literal. A dangling
+  link at `vault.db` beside a fresh manifest still makes the writable open
+  create the link's target outside the vault directory — filed, pinned as a
+  cost. Test pause points live in
   `rotate_pause.rs`, never inline here — an inline `#[cfg(test)]` blinds
   `rotation_names_every_key_derived_artifact`),
   bulk ingest
@@ -2190,11 +2206,14 @@ Consequences that are binding, not advisory:
   the posture one call later was already too late. Each of those is
   DETECTED and REPORTED instead, on `VaultStats.unhealed` (all three
   surfaces) and as a warning at open. Two conditions refuse rather than
-  report, both 409: an absent `vault.db` under a present manifest
-  (`DatabaseMissing`, A33 — "empty" is not "absent", and it is an
-  integrity verdict, so exit 2), and a schema a read-only role would have
-  had to migrate (`ReadOnlyUnmigrated`, exit 1 — the vault is intact, the
-  posture is simply wrong for it). A vault whose writer crashed
+  report, all 409: an absent `vault.db` under a manifest that records
+  history (`DatabaseMissing`, A33 — "empty" is not "absent", and it is an
+  integrity verdict, so exit 2, on the writable posture too since O308), a
+  manifest that records NO anchored write — what `init` leaves
+  (`ReadOnlyNoAnchoredWrite`, exit 1, O213: it was A33's exit 2 on every
+  fresh volume) — and a schema a read-only role would have had to migrate
+  (`ReadOnlyUnmigrated`, exit 1 — the vault is intact, the posture is simply
+  wrong for it). A vault whose writer crashed
   mid-rotation still opens, which is the case that made reporting the
   right rule — **and since O266 it verifies too**: the open adopts the
   staged keys in memory and compares the rows with the STAGED manifest.

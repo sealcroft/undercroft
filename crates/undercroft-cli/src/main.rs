@@ -2065,6 +2065,10 @@ fn integrity_verdict(e: &anyhow::Error) -> bool {
                     // retrying only re-detects it (R4/A33). Its neighbour
                     // `ReadOnlyUnmigrated` is deliberately NOT here: the
                     // vault is intact, the posture is simply wrong for it.
+                    // Nor is `ReadOnlyNoAnchoredWrite` (ROADMAP O213): a
+                    // manifest that records no anchored write describes no
+                    // database content, so an absent file contradicts
+                    // nothing it claims — the A33 line, distinguished.
                     | S::DatabaseMissing { .. }
                     // Two databases under one manifest (ROADMAP O7): the
                     // same self-contradiction, one file too many rather
@@ -5403,6 +5407,9 @@ mod tests {
             anyhow::Error::from(S::DatabaseMissing {
                 id: "acme".into(),
                 path: "/vaults/acme/vault.db".into(),
+                writes: 3,
+                wal: None,
+                staged: false,
             }),
             // Its O7 sibling: one database too many rather than one too few.
             anyhow::Error::from(S::DatabaseAmbiguous {
@@ -5424,6 +5431,11 @@ mod tests {
             anyhow::Error::from(S::ReadOnlyUnmigrated {
                 missing: "kg_triples.terms".into(),
             }),
+            // ROADMAP O213: a read-only open of a vault whose manifest records
+            // no anchored write — what `init` leaves. It was A33's verdict,
+            // exit 2, on every fresh volume; a writable open starts it, so it
+            // is a posture refusal, `ReadOnlyUnmigrated`'s class.
+            anyhow::Error::from(S::ReadOnlyNoAnchoredWrite { id: "acme".into() }),
             // ROADMAP O238, and the same reading one variant over: a vault
             // written by a NEWER build is intact and this binary is too old
             // for it. Age is a posture, not a tamper verdict — exit 1, and a

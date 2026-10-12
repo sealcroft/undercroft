@@ -24,7 +24,9 @@ use rusqlite::{Connection, ErrorCode, OpenFlags};
 use serde::Serialize;
 use undercroft_core::embed::Embedder;
 use undercroft_vault::restores::{Archive, Stage};
-use undercroft_vault::{Access, DbLayout, Vault, VaultError, VaultManager, DB_FILE, MANIFEST_FILE};
+use undercroft_vault::{
+    Access, DbLayout, ManifestHistory, Vault, VaultError, VaultManager, DB_FILE, MANIFEST_FILE,
+};
 
 use crate::restore_pause::{self as pause, Phase};
 use crate::{chain, StoreError, VaultStore, VerifyReport};
@@ -250,18 +252,28 @@ pub fn restore_archive(
     let vault = manager
         .unlock_stage(&stage)
         .map_err(|e| archive_verdict(StoreError::Vault(e), &name, Step::Unlock))?;
-    // A writable open of a directory with no database CREATES one, which would
-    // then fail verify as a broken chain — say what is actually wrong instead
-    // (the O213 distinction: a manifest that records writes is missing data).
+    // A writable open of a directory with no database CREATES one when its
+    // manifest records no anchored write, which would then fail verify as a
+    // broken chain — say what is actually wrong instead, by the one predicate
+    // (ROADMAP O308 item 1; it was `vault.writes() > 0`, one field of the two):
+    // a manifest that records history is missing data, and one no build writes
+    // is an integrity verdict too.
     if vault.db_layout() == DbLayout::Absent {
-        return Err(if vault.writes() > 0 {
-            StoreError::IntegrityFinding(format!(
-                "backup {name} does not verify, so {UNCHANGED}: its manifest records {} write(s) \
-                 and it holds no database",
+        return Err(match vault.manifest_history() {
+            ManifestHistory::History => StoreError::IntegrityFinding(format!(
+                "backup {name} does not verify, so {UNCHANGED}: its manifest records a chain \
+                 height of {} and it holds no database",
                 vault.writes()
-            ))
-        } else {
-            StoreError::Invalid(format!("backup {name} holds no database; {UNCHANGED}"))
+            )),
+            ManifestHistory::Mixed => StoreError::IntegrityFinding(format!(
+                "backup {name} does not verify, so {UNCHANGED}: its manifest pairs a chain head \
+                 and a chain height ({}) that no build writes together — the genesis head \
+                 beside a nonzero height, or a later head at height 0 — and it holds no database",
+                vault.writes()
+            )),
+            ManifestHistory::Fresh => {
+                StoreError::Invalid(format!("backup {name} holds no database; {UNCHANGED}"))
+            }
         });
     }
     let archived = archived_state(&vault);

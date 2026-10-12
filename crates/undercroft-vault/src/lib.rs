@@ -268,6 +268,46 @@ impl VerifiedManifest {
     }
 }
 
+/// **What an authenticated manifest records, read from its two MAC-covered
+/// fields** (ROADMAP O308, its ruling of 2026-10-08, item 1) — the ONE
+/// predicate every door that meets a vault directory missing half its pair
+/// asks: the store's absent-database door, the empty-chain adoption, the
+/// read-only open's empty-chain and schema-less arms, and the restore stage.
+///
+/// Read from the chain head and the height a MAC verified, never from one of
+/// them alone: a genesis head beside a nonzero height, or a later head at
+/// height 0, is a manifest no build writes, and reading one field would call
+/// it fresh or historied by whichever field was read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManifestHistory {
+    /// The genesis head, height 0, and no authenticated staged manifest
+    /// attached: the manifest records no anchored write. What `create` mints,
+    /// and also what a vault whose every anchor failed carries (P-LAG) — the
+    /// name states the evidence, never that nothing ever happened.
+    Fresh,
+    /// A genesis head beside a height above 0, or a later head at height 0. No
+    /// build writes either; only a key holder can.
+    Mixed,
+    /// Anything else, an attached authenticated `vault.json.next` included:
+    /// the manifest records history its database must hold.
+    History,
+}
+
+impl ManifestHistory {
+    /// Classify a manifest's MAC-covered head and height, and whether an
+    /// AUTHENTICATED staged manifest is attached to the handle that read it
+    /// ([`Vault::has_pending`]). An unauthenticated `vault.json.next` is inert
+    /// and decides nothing (ROADMAP O257), so it is never an input here.
+    pub fn of(head: &str, writes: u64, staged_attached: bool) -> ManifestHistory {
+        let genesis = head == Vault::chain_genesis_hex();
+        match (genesis, writes == 0) {
+            (true, true) if !staged_attached => ManifestHistory::Fresh,
+            (true, false) | (false, true) if !staged_attached => ManifestHistory::Mixed,
+            _ => ManifestHistory::History,
+        }
+    }
+}
+
 /// The manifest a handle's rows answer to, as read from disk (ROADMAP O266).
 struct InForce {
     manifest: Manifest,
@@ -421,8 +461,9 @@ impl Licence {
                          manifest of the new key generation that is not the staged one (its \
                          audit-chain height {}, the staged manifest's {}) — another promote, or an \
                          edit. \
-                         Nothing was written; reopen the vault, which judges it against the \
-                         manifest now on disk (ROADMAP O304)",
+                         This promote wrote nothing: vault.json and vault.json.next are as \
+                         found. Reopen the vault, which judges it against the manifest now on \
+                         disk (ROADMAP O304, O322)",
                         self.twin.id, again.writes, self.twin.manifest.writes
                     )));
                 }
@@ -1253,6 +1294,49 @@ impl Vault {
     /// The chain head the manifest anchor held when THIS handle last anchored — the rollback anchor, not the live head, which lives in `chain_meta`.
     pub fn chain_head_hex(&self) -> &str {
         &self.manifest.chain_head_hex
+    }
+
+    /// [`ManifestHistory`] over the values this handle's UNLOCK verified (or
+    /// `create` minted), with whether an authenticated staged manifest is
+    /// attached (ROADMAP O308 item 1). Those values describe the directory
+    /// only while [`unlock_still_binds`](Self::unlock_still_binds) says so,
+    /// and the store's absent-database door asks that first.
+    pub fn manifest_history(&self) -> ManifestHistory {
+        ManifestHistory::of(
+            &self.manifest.chain_head_hex,
+            self.manifest.writes,
+            self.has_pending(),
+        )
+    }
+
+    /// **Whether `vault.json` is still the bytes this handle's unlock
+    /// MAC-verified** (ROADMAP O308, its ruling of 2026-10-08, item 2) — the
+    /// binding that makes the unlock's verified values evidence about the
+    /// directory now, asked by the store's door only where a vault holds no
+    /// database content and never on the writable posture outside it (O254's
+    /// P1: a busy writer anchors, and a byte comparison there would refuse it).
+    ///
+    /// `Ok(true)`: the digest of the bytes there now equals `manifest_seen`, so
+    /// the unlock's values ARE a strict read of them — or this handle was
+    /// minted by `create`, which read no file. `Ok(false)`: other bytes — a
+    /// delete and a create of the same id, an anchor or an edit since the
+    /// unlock; the store answers the reopen class, and the reopen judges what
+    /// is there. A strict MAC re-read is NOT made: after such a delete and
+    /// create the new file fails this handle's MAC and the rule's refusal
+    /// raises the manifest tamper event — a page for a race. A file that is
+    /// missing or not a manifest file is the manifest rule's own answer (the
+    /// integrity verdict, no tamper event); a read that fails is its error.
+    pub fn unlock_still_binds(&self) -> Result<bool, VaultError> {
+        let Some(seen) = self.manifest_seen else {
+            return Ok(true);
+        };
+        match read_manifest_file(&self.dir.join(MANIFEST_FILE)) {
+            ManifestFile::Bytes(raw) => Ok(digest_of(&raw) == seen),
+            ManifestFile::Missing(error) | ManifestFile::NotAFile(error) => {
+                Err(self.absent(error, false))
+            }
+            ManifestFile::Unreadable(error) => Err(error.into()),
+        }
     }
 
     /// Prepare content for storage. Sealed vaults compress (zstd) then
@@ -2264,7 +2348,8 @@ impl Vault {
                  promote is deferred, is gone or has changed since this process read it, and \
                  vault.json does not verify under that generation's keys: the database is \
                  sealed under keys no manifest on disk now derives (ROADMAP O266, O257). \
-                 Nothing was written. Restore the vault from a backup taken before this",
+                 This read wrote no file: vault.json and vault.json.next are as found \
+                 (ROADMAP O322). Restore the vault from a backup taken before this",
                 self.id
             ))
         };
@@ -2364,7 +2449,8 @@ impl Vault {
     fn absent(&self, error: std::io::Error, staged_intact: bool) -> VaultError {
         VaultError::CorruptManifest(format!(
             "{} vault {:?}'s directory ({error}), so no open can derive the vault's keys \
-             from it (ROADMAP O277, O289).{} Nothing was written",
+             from it (ROADMAP O277, O289).{} This read wrote no file: the vault's manifest \
+             files are as found (ROADMAP O322)",
             if matches!(
                 error.kind(),
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
@@ -4901,11 +4987,14 @@ mod tests {
         for site in ["unlock_dir", "refusal", "key_opens_an_existing_vault"] {
             assert!(body(site).contains(emit), "{site} raises the tamper event");
         }
+        // ROADMAP O308: the absent-database door's binding compares bytes and
+        // raises nothing — a page there would be a page for a race.
         for silent in [
             "manifest_in_force",
             "anchored_writes",
             "deferral_in_force",
             "absent",
+            "unlock_still_binds",
         ] {
             assert!(
                 !body(silent).contains(emit)
@@ -4966,9 +5055,12 @@ mod tests {
                 "manifest_in_force",
                 "unlock_dir",
                 "unlock_dir",
+                // ROADMAP O308 item 2: the absent-database door's binding of
+                // the unlock's values to the bytes there now.
+                "unlock_still_binds",
                 "verified_disk_read",
             ],
-            "the guarded read's callers (ROADMAP O289)"
+            "the guarded read's callers (ROADMAP O289, O308)"
         );
         let helper = body("read_manifest_file");
         let (stat, open) = (

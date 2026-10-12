@@ -11623,6 +11623,11 @@ And the ruling's residuals: O285, lock-less filesystems, Windows (O275), erasure
 **Versioning**: PATCH inside the unreleased `1.7.0`, one `UPGRADING.md` entry. Figures: `test`
 1244 run / 17 ignored, `e2e` 750, `orchestrator-e2e` 185; the landing tiles 1244 and 1185.
 
+**Noted 2026-10-12 by O308's build.** `recorded_embedder` now asks O308's absent-database door first,
+whose first arm is this entry's "the vault's directory is gone": asked after a delete it answers the
+reopen class itself, where it answered `Ok(None)` and left the class to the open that followed. The
+pinned arm in `o291_an_open_racing_a_delete_answers_the_reopen_class` moved with it.
+
 ### O296 — CLOSED 2026-09-29: a writable open judges the audit chain before it removes `vault.json.next`, writes `vault.json` or seeds a keycheck, and a database whose chain does not reach the manifest it would answer to is refused with nothing written
 
 **Filed 2026-09-29 by O290's ruling (its security lens, confirmed by the refuter); measured by the
@@ -12545,6 +12550,17 @@ CHANGELOG); P-CONVERT (a rolled-back copy with `chain_meta` and the version-2 co
 **Filed under `## Open`**: O322 (the head-less refusal's unconditional "Nothing was written.") and O323
 (unmeasured: a genesis manifest put back beside an emptied `audit` table may be adopted as a fresh
 vault's EMPTY chain).
+
+**Noted 2026-10-12 by O213's build** (its ruling of 2026-10-08, item 3, which this entry's note bound
+the empty chain to): the read-only open answers the EMPTY chain `ReadOnlyNoAnchoredWrite` beside a
+manifest that records no anchored write, and `ManifestTampered` beside one that records something —
+it was `ReadOnlyUnmigrated`. Its absent-table twin, a database holding every other table, keeps
+`ReadOnlyUnmigrated` under item 3's "part of a schema", so the pair answers two variants of one exit
+class. The pinned read-only class moved in `headless_tests::o303_only_the_empty_chain_is_adopted`
+and in the CLI's `o303_open_store_as_read_only_declines_the_empty_chain` and
+`o303_surfaces_answer_an_erased_trail_and_the_empty_chain`. A deleted `vault.db` beside a manifest
+past genesis is no longer this entry's `Erased` state on the writable posture: O308's door refuses it
+as `DatabaseMissing` before anything is created.
 
 ### O304 — CLOSED 2026-10-05: a writable open asks the manifest rule again before it writes a staged rotation's manifest, and an edit landing in the forced replay before the write is answered as the rule answers it at the licence — refused with the files kept, the write withheld for the staged manifest put in place, a manifest at another head reopened and judged
 
@@ -14390,6 +14406,621 @@ orchestrator likewise answers `/healthz`.
 **What stays outside it, stated.** A third-party library writing to stderr on its own (ONNX Runtime's
 C++ logger in a model build) is not a Rust print and is not counted; a telemetry build's JSON log
 layer writes STDOUT, which is O333's.
+
+### O308 — CLOSED 2026-10-12: no open creates a database beside a manifest that records history — one absent-database door, asked before every opener and on the connect's one CREATE grant, answers A33's verdict on both postures with nothing created
+
+**Filed 2026-09-30 by O303's independent review (its F1); established by reading.** `connect_writable`
+opens with `SQLITE_OPEN_CREATE` whenever the layout is `DbLayout::Absent`, and the schema batch commits
+`meta`, `drawers`, `audit` and their indexes; the rotation reconcile's lock path (the marker is absent)
+then judges the empty trail `Headless::Erased` and refuses `ManifestTampered` (O303). So the refusal
+leaves an empty database behind, and every later open on either posture answers `ManifestTampered` where
+the read-only open answered A33's `DatabaseMissing` before it — an incident read as tampering rather
+than as a missing file. On `main` `5fc6171` the same writable open seeded `chain_meta` from the manifest
+and served an empty vault at the manifest's height, taking writes; O303 closed that, and this is what
+it leaves. The deleted file is the most ordinary producer of O303's erased trail.
+
+**Shape, for a ruling**: the writable posture refuses an absent database beside a manifest whose head is
+past genesis or whose height is above 0, before it connects, as A33's `DatabaseMissing` (an integrity
+verdict), after O291's `vault_gone` check; a manifest at genesis and height 0 is a fresh vault's first
+open and keeps creating. O213 asks the read-only half of the same question for a manifest at genesis.
+
+**Gate**: a vault with records whose `vault.db` is deleted — a writable open refuses and no `vault.db`
+exists afterwards; a read-only open still answers `DatabaseMissing`; a fresh vault's first open still
+creates it; a delete racing the open still answers the reopen class.
+
+**Relations:** shares a diff surface with O213 — both are answered through the absent-database predicate and door this entry's ruling defines.
+
+**Relations:** sequenced after O302 — both decide what the writable open answers on the line that creates a missing database, and that entry's predicate runs before this refusal.
+
+#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
+
+**The question.** What the writable posture does with a vault directory that holds no database beside a
+manifest past genesis or above height 0. Today `connect_writable` opens with `SQLITE_OPEN_CREATE` whenever
+`DbLayout::Absent` (store `lib.rs` 4980-4982), the schema batch commits in autocommit (5185-5230), and
+only then does the rotation reconcile's lock path, taken because the new file has no keycheck marker
+(4346-4349), judge `Headless::Erased` (4681-4687) and refuse `ManifestTampered` (2677-2679). The created
+file outlives the refusal, so every later open on both postures answers tampering where the read-only open
+answered A33's `DatabaseMissing`. Ruled with O213, O270 and O292, because all four ask what a door may do
+with a vault directory missing half its pair.
+
+**Prior rulings found, and their disposition.** A case-insensitive `rul(ed|ing)` search of this entry finds
+its filing line only; searched also in A33/R4, O279, O280, O291, O296, O303, O254, O257, O91, O213 and
+O302.
+- **A33/R4** ("'Empty' is not 'absent'; this is an integrity verdict and exits 2"): FOLLOWED. A manifest
+  that records history beside no database answers `DatabaseMissing` on both postures.
+- **O279/O280** (no open by path carries CREATE unless the directory holds no database; the layout is read
+  ONCE and its path is the one opened): FOLLOWED, and narrowed by the manifest.
+- **O303, 2026-09-30** (only the empty chain is adopted; a genesis head beside a nonzero height is
+  `ManifestTampered`; "fails silently if `CREATE TABLE` stays before the judgement"): FOLLOWED one level up.
+- **O296** (a refusal writes nothing): FOLLOWED.
+- **O291 item 11** (a vault whose directory is gone answers the reopen class first): FOLLOWED, its order
+  kept.
+- **O254's P1** (no byte comparison of `vault.json` on the writable posture, because a busy writer
+  anchors): FOLLOWED — item 2's comparison is asked only where no database exists to anchor from.
+- **O257** (an unlock deletes no `vault.json.next`; a file this build cannot authenticate is inert, vault
+  `lib.rs` 2779-2786): FOLLOWED, and it settles a split between the runs (below).
+- **O91** (a posture is a property of the path): FOLLOWED — it is why `recorded_embedder` is one of the
+  places the door is asked.
+- **O302** (open): touched, not ruled; its absent-database race is met by item 2.
+
+**Decided shape.**
+1. **One predicate, in `undercroft-vault`, over the manifest's two MAC-covered fields** (`writes`,
+   `chain_head_hex`):
+   - *Fresh*: the head is `Vault::chain_genesis_hex()` AND the height is 0 AND no authenticated staged
+     manifest is attached (`Vault::has_pending()`). An unauthenticated `vault.json.next` decides nothing
+     (O257).
+   - *Mixed*: a genesis head with a height above 0, or a non-genesis head with height 0. No build writes
+     either; only a key holder can.
+   - *History*: anything else, an attached authenticated `.next` included.
+
+   It replaces the restore stage's `vault.writes() > 0` (`restore.rs` 257), `adopt_empty_chain`'s
+   `manifest.writes() == 0` (store `lib.rs` 6546, which keeps its strict `verified_manifest()` read under
+   the lock, 6538), and `check_chain_read_only`'s `Headless::Empty` arm, which today reads neither field
+   (5775-5779). `judge_headless` keeps its anchor comparison: it classifies rows against an anchor, a
+   different question. A source gate pins that no other `writes() == 0` / `writes() > 0` spelling remains
+   in the store crate's production code.
+2. **The evidence is the unlock's verified values, bound to the directory.** Where the door finds no
+   content, it compares the digest of `vault.json`'s current bytes with the unlock's `manifest_seen`
+   (vault `lib.rs` 1153, set at 2771 from the very buffer whose MAC was verified, 2744-2771). Equal: the
+   unlock's values ARE a strict read of those bytes. Different: `StaleUnlock`, the reopen class. Missing
+   or not a manifest file: the manifest rule's own answer (`absent()`, 2364-2384; integrity, no tamper
+   event). A handle minted by `create` (`manifest_seen` is `None`) skips the comparison. Never asked
+   outside the no-content arm (O254's P1).
+3. **"No content"** is decided by a stat that follows a link, as `DbLayout` and SQLite do (O279's gate G8
+   opens a linked database), with every error but not-found propagated, never `Path::exists`: no main
+   file at either name, or the one main file a regular file of length 0. Not inside `DbLayout::of`: O291's
+   delete holds the zero-length file it made through that function.
+4. **The door, in order**: (a) the vault directory gone → `vault_db::deleted`, the reopen class (O291);
+   (b) item 2's binding; (c) a NON-EMPTY `-wal` of either name beside no content → `DatabaseMissing`
+   naming the `-wal`, saying it may hold committed frames and must not be deleted, with nothing opened;
+   an empty `-wal` or a `-shm` is scaffolding and is ignored; (d) *History* → `DatabaseMissing`, nothing
+   created, its text naming `vault.json.next` with O296's "do NOT delete it" where one is attached;
+   (e) *Mixed* → `ManifestTampered` on both postures, as `adopt_empty_chain` already answers it
+   (6551-6553); (f) *Fresh* → the writable posture proceeds, the read-only posture answers O213's variant.
+5. **Where it is asked**: in `recorded_embedder` (7037-7081), which answers `None` without opening
+   whenever there is no content, so it never opens a zero-length file; at the head of `open_inner`,
+   before `migrate_db_filename` (5173); at the head of `open_inner_read_only`, replacing 5444-5458; and
+   again on `connect_writable`'s single layout read (4964-4982), where `SQLITE_OPEN_CREATE` is granted
+   only on the door's *Fresh*-and-no-content answer at that same observation. One production CREATE grant
+   in the store crate, pinned by a source gate.
+6. **`DatabaseMissing` becomes posture-neutral**: it drops "or open the vault with a writable process if
+   you intended to start an empty one" (2053-2054), which after this ruling is false on both postures; it
+   names the recorded height (MAC-covered evidence) and says no open creates a database; its remedy is to
+   stop every process that had the vault open, then restore the database, or the vault, from a backup
+   (O270's procedure); it never advises deleting a file. Its doc comment stops saying "a read-only open
+   found".
+7. **`UPGRADING.md`**: the O303 entry ("where every `audit` row is gone beside a manifest past genesis") is
+   amended in place if this lands before `1.7.0` is tagged: a deleted `vault.db` beside a manifest past
+   genesis answers `DatabaseMissing` and leaves no database; `ManifestTampered` stays for an emptied
+   `audit` beside a database that is present. Landing after the tag, it is an entry of its own.
+
+**Where the two runs disagreed, and what settled it.**
+- *Placement.* Run 1 placed the decision on `connect_writable`'s one layout read alone; run 2 at four
+  sites. Settled by reading: `recorded_embedder` opens any present main file read-only before either open
+  (CLI `open_store_as`; `/v1`'s factory, `tenant.rs` 3405), and `migrate_db_filename` opens a legacy file
+  before the connect, so run 1's single site comes after two openers. Run 1's objection to a pre-check
+  alone — a `vault.db` deleted between that check and 4965 is still created — is met by keeping the
+  connect's read as the one CREATE grant. The union stands.
+- *The evidence read.* Run 1 asked a strict `verified_manifest()` re-read; run 2 the unlock's values bound
+  by item 2. Settled for run 2's shape, with both runs' stated reasons corrected. Run 2's "a fresh
+  `verified_manifest()` read has a fall-back of its own" is false: its doc and body say "with NO
+  fall-back" (vault `lib.rs` 2386-2418); its staged branch serves only a handle whose keys came from
+  `.next`. Run 1's strict read fails on the race run 2 named: after a delete and a `create` of the same id
+  between the unlock and the check (O302), the new `vault.json` fails the old handle's MAC, and
+  `verified_manifest`'s refusal raises the manifest tamper event (`refusal`, 2344-2352) — a page for a
+  race. The binding answers it with the reopen class, and when the bytes are unchanged it reads exactly
+  what a strict read would.
+- *The zero-length file.* Run 1 held it for probes; run 2 settled it by reading SQLite. Settled by
+  reading the pinned source: `pagerOpenWalIfPresent` (`sqlite3.c` 60436-60464) DELETES the `-wal` of any
+  database whose main file has 0 pages (60452-60453), whenever a connection takes its shared lock
+  (`pagerSharedLock`, 62516), with no read-only guard; and `journal_mode=WAL` on a rollback-mode file
+  calls `sqlite3BtreeSetVersion(2)` through a rollback-journal transaction (101043-101049), writing page
+  1, so no WAL database SQLite made has a 0-byte main file. The arm's safety does not even rest on that:
+  a 0-byte main file with no `-wal` holds no committed byte anywhere, and with a non-empty `-wal` the door
+  refuses having opened nothing. The probes become build gates.
+- *`vault.json.next`.* Run 2 refused any `.next` beside no content in the integrity class; run 1 counted
+  only an authenticated one. Settled for run 1 by O257's recorded doctrine ("A file this build cannot
+  authenticate is inert", vault `lib.rs` 2779-2786) and by `integrity_verdict`'s, which gives no integrity
+  verdict where nothing was verified (O204). An authenticated `.next` makes the manifest *History*.
+- *A Mixed manifest.* Run 1 folded it into "records something" (`DatabaseMissing`); run 2 answered
+  `ManifestTampered`. Settled for run 2: one state answers one class at every arm, and
+  `adopt_empty_chain` already answers it so.
+- *A link.* Run 2 decided presence by `symlink_metadata`, which reads a dangling link at `vault.db` as
+  content, so beside a *History* manifest the connect would still see `DbLayout::Absent` and CREATE
+  through the link — defeating this entry. Item 3 follows the link; what a link at a database name should
+  answer is a new entry (below).
+
+**Options that lost, with their cost.**
+- (ii) Keep `ManifestTampered`, judged before the connect: a second head-less judge that runs with no
+  database (`judge_headless` and `chain::regime` both query `audit`), against O296's one judgement, and it
+  names a missing file as tampering.
+- (iii) Today's order: the open manufactures the evidence its own verdict then reads, for every later
+  open, and on a lone `-wal` the connect's first statement destroys it (P-WAL).
+- Either single placement: each leaves an opener ahead of it (above).
+- A strict re-read: a tamper page for a race (above).
+- Refusing any `.next` by presence: an integrity verdict on an unauthenticated file, against O257.
+- Deferring the zero-length arm: the pinned source settles it, and the arm is safe without it.
+
+**Claims refuted, the brief's first.** The brief's P-ZERO premise ("SQLite reads a 0-byte file as an
+empty database, so the schema batch would still run") is right and incomplete: the first lock deletes any
+`-wal` beside it. The brief's "the panel should say which is the evidence" is answered by item 2. Run 1's
+lens claim that `PRAGMA page_count` after O279's proof would count committed `-wal` frames, and the lenses'
+"a zero-length main file beside a `-wal` may be a live database", fall to the same reading. Run 2's
+`verified_manifest` fall-back and run 1's strict read: above. Run 2's "read-only connections included" is
+CONFIRMED by the pinned source.
+
+**Probes owed (the integrator's; build gates, none decides the shape).** Each gate asserts the variant AND
+that no `vault.db`, `-wal` or `-shm` exists afterwards AND `vault.json`'s SHA-256 unchanged, because
+today's class is integrity too.
+- P-ZERO: a vault with records; `vault.db` truncated to 0 bytes, `-wal`/`-shm` removed; a writable open on
+  `781b5b9` (expected: the schema batch, then `ManifestTampered`, the file holding the schema) and on the
+  build (`DatabaseMissing`, the file still 0 bytes).
+- P-ZERO-WAL: a 0-byte `vault.db` beside a non-empty `vault.db-wal` and a manifest that records writes;
+  `--read-only stats` on `781b5b9` (expected: the `-wal` gone, through `recorded_embedder`) and on the
+  build (refused, the `-wal`'s SHA-256 unchanged).
+- P-WAL: `vault.db` removed, `vault.db-wal` kept; a writable open on `781b5b9` (expected: CREATE, the
+  `-wal` deleted) and on the build (refused, the `-wal` unchanged).
+- P-O302-ABSENT: pause at `Opener::WritableLayout`; delete the vault; `vault create` the same id; release.
+  Both postures answer the reopen class; the retry creates (writable) or answers O213's variant
+  (read-only); no tamper event is counted.
+- P-LINK (for the new entry): a dangling link at `vault.db` beside a *Fresh* manifest; a writable open on
+  `781b5b9`. Is the link's target created outside the vault directory?
+
+**Dissent.** None on refusing before the CREATE or on the class.
+
+**Fails silently if** `recorded_embedder` or `migrate_db_filename` opens a no-content file before the door;
+the zero-length test lands in `DbLayout::of`; the CREATE grant reads a different observation from the
+door's; item 2 is asked on the writable posture outside the absent arm; the predicate reads one field, or
+reads `.next`'s presence rather than its MAC; a gate asserts the class alone; there is no arm deleting only
+`vault.db*` during the `WritableLayout` pause; the A33 unit test's premise "the writable open is allowed to
+create it" and `o303_only_the_empty_chain_is_adopted` stop running on a *Fresh* vault;
+`o291_open_store_as_meets_a_delete_in_its_window_as_no_such_vault` stops answering the reopen class
+because (d) is asked before (a).
+
+**What remains.**
+- What a link at a database name answers on the open path — followed (as O279's G8 opens a linked
+  database, and as a dangling one beside a *Fresh* manifest is created through today) or refused (as O283
+  and O291 refuse links on restore and delete) — is a new entry, measured by P-LINK, its ruling the
+  maintainer's ratification of O283's extension.
+- A process still holding the deleted database's unlinked inode can anchor by path between the unlock and
+  item 2: the reopen retries once, then says so (exit 1). O268 item 8's residual.
+- A NON-EMPTY schema-less main file (one page, no tables) beside a *History* manifest still gets the
+  writable open's schema batch before `ManifestTampered`. Stated with its argument: the verdict is the
+  same on both postures before and after the batch (O213's item 6), no build writes that file, and
+  judging it first is O322's option (b), which lost there.
+- O302's other arms (a present database; the `immutable=1` escalation) stay O302's.
+- Relations owed, each with its reciprocal in the same commit: O213 and O302.
+
+**Versioning.** PATCH. The class does not move (exit 2, `/v1` 409 with `class: "integrity"`); the variant
+and text change and nothing is created. `UPGRADING.md` is amended per item 7.
+
+#### BUILT 2026-10-12, to the ruling — with the probes run as build gates, their "before" arm by counterfactual, and P-LINK measured
+
+**Built.** `crates/undercroft-store/src/absent.rs` is the door: `survey` stats both main names with
+`fs::metadata` (a link followed, every error but not-found propagated) and reads "no content" as no
+main file or the one main file a regular file of length 0 — not inside `DbLayout::of` (item 3); a
+non-empty `-wal` of either name is read only beside no content, and a `-wal` that is not a regular
+file is named too. `door` answers in item 4's order: `vault_db::deleted`; the binding,
+`Vault::unlock_still_binds` (item 2: the digest of `vault.json` now against `manifest_seen`, a
+`create`-minted handle skipping it; missing or not a manifest file is `absent(error, false)` — the
+door runs before any adoption, so no staged copy is intact — and an unreadable file its I/O error);
+`DatabaseMissing` naming a non-empty `-wal`; `DatabaseMissing` for *History*; `ManifestTampered` for
+*Mixed*; `Door::Fresh`. Asked in `recorded_embedder` (*Fresh* answers `None` without opening; the
+refusals propagate), at the head of `open_inner` before `migrate_db_filename`, at the head of
+`open_inner_read_only` in place of the `database_exists` branch, and on `connect_writable`'s one
+layout read, which grants `SQLITE_OPEN_CREATE` only on `Door::Fresh(Absent)` (item 5). The predicate
+is `undercroft_vault::ManifestHistory::of(head, writes, staged_attached)` with
+`Vault::manifest_history()` over the unlock's values (item 1); it replaces `restore.rs`'s
+`writes() > 0` (a *Mixed* stage now says so in its own integrity text) and `adopt_empty_chain`'s
+`writes() == 0` (its strict `verified_manifest()` read kept). `DatabaseMissing` gained `writes`,
+`wal` and `staged`, and its text is posture-neutral (item 6). `UPGRADING.md`'s O303 entry is amended
+in place (item 7). The vault crate's manifest-read gate counts `unlock_still_binds` as a guarded-read
+caller and a reader that raises no tamper event.
+
+**Gates.** `absent_tests.rs`: `o308_a_deleted_database_beside_a_recorded_history_creates_nothing`,
+`o308_a_zero_length_database_is_no_content` (P-ZERO), `o308_a_non_empty_wal_beside_no_content_is_named_and_kept`
+(P-WAL and P-ZERO-WAL, three shapes, a fresh and a recorded manifest each, the `-wal` byte-identical),
+`o308_a_mixed_manifest_beside_no_content_is_tampering_on_both_postures`,
+`o308_a_staging_file_decides_by_its_mac_never_by_its_presence`,
+`o308_a_database_deleted_in_the_connects_window_creates_nothing` (the arm deleting only `vault.db*`
+during the `WritableLayout` pause, witnessed), `o308_a_vault_replaced_beneath_the_open_is_the_reopen_class`
+(P-O302-ABSENT on both postures, plus a delete not followed by a `create`: O291's answer first),
+`o308_a_dangling_link_at_the_database_name`, and the source gate
+`o308_one_create_grant_one_predicate_and_the_door_first` (one `SQLITE_OPEN_CREATE`, in
+`connect_writable`, after the door; no `writes() == 0`, `> 0` or `!= 0`; the door's four sites, each
+before its first opener). Every arm runs `recorded_embedder` then the open, both postures, at both
+security levels, and asserts the vault directory's names and bytes across the refusal. The A33 unit
+test's premise and `o303_only_the_empty_chain_is_adopted` still run on a fresh vault, and
+`o291_open_store_as_meets_a_delete_in_its_window_as_no_such_vault` still answers the reopen class.
+
+**Measured.** Probes on 781b5b9 were NOT rebuilt; their "before" arm is a counterfactual that reverts
+the door to the pre-O308 decision (any present file is content, an absent layout CREATEs, the
+read-only open answers `DatabaseMissing`): twelve tests red — the writable open created `vault.db`
+and answered `ManifestTampered`, and a vault replaced beneath the open answered `ManifestTampered`,
+the tamper page item 2 exists to avoid. Each choice the ruling made was counterfactualled too: a
+strict MAC re-read for the binding (the replaced vault pages), `.next`'s presence for the predicate
+(a torn `.next` beside a fresh vault reads as history), `writes` alone (a *Mixed* manifest reads as
+history or fresh). Real corpus: 340 LoCoMo drawers in four wings, at both levels — a deleted, a
+zero-length and a `-wal`-only database each exit 2 on both postures, the directory and `vault.json`'s
+SHA-256 unchanged and the `-wal` kept byte for byte; `verify` OK once the database is put back.
+**P-LINK**, on the build: a dangling link at `vault.db` beside a *Fresh* manifest makes the writable
+open create the link's target outside the vault directory (126,976 bytes after one `stats`, a
+`remember` then writing there) — the same as before this build, since a dangling link reads as
+absent either way. Beside a *History* manifest the followed stat reads it as no content and refuses
+with nothing created (pinned). Filed as **O-NEW-o213-1**.
+
+**What remains.** O302's predicate goes between the door's (a) and (b) when it is built (its item
+5); until then the binding answers its absent-database race with the reopen class, and an absent
+`vault.json` at that arm is the manifest rule's integrity answer where O302 rules the reopen class.
+The non-empty schema-less file beside a *History* manifest, the inode holder, and the residuals the
+ruling lists stand as written.
+
+### O213 — CLOSED 2026-10-12: a vault nothing has written, opened read-only, is a posture refusal — `ReadOnlyNoAnchoredWrite`, exit 1, a class-less 409 — wherever the read-only open can see nothing was migrated
+
+**Filed 2026-09-17 by O204's ruling; measured by its probe P13.** `init`
+writes a manifest and no database; the database appears at the first writable
+store open. A read-only open of that vault refuses `DatabaseMissing` (A33),
+which the CLI reports as exit 2, the tamper verdict — while the vault's own
+authenticated manifest records zero writes, so nothing is missing that was
+ever written. The team-server recipe's `--read-only` first start meets it,
+and `UPGRADING.md` tells operators to start writable once.
+
+**Shape, for a ruling**: when the manifest verifies and records no writes,
+a read-only open either serves the vault as empty or refuses as a posture
+error (exit 1, "start it writable once"); a manifest that records writes and
+has no database stays exit 2. The manifest's `writes` is covered by its MAC,
+so reading it is evidence, not inference.
+
+**Gate**: P13 (`init`, then `--read-only search x`) exits 0 or 1 as ruled;
+the same after one `remember` with the database removed still exits 2.
+
+**Noted 2026-09-30 by O303's ruling.** A fresh vault's EMPTY chain — a database whose first
+writable open stopped between creating `chain_meta` and seeding it — now answers the read-only
+posture `ReadOnlyUnmigrated` (exit 1), the class its absent-table twin answers. It is the same
+question one step later: whatever this entry rules for a vault with no writes, that state follows.
+
+**Relations:** shares a diff surface with O308 — both are answered through the absent-database predicate and door that entry's ruling defines.
+
+**Relations:** shares a question with O323 — the state that entry measures reads as the empty chain here and gets this entry's refusal text.
+
+**Relations:** shares a diff surface with O302 — that entry's read-only retry lands on this entry's fresh-vault state and answers whatever this entry rules.
+
+#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
+
+**The question.** A vault that `init`, `vault create` or `POST /v1/vaults` just made has a MAC-verified
+manifest at genesis and height 0 and no database. Opened read-only, `open_inner_read_only` asks only
+`vault.database_exists()` (store `lib.rs` 5444-5458) and answers `DatabaseMissing`: exit 2, `/v1` 409 with
+`class: "integrity"`. Keep it, refuse as a posture error (exit 1), or serve the vault as empty? The empty
+chain, one step later, follows (O303's note in this entry).
+
+**Prior rulings found, and their disposition.** This entry holds no ruling; its `rul(ed|ing)` hits are its
+filing line and O303's note. Searched also in A33/R4, O204, O268, O291, O303, O308 and O323.
+- **A33/R4**: FOLLOWED for every manifest that records anything; DISTINGUISHED, not refuted, for one that
+  records nothing — a *Fresh* manifest describes no database content, so an absent file contradicts
+  nothing it claims. O204 drew the same line ("A33 … is distinguished, not refuted: here nothing has been
+  authenticated") and O268 item 5 already applies it at the restore stage (`restore.rs` 253-266).
+- **O204** (moving exit 2 to exit 1 is PATCH with an `UPGRADING.md` entry): FOLLOWED.
+- **O303, 2026-09-30, item 5, its note and its dissent** ("one state, one class"; the empty chain is not
+  served): FOLLOWED. It rules out serving, binds the empty chain to this ruling, and licenses the variant
+  moving with it ("follows whatever O213 rules").
+- **R4** (a read-only role cannot fabricate a database): FOLLOWED.
+- **O291 item 11** ("A33 is untouched") describes the delete race and rules nothing here.
+
+**Decided shape.**
+1. **Option (b), through O308's door** (its ruling of this date, items 1-5): a *Fresh* manifest beside no
+   database content, with no non-empty `-wal` and no authenticated staged manifest, answers a posture
+   refusal on the read-only posture — exit 1, `/v1` 409 with no `class` — and creates nothing.
+2. **A new `StoreError` variant**, whose name and text state only evidence: the authenticated manifest
+   records no anchored write; a read-only open neither creates, seeds nor migrates a database; a writable
+   open starts a vault in this state; and, as O204 requires of every refusal, the second reading — if this
+   vault ever held data, do not open it writable: its database or its trail and a later manifest are
+   missing; restore it. A name that asserts history (`NeverOpened…`) is refused: P-LAG (a vault written
+   with every anchor failing) contradicts it.
+3. **One never-anchored vault answers one variant wherever the read-only open can see nothing was
+   migrated**: no content (O308 item 4(f)); a database holding none of `READ_SCHEMA`'s tables beside a
+   *Fresh* manifest (`check_read_schema`, 5652-5684, asks the predicate first); and the empty chain
+   (`check_chain_read_only`'s `Headless::Empty` arm moves from `ReadOnlyUnmigrated` to this variant). A
+   database holding PART of a schema keeps `ReadOnlyUnmigrated`, whose remedy — open it once writable — is
+   right both for a first open interrupted mid-batch and for an older build.
+4. **A *Mixed* manifest answers `ManifestTampered` on the read-only posture**, at the no-content arm (O308
+   item 4(e)) and beside an empty chain, as the writable `adopt_empty_chain` does (6551-6553).
+5. **A database with no `audit` table beside a *History* or *Mixed* manifest is judged on the read-only
+   posture as the erased trail it is**: `refuse_headless_without_table` no longer returns early for a
+   missing `audit` table (5738) when the predicate says the manifest records something, and answers
+   `ManifestTampered` from the predicate (it must not call `judge_headless`, which queries `audit`), as the
+   writable open answers the same file after its schema batch. Beside a *Fresh* manifest it falls through
+   to item 3.
+6. **The variant is registered on every surface**: an arm in `store_err`'s 409 list with no class (its
+   `_ => 500` catch-all, `tenant.rs` 3941, is what a forgotten arm becomes — O238's founding defect one
+   variant later); a `false` row in `the_cli_exit_2_set_and_v1s_integrity_class_are_one_set`; absent from
+   `integrity_verdict`'s set; the MCP mapping checked.
+7. **The two A33 store tests are split**: `a_read_only_open_of_an_absent_database_refuses_instead_of_faking_one`
+   and `reading_the_recorded_embedder_never_creates_the_database` each keep a written-then-deleted arm
+   (`DatabaseMissing`, no file created) and gain a fresh arm (this variant, no file created).
+
+**Where the two runs disagreed, and what settled it.**
+- *The carrier.* Run 1 reused `ReadOnlyUnmigrated` with a reworded text; run 2 minted a variant. Settled
+  for a variant on run 2's evidence: `ReadOnlyUnmigrated`'s text (2092-2096) is about schema age, and the
+  fresh case's required caution ("if this vault ever held data, do not open it writable; restore") is
+  false for an old-schema vault whose database is present, so one fixed text cannot be true of both. Run
+  1's objection — a schema-less file already answers `ReadOnlyUnmigrated` through `check_read_schema`
+  (5512-5513 run before `check_chain_read_only`), so one never-anchored vault would carry two variants —
+  is verified by reading and met by item 3.
+- *The evidence read.* Run 1's strict re-read against run 2's binding: settled in O308's record.
+- *Items 4 and 5.* Run 1's item 6 (a schema-less database beside a recording manifest: exit 1 read-only,
+  exit 2 writable) is verified by reading — `refuse_headless_without_table` returns `Ok` when `audit` is
+  absent (5738) and the schema check answers `ReadOnlyUnmigrated` — and run 2 did not address it; it is
+  adopted. The *Mixed* asymmetry (exit 1 read-only, `ManifestTampered` writable, because `judge_headless`
+  reads only the anchor, 4681-4687) was found by both.
+
+**Options that lost, with their cost.**
+- (a) Keep exit 2: a tamper verdict on every genuine fresh volume and on every `--read-only vault list`
+  over a fresh installation, which the recipe's comment (`deploy/docker-compose.server.yml` 137-139) and
+  `docs/remote-server.md` already describe as a posture refusal; and one never-anchored vault answering
+  two classes by how far its first writable open got.
+- (c) Serve as empty: a second open path whose `verify`, `stats`, label guard and chain arithmetic answer
+  for a file that does not exist; O303 settled serving for the twin state; and a refusal heals where a
+  served empty vault would not — `store_for` caches only a successful open (`tenant.rs` 3360-3420), so the
+  next request after a writer creates the database succeeds. Not escalated: refusing offers nothing new.
+- Reusing `ReadOnlyUnmigrated`: above.
+
+**Claims refuted, the brief's first.** The brief's CLI line numbers do not match `781b5b9` (its content is
+right). The brief omits O323 (the same discriminator, a genesis manifest put back beside an emptied
+`audit`), the *Mixed* asymmetry and the schema-less posture split. Its question whether serving is "what
+a surface offers" is answered: refusing is not. Both runs' proposed wordings infer history ("no writable
+process has opened it"), which P-LAG contradicts. The runs' "the read-only change grants nothing the
+writable posture does not" is true of capability and incomplete as a record: the A2 erase-and-put-back
+answers exit 1 after this ruling where it answered exit 2 — with no loss of detection, since today's exit
+2 fires on every fresh vault and so never told the attack from `init`.
+
+**Probes owed.**
+- P13 on the build: `init`, then `--read-only search x` and `--read-only stats` exit 1; `--read-only vault
+  list` exits 0 naming the vault unavailable; `serve-http --read-only` answers `GET
+  /v1/vaults/default/stats` 409 with no `class`; no `vault.db*` created by any of them. Then one
+  `remember` with `vault.db*` removed: exit 2, `DatabaseMissing`, nothing created.
+- P-FIRST (premise): `init`, one write-free writable command, then `vault.json`'s `writes` and head, at
+  both security levels — that a completed first writable open leaves the manifest past genesis.
+- P-A2-GEN and P-LAG characterise the residual only; neither decides the ruling.
+
+**Dissent.** Run 1 (its refuter and engineering lens) held `ReadOnlyUnmigrated`; settled by the evidence
+above, its objection adopted as item 3.
+
+**Fails silently if** the variant lacks a `store_err` arm or an identity-test row; a gate asserts exit 1
+alone — a fabricated database answers `ReadOnlyUnmigrated`, also exit 1, so the gate asserts the variant
+and that no `vault.db` exists (as `tests/e2e.sh` already does for A33); the A33 fixtures stay on fresh
+vaults only; the predicate reads `writes` alone; the empty chain stays on `ReadOnlyUnmigrated`; item 5
+calls `judge_headless` on a database with no `audit`; the check is proved through `open_read_only` alone
+rather than `open_store_as` and `store_for` (O91).
+
+**What remains.**
+- The A2-class put-back (a create-time manifest beside a deleted database) reads *Fresh* on both postures;
+  the writable posture already adopts it today, and only O245's witness sees a rollback to genesis.
+- P-LAG (every anchor failed, the first open's chain-v2 anchor included) reads *Fresh* too.
+- O323's state (a genesis manifest beside an emptied `audit` with drawers kept) reads as the empty chain
+  and gets this variant's text; its measurement stays O323's.
+- `config check` cannot see this state (it opens no database); `UPGRADING.md` says so.
+- Relations owed, each with its reciprocal in the same commit: O308 and O323.
+
+**Versioning.** PATCH, on O204's precedent: exit 2 becomes exit 1 for a state the documentation already
+describes as a posture refusal. `UPGRADING.md` owes an entry: a fresh `--read-only` start exits 1 (409 with
+no class) where it exited 2, an alert keyed on the integrity class stops firing for it, `--read-only vault
+list` over a fresh installation exits 0, and the O212 entry's sentence on this state changes with it. The
+recipe's comment, `docs/remote-server.md`'s "Start the server writable once first" and `UPGRADING.md`'s "A
+`--read-only` server needs one writable start first" move with it.
+
+#### BUILT 2026-10-12, to the ruling — the empty chain's absent-table twin kept on `ReadOnlyUnmigrated` by item 3's "part of a schema", and one e2e fixture found measuring a fresh vault
+
+**Built.** `StoreError::ReadOnlyNoAnchoredWrite { id }`, its text stating only evidence and the
+second reading (item 2). Answered by the absent-database door's `Fresh` arm on the read-only posture
+(item 1, through O308's door), by `check_read_schema` when NONE of the read schema's tables exists
+and the strict manifest read is *Fresh* (item 3), and by `check_chain_read_only`'s `Headless::Empty`
+arm — and its unreachable `Unseeded` arm — through one helper, which answers `ManifestTampered`
+beside a *Mixed* or *History* manifest (item 4). `refuse_headless_without_table` no longer returns
+early on a missing `audit` table: beside a manifest that records something it answers
+`ManifestTampered` from the predicate, calling no `judge_headless` (item 5). Registered (item 6):
+`store_err` answers 409 with no class (its status pinned beside the identity test, since a class
+comparison passes over a catch-all 500), a `false` row in
+`the_cli_exit_2_set_and_v1s_integrity_class_are_one_set` and in
+`the_integrity_verdict_set_is_pinned_on_this_surface`, absent from `integrity_verdict` with its
+reason; MCP never sees it, because `serve-mcp --read-only` refuses at start (exit 1). The two A33
+store tests are split (item 7): each keeps a written-then-deleted arm (`DatabaseMissing`, nothing
+created) and gains a fresh arm (this variant, nothing created).
+
+**Read literally, and stated.** Item 3's "part of a schema" decides the EMPTY chain's absent-table
+twin: a database holding every other table and no `chain_meta` keeps `ReadOnlyUnmigrated`, where
+the empty chain with its table answers this variant — O303's "one state, one class" for the pair
+moves with O303's own note that the state follows this ruling. O303's pinned read-only class is
+moved in `headless_tests::o303_only_the_empty_chain_is_adopted` and the CLI's
+`o303_open_store_as_read_only_declines_the_empty_chain` and
+`o303_surfaces_answer_an_erased_trail_and_the_empty_chain`, recorded beside O303.
+
+**Gates.** `absent_tests.rs`: `o213_one_never_anchored_vault_answers_one_variant` (no database, a
+zero-length one, a one-page database with no table, an empty chain; part of a schema stays
+`ReadOnlyUnmigrated`) and `o213_a_schema_less_database_beside_a_recording_manifest_is_tampering_on_both`
+(items 4 and 5). `tests/cli.rs`: `o213_o308_a_fresh_vault_and_a_deleted_database_on_every_surface` —
+P13 through the binary: `--read-only search` and `stats`, `--read-only serve-mcp`, `serve-mcp
+--read-only` and `--read-only serve-http` on a fresh `default` exit 1 naming the state; `--read-only
+vault list` exits 0 naming it unavailable; a `--read-only` server serving another vault answers the
+fresh one 409 with no `class`; no file created by any of them; P-FIRST at both security levels (a
+write-free writable command leaves the manifest past genesis); then the deleted database is exit 2
+on both postures with nothing created. `tests/e2e.sh`: eleven checks (two O308, eight O213, and the premise
+below), run ad hoc against this build's binaries, the whole script: 778 passed, 0 failed.
+
+**Measured.** Counterfactuals: the door reverted (above) turns the fresh arms red with
+`DatabaseMissing`; the empty chain reverted to `ReadOnlyUnmigrated` turns
+`o213_one_never_anchored_vault_answers_one_variant` and O303's test red; the early return restored
+turns the item-5 test red with `ReadOnlyUnmigrated` naming all nine tables, the shape the ruling's
+run 1 found. On the mined corpus a fresh sibling vault exits 1 and `--read-only vault list` exits 0.
+
+**Found, and fixed in this unit.** `tests/e2e.sh`'s O91 `/v1` arm wrote its "broken" vault with
+`UNDERCROFT_VAULT=broken`, a variable no build honours, so it wrote to `default` and measured A33's
+verdict on a FRESH vault — the ruling's "fails silently if the A33 fixtures stay on fresh vaults
+only", live; under this build it answered the posture refusal. It writes through `--vault` now, with
+a premise that the manifest records a write.
+
+**Not driven, stated.** `serve-http --read-only` opens its `/mcp` vault at start, so on a fresh
+`default` it exits 1 before serving; P13's `/v1` 409 was measured with the server serving another
+vault. The orchestrator was checked by reading only: it keys its exit codes on the engine's `class`
+marker (`is_integrity_verdict`), so `ops` over a fresh vault on a read-only engine follows to exit 1
+with no orchestrator change; `orchestrator-e2e` was not run here.
+
+### O322 — CLOSED 2026-10-12: every open-path refusal that can follow the rename or the schema batch says what it leaves as found, from one constant, and a source gate classifies every "nothing was written" literal
+
+**Filed 2026-10-06 by O303's ruling of that day.** The `Orphaned` refusal text
+(`crates/undercroft-store/src/lib.rs` 2680-2685) says "Nothing was written." unconditionally while naming
+"a source build older than 0.19.0" as a cause, and for that population `open_inner` has already run O7's
+`palace.db` to `vault.db` rename (5173) and the schema batch with the fts, kg, manage and retention
+initialisers (5185-5262) before `init_chain` refuses. O303's record admits it among what fails silently
+(its "for the source-built population 'nothing written' is not literal") with no argument for leaving the
+text as it is.
+
+**Shape**: scope the sentence to 1.x databases, or move the judgement ahead of the rename and the schema
+batch for a database with no `chain_meta` table — a ruling, since the second moves O7's order. **Gate**:
+a source-built-shaped database's refusal text and its bytes after the refusal agree.
+
+#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
+
+**The question.** `ChainJudgement::answer` maps `Headless::Orphaned` to an integrity finding ending "Nothing
+was written." (store `lib.rs` 2680-2686) while the writable open has already run O7's `palace.db` rename,
+the schema batch and, at one of its two sites, the fts, kg, manage and retention initialisers. Scope the
+sentence, move the judgement ahead of the rename and the batch, or leave it with an argument?
+
+**Prior rulings found, and their disposition.** O303, 2026-09-30, item 8 (which wrote the text) and its
+"fails silently if … for the source-built population 'nothing written' is not literal": FOLLOWED — this
+closes what it admitted. O303, 2026-10-06 (the maintainer's approval: D′ stands; no "open it once with
+1.6.1"; its residual that the remedy cannot work for a source-built database): FOLLOWED. O284 item 2 ("the
+wording says what is true"): FOLLOWED. O7 (the maintainer's naming ruling; its mechanism refuted and
+rebuilt by O279, O280 and O281): UNTOUCHED — nothing is reordered, so nothing is escalated. The
+maintainer's 1.0.0 decision: FOLLOWED.
+
+**Decided shape: (a), each text naming what it guarantees.**
+1. Every open-path refusal that can follow the rename, the schema batch or the initialisers stops saying
+   "Nothing was written" and names what its path leaves as found. The sites, the union of both runs: the
+   store's `answer()` `Orphaned` arm (2682); `foreign_race` (4461-4466); both `settle_foreign` texts
+   (4507-4514, 4517-4524); `init_chain`'s re-adoption race (6452-6456); `chain::writes`'s two texts
+   (`chain.rs` 322-337, reached through `judge_chain` at 4632); and the vault crate's `ManifestMoved`
+   (~424), `StagedLost` (2262-2269) and `absent()` (2364-2384), reached from the same lock path through
+   `license_promotion`, `anchored_head` and `promote_licensed`. `refuse_before_effect`'s "The rotation
+   reconcile wrote nothing: …" (4544-4545) already says what it guarantees and stays.
+2. One shared constant carries the guarantee every site has: the `audit` rows and `chain_meta` are as
+   found (no step before either site appends a record; `init_chain` judges before it creates
+   `chain_meta`, and `adopt_empty_chain`'s lock rolls the table back on a refusal). The lock-path sites
+   add `vault.json`, `vault.json.next` and the key-generation marker as found: nothing acts before their
+   judgement and the lock rolls the marker back. The `init_chain` sites do not claim those three, because
+   this open's own reconcile may have promoted a staged manifest or re-seeded the marker before them. No
+   text claims the `-wal` is as found: the legacy rename's TRUNCATE checkpoint runs first.
+3. The vault-crate texts are reworded so they stay true on their non-open callers too (the anchor door,
+   `verify`).
+4. The `Orphaned` remedy names both readings it gives: an edited or rolled-back vault — restore it from a
+   backup that verifies; a database a source build older than 0.19.0 wrote and no 1.x build opened — no
+   supported path (O303, 2026-10-06; `UPGRADING.md`). Text only; nothing new is served.
+5. A source gate counts every "Nothing was written" literal in the store and vault crates' production code
+   against an allowlist with reasons (O80: counted against the code), so a site neither run found — store
+   `lib.rs` 910, 931, 6008, 7545, `chain.rs` 275 among the candidates — is classified rather than missed.
+
+**Where the two runs disagreed, and what settled it.** Run 1 proposed ONE constant claimed true at every
+site; run 2 per-site subsets. Settled for per-site subsets with a shared core (item 2), by reading
+`reconcile_rotation` (4349-4446): its ACT block promotes, removes a stage and commits a marker before
+`init_chain` runs, so at the `init_chain` sites "`vault.json`, `.next` and the marker as found" is not
+guaranteed. The site lists differed: run 1 missed the vault-crate texts, run 2 missed `chain::writes`'s;
+the union stands, and item 5's gate keeps it complete.
+
+**Options that lost, with their cost.**
+- (b) Judge first: a second, schema-tolerant judge or a judgement inside `migrate_db_filename`'s exclusive
+  hold — a second implementation of O296's one judgement and a reorder of the stretch O279/O281 pin — for
+  a population 1.0.0 withdrew, and it would still leave the `init_chain` sites false.
+- (a) by plumbing what this open did (the security lenses: the rename's outcome, `schema_version` before
+  and after): true, but new plumbing that becomes its own thing to gate, threaded into typed refusals one
+  of which (`ManifestTampered`) carries no text, for what the rename's own warning already logs.
+- (c) Leave it: a false sentence in an integrity verdict, which O303 itself listed under "fails silently".
+
+**Claims refuted, the brief's first.** The brief lists `refuse_before_effect`'s staged text among the false
+ones; it is scoped and true. The brief misses the vault-crate texts, `foreign_race`, `init_chain`'s race
+and `chain::writes`. Its "on an already-migrated 1.x database these are no-ops by reading" holds only at
+1.7.0's schema. The population is wider than source builds: any refused writable open of a vault still
+named `palace.db` (1.0.0 to 1.4.x, never opened by 1.5.0 or later) runs the TRUNCATE checkpoint and the
+rename first, and `idx_audit_record_id` first ships in `v1.1.0` (`53949bd`, after the `v1.0.0` tag). The
+filing's "(5185-5262)" and O303's 2026-10-06 "(lib.rs 5173-5262)" overstate for the source-built
+population, which has no keycheck marker before `cc0e1c7` and so refuses at `reconcile_rotation` (5233),
+before the initialisers; both records are corrected beside, never in place. The memory lens's "every
+pre-judgement effect is evidence-neutral": the TRUNCATE checkpoint can discard superseded WAL frames, which
+is why no text claims the `-wal`.
+
+**Probes owed (build gates; the text is chosen by reading).** Two fixtures, each run on `781b5b9` and on the
+build, each naming its site with a pause witness: (1) the lock path — `palace.db`, the keycheck row
+deleted, `chain_meta` dropped, `idx_drawers_room` and `idx_audit_record_id` dropped, a non-empty `-wal`;
+(2) the fast path — `palace.db`, `idx_audit_record_id` dropped, the marker kept. Each records file names,
+`sqlite_schema` and every file's SHA-256, asserts the narrowed text and the absence of "Nothing was
+written", asserts what the text claims (`vault.json`'s bytes, the `audit` rows and tags, `chain_meta` and,
+at the lock path, the marker and `.next`, as found), and pins the rename and the indexes as effects the text
+does not deny. On the read-only posture both show no rename and a true text. P-1x322 (a `v1.0.0`
+release-built vault) is the cheaper real-population check; P-SRC322 only if the source-built population is
+revisited.
+
+**Dissent.** The security lenses of both runs would plumb what this open did; not adopted, for the cost
+above.
+
+**Fails silently if** the only fixture is `to_v1` plus `DROP TABLE` (marker kept, `vault.db`, both indexes
+present), which reaches the `init_chain` site and exercises none of the effects; a posture-blind rewording
+is false on the read-only posture; one site is reworded and not the others; a vault-crate text stops being
+true on the anchor or `verify`; O296's pinned `Want` fragments move without the record beside them.
+
+**What remains.** D′'s residual (O303, 2026-10-06): a source-built database is refused as integrity for
+what is really age. Unchanged; item 4 only stops the remedy pointing that reader at a backup that cannot
+help.
+
+**Versioning.** PATCH, text only. No `UPGRADING.md` entry is owed.
+
+#### BUILT 2026-10-12, to the ruling — the gate found two literals neither run listed
+
+**Built.** `CHAIN_AS_FOUND` ("The `audit` rows and `chain_meta` are as found") and
+`LOCK_PATH_AS_FOUND` (", and so are vault.json, vault.json.next and the key-generation marker") in
+the store crate (item 2). The `Orphaned` arm of `ChainJudgement::answer` carries the core only —
+the function is shared by the lock path, `init_chain` and the read-only open — and names both
+readings (item 4); `foreign_race` and both `settle_foreign` texts carry the lock-path set;
+`init_chain`'s re-adoption race and `chain::writes`'s two texts the core. The vault crate's
+`ManifestMoved` says this promote wrote nothing and both manifest files are as found; `StagedLost`
+and `absent()` say their read wrote no file (item 3). `refuse_before_effect`'s text stays (item 1).
+O296's pinned `Want` fragments do not move: none held "Nothing was written".
+
+**Gates.** `o322_every_nothing_was_written_literal_is_classified` counts the phrase, case-folded, in
+both crates' production code with each string continuation joined and comments cut, per `(file,
+fn)`, both ways, after proving its counter on planted text: nine rows, eleven literals — the backup
+door's read-only refusal, `require_head`, `retired_handle` (two), `stale_keys`, the anchor's note
+scoped to `vault.json`, the allow's destination check, `vault_db::close` ("written through it"),
+and `keys.rs`'s `source_mismatch_message` (two) and `material_missing_message`. The last two rows
+are the ones neither run listed, both true where raised. `o322_an_open_path_refusal_says_what_it_leaves_as_found`
+runs the ruling's two fixtures — the lock path (`palace.db`, the marker deleted, `chain_meta`
+dropped, `idx_drawers_room` and `idx_audit_record_id` dropped, a non-empty `-wal`) and the fast
+path (`palace.db`, `idx_audit_record_id` dropped, the marker kept) — each witnessed at its site by a
+new pause point (`Opener::RotationLock`, `Opener::InitChain`), at both levels: the text carries the
+constant and both readings and no "nothing was written"; the manifest, the staging file, the marker,
+`chain_meta`'s absence and every `audit` label and tag are as found; the rename and the recreated
+indexes are pinned as effects the text does not deny; the read-only open renames nothing and says
+the same.
+
+**Measured.** Not on 781b5b9: the text reverted to "Nothing was written" turns both tests red. P-1x322
+(a `v1.0.0` release-built vault) was not run; the fixtures are this build's own shapes.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -36921,159 +37552,6 @@ stays in `SecretKey`, zeroised on drop, and is never written anywhere.
 `vault list` over three vaults and on a `serve-http` start: one each.
 Counterfactual: today's per-open derivation.
 
-### O213 — a vault `init` just created, opened read-only, is reported as tampering
-
-**Filed 2026-09-17 by O204's ruling; measured by its probe P13.** `init`
-writes a manifest and no database; the database appears at the first writable
-store open. A read-only open of that vault refuses `DatabaseMissing` (A33),
-which the CLI reports as exit 2, the tamper verdict — while the vault's own
-authenticated manifest records zero writes, so nothing is missing that was
-ever written. The team-server recipe's `--read-only` first start meets it,
-and `UPGRADING.md` tells operators to start writable once.
-
-**Shape, for a ruling**: when the manifest verifies and records no writes,
-a read-only open either serves the vault as empty or refuses as a posture
-error (exit 1, "start it writable once"); a manifest that records writes and
-has no database stays exit 2. The manifest's `writes` is covered by its MAC,
-so reading it is evidence, not inference.
-
-**Gate**: P13 (`init`, then `--read-only search x`) exits 0 or 1 as ruled;
-the same after one `remember` with the database removed still exits 2.
-
-**Noted 2026-09-30 by O303's ruling.** A fresh vault's EMPTY chain — a database whose first
-writable open stopped between creating `chain_meta` and seeding it — now answers the read-only
-posture `ReadOnlyUnmigrated` (exit 1), the class its absent-table twin answers. It is the same
-question one step later: whatever this entry rules for a vault with no writes, that state follows.
-
-**Relations:** shares a diff surface with O308 — both are answered through the absent-database predicate and door that entry's ruling defines.
-
-**Relations:** shares a question with O323 — the state that entry measures reads as the empty chain here and gets this entry's refusal text.
-
-**Relations:** shares a diff surface with O302 — that entry's read-only retry lands on this entry's fresh-vault state and answers whatever this entry rules.
-
-#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
-
-**The question.** A vault that `init`, `vault create` or `POST /v1/vaults` just made has a MAC-verified
-manifest at genesis and height 0 and no database. Opened read-only, `open_inner_read_only` asks only
-`vault.database_exists()` (store `lib.rs` 5444-5458) and answers `DatabaseMissing`: exit 2, `/v1` 409 with
-`class: "integrity"`. Keep it, refuse as a posture error (exit 1), or serve the vault as empty? The empty
-chain, one step later, follows (O303's note in this entry).
-
-**Prior rulings found, and their disposition.** This entry holds no ruling; its `rul(ed|ing)` hits are its
-filing line and O303's note. Searched also in A33/R4, O204, O268, O291, O303, O308 and O323.
-- **A33/R4**: FOLLOWED for every manifest that records anything; DISTINGUISHED, not refuted, for one that
-  records nothing — a *Fresh* manifest describes no database content, so an absent file contradicts
-  nothing it claims. O204 drew the same line ("A33 … is distinguished, not refuted: here nothing has been
-  authenticated") and O268 item 5 already applies it at the restore stage (`restore.rs` 253-266).
-- **O204** (moving exit 2 to exit 1 is PATCH with an `UPGRADING.md` entry): FOLLOWED.
-- **O303, 2026-09-30, item 5, its note and its dissent** ("one state, one class"; the empty chain is not
-  served): FOLLOWED. It rules out serving, binds the empty chain to this ruling, and licenses the variant
-  moving with it ("follows whatever O213 rules").
-- **R4** (a read-only role cannot fabricate a database): FOLLOWED.
-- **O291 item 11** ("A33 is untouched") describes the delete race and rules nothing here.
-
-**Decided shape.**
-1. **Option (b), through O308's door** (its ruling of this date, items 1-5): a *Fresh* manifest beside no
-   database content, with no non-empty `-wal` and no authenticated staged manifest, answers a posture
-   refusal on the read-only posture — exit 1, `/v1` 409 with no `class` — and creates nothing.
-2. **A new `StoreError` variant**, whose name and text state only evidence: the authenticated manifest
-   records no anchored write; a read-only open neither creates, seeds nor migrates a database; a writable
-   open starts a vault in this state; and, as O204 requires of every refusal, the second reading — if this
-   vault ever held data, do not open it writable: its database or its trail and a later manifest are
-   missing; restore it. A name that asserts history (`NeverOpened…`) is refused: P-LAG (a vault written
-   with every anchor failing) contradicts it.
-3. **One never-anchored vault answers one variant wherever the read-only open can see nothing was
-   migrated**: no content (O308 item 4(f)); a database holding none of `READ_SCHEMA`'s tables beside a
-   *Fresh* manifest (`check_read_schema`, 5652-5684, asks the predicate first); and the empty chain
-   (`check_chain_read_only`'s `Headless::Empty` arm moves from `ReadOnlyUnmigrated` to this variant). A
-   database holding PART of a schema keeps `ReadOnlyUnmigrated`, whose remedy — open it once writable — is
-   right both for a first open interrupted mid-batch and for an older build.
-4. **A *Mixed* manifest answers `ManifestTampered` on the read-only posture**, at the no-content arm (O308
-   item 4(e)) and beside an empty chain, as the writable `adopt_empty_chain` does (6551-6553).
-5. **A database with no `audit` table beside a *History* or *Mixed* manifest is judged on the read-only
-   posture as the erased trail it is**: `refuse_headless_without_table` no longer returns early for a
-   missing `audit` table (5738) when the predicate says the manifest records something, and answers
-   `ManifestTampered` from the predicate (it must not call `judge_headless`, which queries `audit`), as the
-   writable open answers the same file after its schema batch. Beside a *Fresh* manifest it falls through
-   to item 3.
-6. **The variant is registered on every surface**: an arm in `store_err`'s 409 list with no class (its
-   `_ => 500` catch-all, `tenant.rs` 3941, is what a forgotten arm becomes — O238's founding defect one
-   variant later); a `false` row in `the_cli_exit_2_set_and_v1s_integrity_class_are_one_set`; absent from
-   `integrity_verdict`'s set; the MCP mapping checked.
-7. **The two A33 store tests are split**: `a_read_only_open_of_an_absent_database_refuses_instead_of_faking_one`
-   and `reading_the_recorded_embedder_never_creates_the_database` each keep a written-then-deleted arm
-   (`DatabaseMissing`, no file created) and gain a fresh arm (this variant, no file created).
-
-**Where the two runs disagreed, and what settled it.**
-- *The carrier.* Run 1 reused `ReadOnlyUnmigrated` with a reworded text; run 2 minted a variant. Settled
-  for a variant on run 2's evidence: `ReadOnlyUnmigrated`'s text (2092-2096) is about schema age, and the
-  fresh case's required caution ("if this vault ever held data, do not open it writable; restore") is
-  false for an old-schema vault whose database is present, so one fixed text cannot be true of both. Run
-  1's objection — a schema-less file already answers `ReadOnlyUnmigrated` through `check_read_schema`
-  (5512-5513 run before `check_chain_read_only`), so one never-anchored vault would carry two variants —
-  is verified by reading and met by item 3.
-- *The evidence read.* Run 1's strict re-read against run 2's binding: settled in O308's record.
-- *Items 4 and 5.* Run 1's item 6 (a schema-less database beside a recording manifest: exit 1 read-only,
-  exit 2 writable) is verified by reading — `refuse_headless_without_table` returns `Ok` when `audit` is
-  absent (5738) and the schema check answers `ReadOnlyUnmigrated` — and run 2 did not address it; it is
-  adopted. The *Mixed* asymmetry (exit 1 read-only, `ManifestTampered` writable, because `judge_headless`
-  reads only the anchor, 4681-4687) was found by both.
-
-**Options that lost, with their cost.**
-- (a) Keep exit 2: a tamper verdict on every genuine fresh volume and on every `--read-only vault list`
-  over a fresh installation, which the recipe's comment (`deploy/docker-compose.server.yml` 137-139) and
-  `docs/remote-server.md` already describe as a posture refusal; and one never-anchored vault answering
-  two classes by how far its first writable open got.
-- (c) Serve as empty: a second open path whose `verify`, `stats`, label guard and chain arithmetic answer
-  for a file that does not exist; O303 settled serving for the twin state; and a refusal heals where a
-  served empty vault would not — `store_for` caches only a successful open (`tenant.rs` 3360-3420), so the
-  next request after a writer creates the database succeeds. Not escalated: refusing offers nothing new.
-- Reusing `ReadOnlyUnmigrated`: above.
-
-**Claims refuted, the brief's first.** The brief's CLI line numbers do not match `781b5b9` (its content is
-right). The brief omits O323 (the same discriminator, a genesis manifest put back beside an emptied
-`audit`), the *Mixed* asymmetry and the schema-less posture split. Its question whether serving is "what
-a surface offers" is answered: refusing is not. Both runs' proposed wordings infer history ("no writable
-process has opened it"), which P-LAG contradicts. The runs' "the read-only change grants nothing the
-writable posture does not" is true of capability and incomplete as a record: the A2 erase-and-put-back
-answers exit 1 after this ruling where it answered exit 2 — with no loss of detection, since today's exit
-2 fires on every fresh vault and so never told the attack from `init`.
-
-**Probes owed.**
-- P13 on the build: `init`, then `--read-only search x` and `--read-only stats` exit 1; `--read-only vault
-  list` exits 0 naming the vault unavailable; `serve-http --read-only` answers `GET
-  /v1/vaults/default/stats` 409 with no `class`; no `vault.db*` created by any of them. Then one
-  `remember` with `vault.db*` removed: exit 2, `DatabaseMissing`, nothing created.
-- P-FIRST (premise): `init`, one write-free writable command, then `vault.json`'s `writes` and head, at
-  both security levels — that a completed first writable open leaves the manifest past genesis.
-- P-A2-GEN and P-LAG characterise the residual only; neither decides the ruling.
-
-**Dissent.** Run 1 (its refuter and engineering lens) held `ReadOnlyUnmigrated`; settled by the evidence
-above, its objection adopted as item 3.
-
-**Fails silently if** the variant lacks a `store_err` arm or an identity-test row; a gate asserts exit 1
-alone — a fabricated database answers `ReadOnlyUnmigrated`, also exit 1, so the gate asserts the variant
-and that no `vault.db` exists (as `tests/e2e.sh` already does for A33); the A33 fixtures stay on fresh
-vaults only; the predicate reads `writes` alone; the empty chain stays on `ReadOnlyUnmigrated`; item 5
-calls `judge_headless` on a database with no `audit`; the check is proved through `open_read_only` alone
-rather than `open_store_as` and `store_for` (O91).
-
-**What remains.**
-- The A2-class put-back (a create-time manifest beside a deleted database) reads *Fresh* on both postures;
-  the writable posture already adopts it today, and only O245's witness sees a rollback to genesis.
-- P-LAG (every anchor failed, the first open's chain-v2 anchor included) reads *Fresh* too.
-- O323's state (a genesis manifest beside an emptied `audit` with drawers kept) reads as the empty chain
-  and gets this variant's text; its measurement stays O323's.
-- `config check` cannot see this state (it opens no database); `UPGRADING.md` says so.
-- Relations owed, each with its reciprocal in the same commit: O308 and O323.
-
-**Versioning.** PATCH, on O204's precedent: exit 2 becomes exit 1 for a state the documentation already
-describes as a posture refusal. `UPGRADING.md` owes an entry: a fresh `--read-only` start exits 1 (409 with
-no class) where it exited 2, an alert keyed on the integrity class stops firing for it, `--read-only vault
-list` over a fresh installation exits 0, and the O212 entry's sentence on this state changes with it. The
-recipe's comment, `docs/remote-server.md`'s "Start the server writable once first" and `UPGRADING.md`'s "A
-`--read-only` server needs one writable start first" move with it.
-
 ### O214 — a search query has no bound, and a refused save still pays for its whole body, on the listener's one request loop
 
 **Filed 2026-09-17 by O198's measurement, taken on the `66337d2` binary.**
@@ -42490,6 +42968,12 @@ The history arm's `/v1` 400 (O268 item 9's classes). O274 (a restore records not
 already offers. `UPGRADING.md`'s manual-step text is narrowed and the fresh-host precondition documented;
 no new entry, since nothing that runs today stops.
 
+**Noted 2026-10-12 by O308's build.** The predicate this entry's ruling splits by is built:
+`undercroft_vault::ManifestHistory::of(head, writes, staged_attached)`, with
+`Vault::manifest_history()` over a handle's unlock values, and the restore stage already asks it in
+place of `writes() > 0`. A *Fresh* live target read through `unlock_as(id, Access::ReadOnly)` is
+`manifest_history() == ManifestHistory::Fresh` on that handle.
+
 ### O271 — `vault create` checks for the vault, then writes, with nothing in between
 
 **Filed 2026-09-26 by O268's ruling (security, memory and storage lenses).**
@@ -44592,8 +45076,13 @@ only one posture is driven; only `VaultStore::open` is driven.
 documented contract moves and no running deployment stops, so **`UPGRADING.md` owes nothing**.
 
 **Relations:** shares a diff surface with O271 — that entry's publish decides which directory a stale open can meet, and this predicate is what such an open asks first.
-**Relations:** sequenced before O308 — both decide what the writable open answers on the line that creates a missing database, and this predicate runs before that refusal or a race answers `DatabaseMissing`.
-**Relations:** shares a diff surface with O213 — the read-only retry of this race lands on that entry's fresh-vault state and answers whatever it rules.
+**Noted 2026-10-12 by O308's and O213's build, which landed first.** O308's door (`absent::door` in
+the store crate) asks, in order: the vault directory gone; the unlock's values bound to `vault.json`
+by `manifest_seen`'s digest; a non-empty `-wal`; then the predicate. Item 5's order puts this entry's
+predicate between the first two, and the binding already answers this race with the reopen class at
+the CREATE arm — except an absent `vault.json` there, which it answers in the manifest rule's
+integrity class where item 2 rules the reopen class. The read-only retry lands on O213's
+`ReadOnlyNoAnchoredWrite`. Both partners are under `## 1.7.0`.
 
 ### O306 — the anchor door writes over an anchor its committed head does not descend from, when `chain_meta` is edited beneath a live handle
 
@@ -44916,213 +45405,6 @@ for another first open is this entry's question too.
 
 **Gate**: the two-process first-open loop answers no raw SQLite error in ≥200 runs, and an open-pause arm
 places the second open's migration between the first's read and its `ALTER`.
-
-### O308 — a writable open over a deleted `vault.db` beside a manifest past genesis creates the database before it refuses
-
-**Filed 2026-09-30 by O303's independent review (its F1); established by reading.** `connect_writable`
-opens with `SQLITE_OPEN_CREATE` whenever the layout is `DbLayout::Absent`, and the schema batch commits
-`meta`, `drawers`, `audit` and their indexes; the rotation reconcile's lock path (the marker is absent)
-then judges the empty trail `Headless::Erased` and refuses `ManifestTampered` (O303). So the refusal
-leaves an empty database behind, and every later open on either posture answers `ManifestTampered` where
-the read-only open answered A33's `DatabaseMissing` before it — an incident read as tampering rather
-than as a missing file. On `main` `5fc6171` the same writable open seeded `chain_meta` from the manifest
-and served an empty vault at the manifest's height, taking writes; O303 closed that, and this is what
-it leaves. The deleted file is the most ordinary producer of O303's erased trail.
-
-**Shape, for a ruling**: the writable posture refuses an absent database beside a manifest whose head is
-past genesis or whose height is above 0, before it connects, as A33's `DatabaseMissing` (an integrity
-verdict), after O291's `vault_gone` check; a manifest at genesis and height 0 is a fresh vault's first
-open and keeps creating. O213 asks the read-only half of the same question for a manifest at genesis.
-
-**Gate**: a vault with records whose `vault.db` is deleted — a writable open refuses and no `vault.db`
-exists afterwards; a read-only open still answers `DatabaseMissing`; a fresh vault's first open still
-creates it; a delete racing the open still answers the reopen class.
-
-**Relations:** shares a diff surface with O213 — both are answered through the absent-database predicate and door this entry's ruling defines.
-
-**Relations:** sequenced after O302 — both decide what the writable open answers on the line that creates a missing database, and that entry's predicate runs before this refusal.
-
-#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
-
-**The question.** What the writable posture does with a vault directory that holds no database beside a
-manifest past genesis or above height 0. Today `connect_writable` opens with `SQLITE_OPEN_CREATE` whenever
-`DbLayout::Absent` (store `lib.rs` 4980-4982), the schema batch commits in autocommit (5185-5230), and
-only then does the rotation reconcile's lock path, taken because the new file has no keycheck marker
-(4346-4349), judge `Headless::Erased` (4681-4687) and refuse `ManifestTampered` (2677-2679). The created
-file outlives the refusal, so every later open on both postures answers tampering where the read-only open
-answered A33's `DatabaseMissing`. Ruled with O213, O270 and O292, because all four ask what a door may do
-with a vault directory missing half its pair.
-
-**Prior rulings found, and their disposition.** A case-insensitive `rul(ed|ing)` search of this entry finds
-its filing line only; searched also in A33/R4, O279, O280, O291, O296, O303, O254, O257, O91, O213 and
-O302.
-- **A33/R4** ("'Empty' is not 'absent'; this is an integrity verdict and exits 2"): FOLLOWED. A manifest
-  that records history beside no database answers `DatabaseMissing` on both postures.
-- **O279/O280** (no open by path carries CREATE unless the directory holds no database; the layout is read
-  ONCE and its path is the one opened): FOLLOWED, and narrowed by the manifest.
-- **O303, 2026-09-30** (only the empty chain is adopted; a genesis head beside a nonzero height is
-  `ManifestTampered`; "fails silently if `CREATE TABLE` stays before the judgement"): FOLLOWED one level up.
-- **O296** (a refusal writes nothing): FOLLOWED.
-- **O291 item 11** (a vault whose directory is gone answers the reopen class first): FOLLOWED, its order
-  kept.
-- **O254's P1** (no byte comparison of `vault.json` on the writable posture, because a busy writer
-  anchors): FOLLOWED — item 2's comparison is asked only where no database exists to anchor from.
-- **O257** (an unlock deletes no `vault.json.next`; a file this build cannot authenticate is inert, vault
-  `lib.rs` 2779-2786): FOLLOWED, and it settles a split between the runs (below).
-- **O91** (a posture is a property of the path): FOLLOWED — it is why `recorded_embedder` is one of the
-  places the door is asked.
-- **O302** (open): touched, not ruled; its absent-database race is met by item 2.
-
-**Decided shape.**
-1. **One predicate, in `undercroft-vault`, over the manifest's two MAC-covered fields** (`writes`,
-   `chain_head_hex`):
-   - *Fresh*: the head is `Vault::chain_genesis_hex()` AND the height is 0 AND no authenticated staged
-     manifest is attached (`Vault::has_pending()`). An unauthenticated `vault.json.next` decides nothing
-     (O257).
-   - *Mixed*: a genesis head with a height above 0, or a non-genesis head with height 0. No build writes
-     either; only a key holder can.
-   - *History*: anything else, an attached authenticated `.next` included.
-
-   It replaces the restore stage's `vault.writes() > 0` (`restore.rs` 257), `adopt_empty_chain`'s
-   `manifest.writes() == 0` (store `lib.rs` 6546, which keeps its strict `verified_manifest()` read under
-   the lock, 6538), and `check_chain_read_only`'s `Headless::Empty` arm, which today reads neither field
-   (5775-5779). `judge_headless` keeps its anchor comparison: it classifies rows against an anchor, a
-   different question. A source gate pins that no other `writes() == 0` / `writes() > 0` spelling remains
-   in the store crate's production code.
-2. **The evidence is the unlock's verified values, bound to the directory.** Where the door finds no
-   content, it compares the digest of `vault.json`'s current bytes with the unlock's `manifest_seen`
-   (vault `lib.rs` 1153, set at 2771 from the very buffer whose MAC was verified, 2744-2771). Equal: the
-   unlock's values ARE a strict read of those bytes. Different: `StaleUnlock`, the reopen class. Missing
-   or not a manifest file: the manifest rule's own answer (`absent()`, 2364-2384; integrity, no tamper
-   event). A handle minted by `create` (`manifest_seen` is `None`) skips the comparison. Never asked
-   outside the no-content arm (O254's P1).
-3. **"No content"** is decided by a stat that follows a link, as `DbLayout` and SQLite do (O279's gate G8
-   opens a linked database), with every error but not-found propagated, never `Path::exists`: no main
-   file at either name, or the one main file a regular file of length 0. Not inside `DbLayout::of`: O291's
-   delete holds the zero-length file it made through that function.
-4. **The door, in order**: (a) the vault directory gone → `vault_db::deleted`, the reopen class (O291);
-   (b) item 2's binding; (c) a NON-EMPTY `-wal` of either name beside no content → `DatabaseMissing`
-   naming the `-wal`, saying it may hold committed frames and must not be deleted, with nothing opened;
-   an empty `-wal` or a `-shm` is scaffolding and is ignored; (d) *History* → `DatabaseMissing`, nothing
-   created, its text naming `vault.json.next` with O296's "do NOT delete it" where one is attached;
-   (e) *Mixed* → `ManifestTampered` on both postures, as `adopt_empty_chain` already answers it
-   (6551-6553); (f) *Fresh* → the writable posture proceeds, the read-only posture answers O213's variant.
-5. **Where it is asked**: in `recorded_embedder` (7037-7081), which answers `None` without opening
-   whenever there is no content, so it never opens a zero-length file; at the head of `open_inner`,
-   before `migrate_db_filename` (5173); at the head of `open_inner_read_only`, replacing 5444-5458; and
-   again on `connect_writable`'s single layout read (4964-4982), where `SQLITE_OPEN_CREATE` is granted
-   only on the door's *Fresh*-and-no-content answer at that same observation. One production CREATE grant
-   in the store crate, pinned by a source gate.
-6. **`DatabaseMissing` becomes posture-neutral**: it drops "or open the vault with a writable process if
-   you intended to start an empty one" (2053-2054), which after this ruling is false on both postures; it
-   names the recorded height (MAC-covered evidence) and says no open creates a database; its remedy is to
-   stop every process that had the vault open, then restore the database, or the vault, from a backup
-   (O270's procedure); it never advises deleting a file. Its doc comment stops saying "a read-only open
-   found".
-7. **`UPGRADING.md`**: the O303 entry ("where every `audit` row is gone beside a manifest past genesis") is
-   amended in place if this lands before `1.7.0` is tagged: a deleted `vault.db` beside a manifest past
-   genesis answers `DatabaseMissing` and leaves no database; `ManifestTampered` stays for an emptied
-   `audit` beside a database that is present. Landing after the tag, it is an entry of its own.
-
-**Where the two runs disagreed, and what settled it.**
-- *Placement.* Run 1 placed the decision on `connect_writable`'s one layout read alone; run 2 at four
-  sites. Settled by reading: `recorded_embedder` opens any present main file read-only before either open
-  (CLI `open_store_as`; `/v1`'s factory, `tenant.rs` 3405), and `migrate_db_filename` opens a legacy file
-  before the connect, so run 1's single site comes after two openers. Run 1's objection to a pre-check
-  alone — a `vault.db` deleted between that check and 4965 is still created — is met by keeping the
-  connect's read as the one CREATE grant. The union stands.
-- *The evidence read.* Run 1 asked a strict `verified_manifest()` re-read; run 2 the unlock's values bound
-  by item 2. Settled for run 2's shape, with both runs' stated reasons corrected. Run 2's "a fresh
-  `verified_manifest()` read has a fall-back of its own" is false: its doc and body say "with NO
-  fall-back" (vault `lib.rs` 2386-2418); its staged branch serves only a handle whose keys came from
-  `.next`. Run 1's strict read fails on the race run 2 named: after a delete and a `create` of the same id
-  between the unlock and the check (O302), the new `vault.json` fails the old handle's MAC, and
-  `verified_manifest`'s refusal raises the manifest tamper event (`refusal`, 2344-2352) — a page for a
-  race. The binding answers it with the reopen class, and when the bytes are unchanged it reads exactly
-  what a strict read would.
-- *The zero-length file.* Run 1 held it for probes; run 2 settled it by reading SQLite. Settled by
-  reading the pinned source: `pagerOpenWalIfPresent` (`sqlite3.c` 60436-60464) DELETES the `-wal` of any
-  database whose main file has 0 pages (60452-60453), whenever a connection takes its shared lock
-  (`pagerSharedLock`, 62516), with no read-only guard; and `journal_mode=WAL` on a rollback-mode file
-  calls `sqlite3BtreeSetVersion(2)` through a rollback-journal transaction (101043-101049), writing page
-  1, so no WAL database SQLite made has a 0-byte main file. The arm's safety does not even rest on that:
-  a 0-byte main file with no `-wal` holds no committed byte anywhere, and with a non-empty `-wal` the door
-  refuses having opened nothing. The probes become build gates.
-- *`vault.json.next`.* Run 2 refused any `.next` beside no content in the integrity class; run 1 counted
-  only an authenticated one. Settled for run 1 by O257's recorded doctrine ("A file this build cannot
-  authenticate is inert", vault `lib.rs` 2779-2786) and by `integrity_verdict`'s, which gives no integrity
-  verdict where nothing was verified (O204). An authenticated `.next` makes the manifest *History*.
-- *A Mixed manifest.* Run 1 folded it into "records something" (`DatabaseMissing`); run 2 answered
-  `ManifestTampered`. Settled for run 2: one state answers one class at every arm, and
-  `adopt_empty_chain` already answers it so.
-- *A link.* Run 2 decided presence by `symlink_metadata`, which reads a dangling link at `vault.db` as
-  content, so beside a *History* manifest the connect would still see `DbLayout::Absent` and CREATE
-  through the link — defeating this entry. Item 3 follows the link; what a link at a database name should
-  answer is a new entry (below).
-
-**Options that lost, with their cost.**
-- (ii) Keep `ManifestTampered`, judged before the connect: a second head-less judge that runs with no
-  database (`judge_headless` and `chain::regime` both query `audit`), against O296's one judgement, and it
-  names a missing file as tampering.
-- (iii) Today's order: the open manufactures the evidence its own verdict then reads, for every later
-  open, and on a lone `-wal` the connect's first statement destroys it (P-WAL).
-- Either single placement: each leaves an opener ahead of it (above).
-- A strict re-read: a tamper page for a race (above).
-- Refusing any `.next` by presence: an integrity verdict on an unauthenticated file, against O257.
-- Deferring the zero-length arm: the pinned source settles it, and the arm is safe without it.
-
-**Claims refuted, the brief's first.** The brief's P-ZERO premise ("SQLite reads a 0-byte file as an
-empty database, so the schema batch would still run") is right and incomplete: the first lock deletes any
-`-wal` beside it. The brief's "the panel should say which is the evidence" is answered by item 2. Run 1's
-lens claim that `PRAGMA page_count` after O279's proof would count committed `-wal` frames, and the lenses'
-"a zero-length main file beside a `-wal` may be a live database", fall to the same reading. Run 2's
-`verified_manifest` fall-back and run 1's strict read: above. Run 2's "read-only connections included" is
-CONFIRMED by the pinned source.
-
-**Probes owed (the integrator's; build gates, none decides the shape).** Each gate asserts the variant AND
-that no `vault.db`, `-wal` or `-shm` exists afterwards AND `vault.json`'s SHA-256 unchanged, because
-today's class is integrity too.
-- P-ZERO: a vault with records; `vault.db` truncated to 0 bytes, `-wal`/`-shm` removed; a writable open on
-  `781b5b9` (expected: the schema batch, then `ManifestTampered`, the file holding the schema) and on the
-  build (`DatabaseMissing`, the file still 0 bytes).
-- P-ZERO-WAL: a 0-byte `vault.db` beside a non-empty `vault.db-wal` and a manifest that records writes;
-  `--read-only stats` on `781b5b9` (expected: the `-wal` gone, through `recorded_embedder`) and on the
-  build (refused, the `-wal`'s SHA-256 unchanged).
-- P-WAL: `vault.db` removed, `vault.db-wal` kept; a writable open on `781b5b9` (expected: CREATE, the
-  `-wal` deleted) and on the build (refused, the `-wal` unchanged).
-- P-O302-ABSENT: pause at `Opener::WritableLayout`; delete the vault; `vault create` the same id; release.
-  Both postures answer the reopen class; the retry creates (writable) or answers O213's variant
-  (read-only); no tamper event is counted.
-- P-LINK (for the new entry): a dangling link at `vault.db` beside a *Fresh* manifest; a writable open on
-  `781b5b9`. Is the link's target created outside the vault directory?
-
-**Dissent.** None on refusing before the CREATE or on the class.
-
-**Fails silently if** `recorded_embedder` or `migrate_db_filename` opens a no-content file before the door;
-the zero-length test lands in `DbLayout::of`; the CREATE grant reads a different observation from the
-door's; item 2 is asked on the writable posture outside the absent arm; the predicate reads one field, or
-reads `.next`'s presence rather than its MAC; a gate asserts the class alone; there is no arm deleting only
-`vault.db*` during the `WritableLayout` pause; the A33 unit test's premise "the writable open is allowed to
-create it" and `o303_only_the_empty_chain_is_adopted` stop running on a *Fresh* vault;
-`o291_open_store_as_meets_a_delete_in_its_window_as_no_such_vault` stops answering the reopen class
-because (d) is asked before (a).
-
-**What remains.**
-- What a link at a database name answers on the open path — followed (as O279's G8 opens a linked
-  database, and as a dangling one beside a *Fresh* manifest is created through today) or refused (as O283
-  and O291 refuse links on restore and delete) — is a new entry, measured by P-LINK, its ruling the
-  maintainer's ratification of O283's extension.
-- A process still holding the deleted database's unlinked inode can anchor by path between the unlock and
-  item 2: the reopen retries once, then says so (exit 1). O268 item 8's residual.
-- A NON-EMPTY schema-less main file (one page, no tables) beside a *History* manifest still gets the
-  writable open's schema batch before `ManifestTampered`. Stated with its argument: the verdict is the
-  same on both postures before and after the batch (O213's item 6), no build writes that file, and
-  judging it first is O322's option (b), which lost there.
-- O302's other arms (a present database; the `immutable=1` escalation) stay O302's.
-- Relations owed, each with its reciprocal in the same commit: O213 and O302.
-
-**Versioning.** PATCH. The class does not move (exit 2, `/v1` 409 with `class: "integrity"`); the variant
-and text change and nothing is created. `UPGRADING.md` is amended per item 7.
 
 ### O310 — a release tag is published before anything checks it: release.yml has no pre-publish guard
 
@@ -46260,113 +46542,6 @@ under umask permissions until the chmod.
 included, before any byte is written. **Gate**: a dangling symlink at `<data_dir>/bundle.key` makes
 `bundle keygen` refuse with nothing written through it (P-Q3e); a fresh key is 0600 from its creation.
 
-### O322 — the head-less refusal says "Nothing was written." for a database whose open has already renamed and migrated it
-
-**Filed 2026-10-06 by O303's ruling of that day.** The `Orphaned` refusal text
-(`crates/undercroft-store/src/lib.rs` 2680-2685) says "Nothing was written." unconditionally while naming
-"a source build older than 0.19.0" as a cause, and for that population `open_inner` has already run O7's
-`palace.db` to `vault.db` rename (5173) and the schema batch with the fts, kg, manage and retention
-initialisers (5185-5262) before `init_chain` refuses. O303's record admits it among what fails silently
-(its "for the source-built population 'nothing written' is not literal") with no argument for leaving the
-text as it is.
-
-**Shape**: scope the sentence to 1.x databases, or move the judgement ahead of the rename and the schema
-batch for a database with no `chain_meta` table — a ruling, since the second moves O7's order. **Gate**:
-a source-built-shaped database's refusal text and its bytes after the refusal agree.
-
-#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
-
-**The question.** `ChainJudgement::answer` maps `Headless::Orphaned` to an integrity finding ending "Nothing
-was written." (store `lib.rs` 2680-2686) while the writable open has already run O7's `palace.db` rename,
-the schema batch and, at one of its two sites, the fts, kg, manage and retention initialisers. Scope the
-sentence, move the judgement ahead of the rename and the batch, or leave it with an argument?
-
-**Prior rulings found, and their disposition.** O303, 2026-09-30, item 8 (which wrote the text) and its
-"fails silently if … for the source-built population 'nothing written' is not literal": FOLLOWED — this
-closes what it admitted. O303, 2026-10-06 (the maintainer's approval: D′ stands; no "open it once with
-1.6.1"; its residual that the remedy cannot work for a source-built database): FOLLOWED. O284 item 2 ("the
-wording says what is true"): FOLLOWED. O7 (the maintainer's naming ruling; its mechanism refuted and
-rebuilt by O279, O280 and O281): UNTOUCHED — nothing is reordered, so nothing is escalated. The
-maintainer's 1.0.0 decision: FOLLOWED.
-
-**Decided shape: (a), each text naming what it guarantees.**
-1. Every open-path refusal that can follow the rename, the schema batch or the initialisers stops saying
-   "Nothing was written" and names what its path leaves as found. The sites, the union of both runs: the
-   store's `answer()` `Orphaned` arm (2682); `foreign_race` (4461-4466); both `settle_foreign` texts
-   (4507-4514, 4517-4524); `init_chain`'s re-adoption race (6452-6456); `chain::writes`'s two texts
-   (`chain.rs` 322-337, reached through `judge_chain` at 4632); and the vault crate's `ManifestMoved`
-   (~424), `StagedLost` (2262-2269) and `absent()` (2364-2384), reached from the same lock path through
-   `license_promotion`, `anchored_head` and `promote_licensed`. `refuse_before_effect`'s "The rotation
-   reconcile wrote nothing: …" (4544-4545) already says what it guarantees and stays.
-2. One shared constant carries the guarantee every site has: the `audit` rows and `chain_meta` are as
-   found (no step before either site appends a record; `init_chain` judges before it creates
-   `chain_meta`, and `adopt_empty_chain`'s lock rolls the table back on a refusal). The lock-path sites
-   add `vault.json`, `vault.json.next` and the key-generation marker as found: nothing acts before their
-   judgement and the lock rolls the marker back. The `init_chain` sites do not claim those three, because
-   this open's own reconcile may have promoted a staged manifest or re-seeded the marker before them. No
-   text claims the `-wal` is as found: the legacy rename's TRUNCATE checkpoint runs first.
-3. The vault-crate texts are reworded so they stay true on their non-open callers too (the anchor door,
-   `verify`).
-4. The `Orphaned` remedy names both readings it gives: an edited or rolled-back vault — restore it from a
-   backup that verifies; a database a source build older than 0.19.0 wrote and no 1.x build opened — no
-   supported path (O303, 2026-10-06; `UPGRADING.md`). Text only; nothing new is served.
-5. A source gate counts every "Nothing was written" literal in the store and vault crates' production code
-   against an allowlist with reasons (O80: counted against the code), so a site neither run found — store
-   `lib.rs` 910, 931, 6008, 7545, `chain.rs` 275 among the candidates — is classified rather than missed.
-
-**Where the two runs disagreed, and what settled it.** Run 1 proposed ONE constant claimed true at every
-site; run 2 per-site subsets. Settled for per-site subsets with a shared core (item 2), by reading
-`reconcile_rotation` (4349-4446): its ACT block promotes, removes a stage and commits a marker before
-`init_chain` runs, so at the `init_chain` sites "`vault.json`, `.next` and the marker as found" is not
-guaranteed. The site lists differed: run 1 missed the vault-crate texts, run 2 missed `chain::writes`'s;
-the union stands, and item 5's gate keeps it complete.
-
-**Options that lost, with their cost.**
-- (b) Judge first: a second, schema-tolerant judge or a judgement inside `migrate_db_filename`'s exclusive
-  hold — a second implementation of O296's one judgement and a reorder of the stretch O279/O281 pin — for
-  a population 1.0.0 withdrew, and it would still leave the `init_chain` sites false.
-- (a) by plumbing what this open did (the security lenses: the rename's outcome, `schema_version` before
-  and after): true, but new plumbing that becomes its own thing to gate, threaded into typed refusals one
-  of which (`ManifestTampered`) carries no text, for what the rename's own warning already logs.
-- (c) Leave it: a false sentence in an integrity verdict, which O303 itself listed under "fails silently".
-
-**Claims refuted, the brief's first.** The brief lists `refuse_before_effect`'s staged text among the false
-ones; it is scoped and true. The brief misses the vault-crate texts, `foreign_race`, `init_chain`'s race
-and `chain::writes`. Its "on an already-migrated 1.x database these are no-ops by reading" holds only at
-1.7.0's schema. The population is wider than source builds: any refused writable open of a vault still
-named `palace.db` (1.0.0 to 1.4.x, never opened by 1.5.0 or later) runs the TRUNCATE checkpoint and the
-rename first, and `idx_audit_record_id` first ships in `v1.1.0` (`53949bd`, after the `v1.0.0` tag). The
-filing's "(5185-5262)" and O303's 2026-10-06 "(lib.rs 5173-5262)" overstate for the source-built
-population, which has no keycheck marker before `cc0e1c7` and so refuses at `reconcile_rotation` (5233),
-before the initialisers; both records are corrected beside, never in place. The memory lens's "every
-pre-judgement effect is evidence-neutral": the TRUNCATE checkpoint can discard superseded WAL frames, which
-is why no text claims the `-wal`.
-
-**Probes owed (build gates; the text is chosen by reading).** Two fixtures, each run on `781b5b9` and on the
-build, each naming its site with a pause witness: (1) the lock path — `palace.db`, the keycheck row
-deleted, `chain_meta` dropped, `idx_drawers_room` and `idx_audit_record_id` dropped, a non-empty `-wal`;
-(2) the fast path — `palace.db`, `idx_audit_record_id` dropped, the marker kept. Each records file names,
-`sqlite_schema` and every file's SHA-256, asserts the narrowed text and the absence of "Nothing was
-written", asserts what the text claims (`vault.json`'s bytes, the `audit` rows and tags, `chain_meta` and,
-at the lock path, the marker and `.next`, as found), and pins the rename and the indexes as effects the text
-does not deny. On the read-only posture both show no rename and a true text. P-1x322 (a `v1.0.0`
-release-built vault) is the cheaper real-population check; P-SRC322 only if the source-built population is
-revisited.
-
-**Dissent.** The security lenses of both runs would plumb what this open did; not adopted, for the cost
-above.
-
-**Fails silently if** the only fixture is `to_v1` plus `DROP TABLE` (marker kept, `vault.db`, both indexes
-present), which reaches the `init_chain` site and exercises none of the effects; a posture-blind rewording
-is false on the read-only posture; one site is reworded and not the others; a vault-crate text stops being
-true on the anchor or `verify`; O296's pinned `Want` fragments move without the record beside them.
-
-**What remains.** D′'s residual (O303, 2026-10-06): a source-built database is refused as integrity for
-what is really age. Unchanged; item 4 only stops the remedy pointing that reader at a backup that cannot
-help.
-
-**Versioning.** PATCH, text only. No `UPGRADING.md` entry is owed.
-
 ### O323 — unmeasured: a genesis manifest put back beside an emptied audit table may be adopted as a fresh vault's empty chain
 
 **Filed 2026-10-06 by O303's ruling of that day (its security lens; not verified by the refuter).** D′'s
@@ -46381,7 +46556,10 @@ an A2- and O241-class pair restore, the same under D′ and C.
 — then rule whether a verify leg owes each drawer its record. **Gate**: as the measurement rules; until
 then this entry is the record that the case is unmeasured.
 
-**Relations:** shares a question with O213 — the state this entry measures reads as the empty chain there and gets that entry's refusal text.
+**Noted 2026-10-12 by O213's build.** On the read-only posture the empty chain now answers
+`ReadOnlyNoAnchoredWrite` beside a *Fresh* manifest and `ManifestTampered` beside a *Mixed* or
+*History* one; this entry's state (a genesis manifest put back beside an emptied `audit`) is the
+*Fresh* case and gets that text, whose second reading names it.
 
 #### PANEL RECORD 2026-10-08 — a probe decides first
 
@@ -48582,6 +48760,24 @@ on) and the two annotations.
 **Relations:** shares a diff surface with O325 — a digests asset uploaded before that entry's `verify`.
 
 **Relations:** shares a diff surface with O326 — the publishing jobs' permissions.
+
+### O-NEW-o213-1 — a dangling link at a vault's database name makes the writable open create the link's target outside the vault directory
+
+**Filed 2026-10-12 by O308's build, which measured its ruling's probe P-LINK.** Beside a manifest
+that records no anchored write, a link at `vault.db` whose target does not exist reads as absent —
+to `DbLayout::of` and to O308's survey, which follow links as SQLite does — so the writable connect
+grants `SQLITE_OPEN_CREATE` and SQLite creates the TARGET: measured on the build, one `stats` made a
+126,976-byte database at the link's target outside the vault directory, and a `remember` then wrote
+there. The same happened before O308. Beside a manifest that records history the door refuses it,
+with nothing created (pinned by `absent_tests::o308_a_dangling_link_at_the_database_name`, which
+also pins the fresh arm as a cost).
+
+**Shape, for a ruling**: follow the link, as O279's gate G8 opens a linked database and as today, or
+refuse a link at a database name on the open path, as O283 refuses links on restore and O291 on
+delete. O308's ruling names it the maintainer's ratification of O283's extension.
+
+**Gate**: a link at `vault.db` (dangling and resolving), beside a fresh and a recorded manifest, on
+both postures: the ruled answer, and no file created outside the vault directory.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

@@ -3051,3 +3051,196 @@ fn o287_export_help_and_serve_mcp_into_a_closed_reader() {
     assert_eq!(code_of(&out), 0, "{out:?}");
     no_panic(&out);
 }
+
+/// Every entry of a vault directory, by name, with a regular file's bytes.
+fn vault_files(home: &TempDir, vault: &str) -> std::collections::BTreeMap<String, Vec<u8>> {
+    std::fs::read_dir(home.path().join("vaults").join(vault))
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            (
+                e.file_name().to_string_lossy().into_owned(),
+                std::fs::read(e.path()).unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+/// The manifest's MAC-covered `(writes, chain_head_hex)`.
+fn manifest_anchor(home: &TempDir, vault: &str) -> (u64, String) {
+    let raw = std::fs::read(home.path().join("vaults").join(vault).join("vault.json")).unwrap();
+    let m: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    (
+        m["writes"].as_u64().unwrap(),
+        m["chain_head_hex"].as_str().unwrap().to_string(),
+    )
+}
+
+/// **ROADMAP O213 and O308 through every surface a vault is opened by** (their
+/// rulings of 2026-10-08; probes P13 and P-FIRST). A vault `init` or `vault
+/// create` just made — a manifest at genesis and height 0, no database — is a
+/// posture refusal on the read-only posture: `--read-only search` and `stats`
+/// exit 1 where they exited 2 (A33's verdict); `--read-only vault list` exits 0
+/// naming it unavailable; `serve-mcp --read-only` and `serve-http --read-only`
+/// refuse to start on it with exit 1; a `--read-only` server serving another
+/// vault answers it 409 with no `class`. None of them creates a file. A first
+/// writable open leaves the manifest past genesis at both security levels, and
+/// once a vault records history, a deleted database is A33's verdict (exit 2)
+/// on BOTH postures and nothing is created — the writable open made the file and
+/// answered tampering.
+#[test]
+fn o213_o308_a_fresh_vault_and_a_deleted_database_on_every_surface() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    let fresh = vault_files(&home, "default");
+    assert_eq!(
+        fresh.keys().collect::<Vec<_>>(),
+        vec!["vault.json"],
+        "premise: init writes the manifest alone"
+    );
+    let posture = "records no anchored write";
+    for args in [
+        &["--read-only", "search", "x"][..],
+        &["--read-only", "stats"][..],
+        &["--read-only", "serve-mcp"][..],
+        &["--read-only", "serve-http", "--port", "1"][..],
+        &["serve-mcp", "--read-only"][..],
+    ] {
+        cmd(&home)
+            .args(args)
+            .write_stdin(Vec::new())
+            .assert()
+            .failure()
+            .code(1)
+            .stderr(predicate::str::contains(posture))
+            .stderr(predicate::str::contains("integrity failure").not());
+        assert_eq!(
+            vault_files(&home, "default"),
+            fresh,
+            "{args:?} wrote a file"
+        );
+    }
+    cmd(&home)
+        .args(["--read-only", "vault", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("default"))
+        .stdout(predicate::str::contains("unavailable"))
+        .stdout(predicate::str::contains(posture));
+    assert_eq!(
+        vault_files(&home, "default"),
+        fresh,
+        "vault list wrote a file"
+    );
+
+    // `/v1` on a read-only server serving ANOTHER vault: the fresh one is a
+    // class-less 409, and nothing is created.
+    cmd(&home)
+        .args(["vault", "create", "served"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args([
+            "remember",
+            "a note the served vault holds",
+            "--vault",
+            "served",
+        ])
+        .assert()
+        .success();
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let mut server = std::process::Command::new(assert_cmd::cargo::cargo_bin("undercroft"));
+    server
+        .env("UNDERCROFT_HOME", home.path())
+        .env_remove("UNDERCROFT_PASSPHRASE")
+        .args([
+            "--read-only",
+            "serve-http",
+            "--port",
+            &port.to_string(),
+            "--vault",
+            "served",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let mut server = server.spawn().expect("serve-http spawns");
+    let addr = format!("127.0.0.1:{port}");
+    let ready = (0..100).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::net::TcpStream::connect(&addr).is_ok()
+    });
+    let (code, body) = raw_http(&addr, "GET", "/v1/vaults/default/stats", "");
+    let (served_code, served_body) = raw_http(&addr, "GET", "/v1/vaults/served/stats", "");
+    let _ = server.kill();
+    let _ = server.wait();
+    assert!(ready, "premise: serve-http came up on {addr}");
+    assert_eq!(
+        served_code, 200,
+        "premise: the served vault answers: {served_body}"
+    );
+    assert_eq!(code, 409, "{body}");
+    assert!(body.contains(posture), "{body}");
+    assert!(
+        !body.contains("\"class\""),
+        "a posture refusal, not a verdict: {body}"
+    );
+    assert_eq!(vault_files(&home, "default"), fresh, "/v1 wrote a file");
+
+    // P-FIRST: a write-free writable command leaves the manifest past genesis,
+    // at both security levels.
+    cmd(&home)
+        .args(["vault", "create", "plain", "--level", "hmac-only"])
+        .assert()
+        .success();
+    let genesis = "0".repeat(64);
+    for vault in ["default", "plain"] {
+        assert_eq!(
+            manifest_anchor(&home, vault),
+            (0, genesis.clone()),
+            "{vault}"
+        );
+        cmd(&home)
+            .args(["stats", "--vault", vault])
+            .assert()
+            .success();
+        let (writes, head) = manifest_anchor(&home, vault);
+        assert!(writes > 0 && head != genesis, "{vault}: {writes} {head}");
+        cmd(&home)
+            .args(["--read-only", "stats", "--vault", vault])
+            .assert()
+            .success();
+    }
+
+    // O308: a vault that records history, its database deleted: both postures
+    // answer A33's verdict and nothing is created.
+    cmd(&home)
+        .args(["remember", "a note the manifest will record"])
+        .assert()
+        .success();
+    let dir = home.path().join("vaults/default");
+    for f in ["vault.db", "vault.db-wal", "vault.db-shm"] {
+        let _ = std::fs::remove_file(dir.join(f));
+    }
+    let deleted = vault_files(&home, "default");
+    for args in [
+        &["stats"][..],
+        &["--read-only", "stats"][..],
+        &["stats"][..],
+    ] {
+        cmd(&home)
+            .args(args)
+            .assert()
+            .failure()
+            .code(2)
+            .stderr(predicate::str::contains("has no database"))
+            .stderr(predicate::str::contains("chain height of"));
+        assert_eq!(
+            vault_files(&home, "default"),
+            deleted,
+            "{args:?} wrote a file"
+        );
+    }
+}
