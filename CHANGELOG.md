@@ -2425,7 +2425,9 @@ raw conversion error, where `5108dfa` answered all three. Such a row is now a ro
 verify (`CoveredRow::Undecodable`): the list reports it as `column-retyped` when either copy places
 it in the queue, the history omits its records, and the fence's unreadable arm decides it — deletable
 outside the queue, refused with its remedies inside it. `verify` and the retention sweep still raise
-the conversion error, as they did before this unit (filed as O427). A pending row whose tag
+the conversion error, as they did before this unit (filed as O427, and closed in this release by O269's
+arm below: `verify` names such a row and a sweep holds it; one whose retype also changed the bytes is
+`tag-fails` in the list, its tag being checked over them). A pending row whose tag
 verifies and whose content does not decrypt was refused with advice to use `allow`/`deny`, both of
 which refuse it; it now names the remedies and the filed explicit act (O426). The sweep's
 withheld reason named `allow`/`deny` for a row no ruling can act on; it now depends on the row. And
@@ -2766,12 +2768,25 @@ never changes. Three changes, two panels' ruling and the maintainer's:
   the read-only open's first content read, on a handle that is not `immutable=1`, are `the vault's database
   is damaged: …` — exit 2 on every command, 409 `class: "integrity"` on `/v1`. A read-only open no longer
   reopens such a file with `immutable=1`. Corruption met partway through another command stays exit 1, and
-  the next `verify` gives the verdict.
+  the next `verify` gives the verdict. A handle that DID open its database `immutable=1` (a write-protected
+  mount, a snapshot) reads with no lock and no WAL, so beside a writer its reads can tear: `verify` there
+  answers *the storage leg cannot be verified on this handle*, exit 1 and 409 with no class, instead of a
+  storage finding.
 
-`repair` runs `REINDEX` first: the ruling's remedy for index damage assumed its VACUUM rebuilt each index
-from its table, and measured, it copies the index as it stands. One fix was this build's own: FTS5's integrity pass reuses the index structure a connection cached, so a long-lived hmac-only handle beside another connection's writes reported its FTS table malformed on an intact vault; the leg reads each FTS5 table in its snapshot first.
+**`repair` does not mend index damage, and never did**: its VACUUM copies each index as it stands (SQLite's
+transfer optimization), which the ruling's remedy had assumed otherwise. The remedy is a restore of an archive
+taken before the damage. A rebuild was tried in this release's own build and taken out again by its review: it
+conforms an index to its table, and one byte changed on the table side of an indexed column produces exactly
+the lines index damage does, so a rebuild could turn an edit into a clean `verify` — whether a rebuild that
+first rules that out should exist is ROADMAP O-NEW-O269-2. Fixes that were this build's own: FTS5's integrity
+pass reuses the index structure a connection cached, so a long-lived hmac-only handle beside another
+connection's writes reported its FTS table malformed on an intact vault — the leg reads each FTS5 table in its
+snapshot first, and a table that read meets damage is its own finding while the check of the rest still runs,
+keeping whatever the check named before it stopped; and every write's head and height must now move exactly
+one `chain_meta` row, or the write refuses in the integrity class. ROADMAP O427 — `verify` and the retention
+sweep failing on a retyped drawer — is closed by the same arm: such a row is named, and a sweep holds it.
 
-Measured on the LoCoMo feed mined into 64 wings (5,440 sealed drawers): `verify` 117–141 ms against 86–113 ms; one index flip that the previous binary verified as OK now exits 2 and refuses the backup, and `repair` mends it; O406's later-0x1f move, made on 3,154 drawers by one keyless statement, exits 1 on the previous binary and names all 3,154 here. On realistic chunks the check is linear in the file and NOT cheap: at 102,000 drawers it adds 4.0–4.5 s to `verify` on a 218 MB sealed vault and 2.4–3.0 s on a 369 MB hmac-only one, and `backup create`'s pin and a rotation's hold grow by as much (ROADMAP O269 has the table; O258 the scheduling question). Gates: fourteen store tests — R3 on a live vault at both levels, a freelist, a table page and an `audit` page flipped, the retypes and a property gate over every TEXT column, the index-hidden policy replay, ten refused backups, a lost autoindex entry under a rotation, O406's move, and a writer beside a long-lived handle — each red with its arm reverted; and twenty-one `e2e` checks through the CLI, MCP and `/v1`, seventeen of which fail against the previous binary.
+Measured on the LoCoMo feed mined into 64 wings (5,440 sealed drawers): `verify` 117–141 ms against 86–113 ms; one index flip that the previous binary verified as OK now exits 2 and refuses the backup, `repair` leaves it (exit 2, SQLite's own check still naming the row) and restoring the archive taken before it brings `VERIFY OK`; O406's later-0x1f move, made on 3,154 drawers by one keyless statement, exits 1 on the previous binary and names all 3,154 here. On realistic chunks the check is linear in the file and NOT cheap: at 102,000 drawers it adds 4.0–4.5 s to `verify` on a 218 MB sealed vault and 2.4–3.0 s on a 369 MB hmac-only one, and `backup create`'s pin and a rotation's hold grow by as much (ROADMAP O269 has the table; O258 the scheduling question). Gates: eighteen store tests — R3 on a live vault at both levels with its restore, a freelist, a table page and an `audit` page flipped, the retypes and a property gate over every TEXT column, the index-hidden policy replay, ten refused backups, a lost autoindex entry under a rotation, O406's move, a writer beside a long-lived handle, an `immutable=1` handle, a head or height that moves no row, a damaged FTS5 table beside an index flip, and O427's two retyped rows under a sweep — each red with its arm reverted; and twenty-three `e2e` checks through the CLI, MCP and `/v1`, seventeen of which fail against the previous binary.
 
 PATCH inside the unreleased 1.7.0, by the 2026-09-08 ruling (the leg reports an existing silent defect) and
 the maintainer's of 2026-10-08 (exit 1's "an unreadable vault" means unreachable for a reason outside the

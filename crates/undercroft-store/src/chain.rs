@@ -299,11 +299,28 @@ pub(crate) fn seed_empty(conn: &Connection) -> Result<(), StoreError> {
 
 /// Advance the live head, inside the caller's transaction.
 pub(crate) fn set_head(conn: &Connection, regime: Regime, head: &str) -> Result<(), StoreError> {
-    conn.execute(
+    let changed = conn.execute(
         "UPDATE chain_meta SET value = ?1 WHERE key = ?2",
         params![head, regime.head_key()],
     )?;
-    Ok(())
+    one_meta_row(changed, regime.head_key())
+}
+
+/// **A committed head or height moved in exactly one row** (ROADMAP O269,
+/// item 4's assertion on the rows a rotation's phase 3 writes, applied to the
+/// two every write moves). Every caller has just read the row it updates, so
+/// any other count is a `chain_meta` whose key its own index no longer finds:
+/// the head would silently not advance while the rows did. Refused in the
+/// integrity class; the caller's transaction rolls back.
+fn one_meta_row(changed: usize, key: &str) -> Result<(), StoreError> {
+    if changed == 1 {
+        return Ok(());
+    }
+    Err(StoreError::IntegrityFinding(format!(
+        "audit chain: setting `chain_meta` {key:?} changed {changed} row(s), not one — the \
+         committed head's row is not where its key says it is, so this write is refused. Run \
+         `undercroft verify`, whose storage leg names the damage (ROADMAP O269)"
+    )))
 }
 
 /// The committed record count (`chain_meta.writes`).
@@ -343,11 +360,11 @@ pub(crate) fn writes(conn: &Connection) -> Result<u64, StoreError> {
 
 /// Set the committed record count, inside the caller's transaction.
 pub(crate) fn set_writes(conn: &Connection, writes: u64) -> Result<(), StoreError> {
-    conn.execute(
+    let changed = conn.execute(
         "UPDATE chain_meta SET value = ?1 WHERE key = ?2",
         params![writes.to_string(), WRITES_KEY],
     )?;
-    Ok(())
+    one_meta_row(changed, WRITES_KEY)
 }
 
 /// The incremental commitment digest: `SHA-256(domain ‖ (lp(record_id) ‖

@@ -13,7 +13,7 @@ use tempfile::TempDir;
 use undercroft_core::{Drawer, HashEmbedder};
 use undercroft_vault::{Access, SecurityLevel, VaultManager};
 
-use crate::{BackupOutcome, BadReason, StoreError, VaultStore, VerifyReport};
+use crate::{BackupOutcome, BadReason, RestoreOutcome, StoreError, VaultStore, VerifyReport};
 
 const VAULT: &str = "o269";
 
@@ -124,6 +124,59 @@ fn clone_root(src: &Path) -> TempDir {
     let dir = TempDir::new().unwrap();
     copy(src, dir.path());
     dir
+}
+
+/// The one embedder factory a restore opens its stage with.
+fn hash(
+    _: &undercroft_vault::Vault,
+) -> Result<Box<dyn undercroft_core::embed::Embedder + Send>, StoreError> {
+    Ok(Box::new(HashEmbedder))
+}
+
+/// Open `root`'s vault read-only with the `immutable=1` escalation FORCED, as
+/// O213's gate forces it (`absent_tests.rs`): at the ordinary read-only
+/// connection's pause a directory stands where its `-wal` would be, so its
+/// probe cannot read the database the ordinary way and the open escalates; at
+/// the escalation's pause the directory is gone. The main file must hold every
+/// commit — a `-wal` with frames would leave the handle blind, which is O213's
+/// question and not this one.
+fn open_immutable(root: &Path) -> Result<VaultStore, StoreError> {
+    use crate::open_pause::{self, Opener};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let wal = vdir(root).join("vault.db-wal");
+    assert!(
+        std::fs::metadata(&wal)
+            .map(|m| m.len() == 0)
+            .unwrap_or(true),
+        "premise: no -wal frames beside the main file"
+    );
+    let _ = std::fs::remove_file(&wal);
+    let escalated = Arc::new(AtomicUsize::new(0));
+    {
+        let (wal, escalated) = (wal.clone(), escalated.clone());
+        open_pause::set(
+            &vdir(root),
+            Arc::new(move |here| match here {
+                Opener::ReadOnly => {
+                    let _ = std::fs::create_dir(&wal);
+                }
+                Opener::Immutable => {
+                    let _ = std::fs::remove_dir(&wal);
+                    escalated.fetch_add(1, Ordering::SeqCst);
+                }
+                _ => {}
+            }),
+        );
+    }
+    let s = open_ro(root);
+    open_pause::clear(&vdir(root));
+    assert_eq!(
+        escalated.load(Ordering::SeqCst),
+        1,
+        "premise: the open escalated to immutable=1"
+    );
+    s
 }
 
 /// A raw connection that is not the store's, the way an offline writer or a
@@ -275,16 +328,31 @@ fn o269_the_read_only_first_content_read_is_a_named_door() {
 }
 
 /// **R3, the filing's measurement, on the LIVE vault, both levels** (ROADMAP
-/// O269 items 1, 4, 5 and 11). A byte flipped in `idx_drawers_room`'s page
-/// that every row leg passes: the storage leg names the index, `ok()` is
-/// false, `backup create` refuses it and a rotation refuses it before any
-/// work — its files byte-identical — and `repair`, whose VACUUM rebuilds every
-/// index from its table, brings `verify` back to OK. The premise IS the
-/// counterfactual: `rows_clean` is exactly the report `verify` returned before.
+/// O269 items 1, 4, 5 and 11, and the review of its first build). A byte
+/// flipped in `idx_drawers_room`'s page that every row leg passes: the storage
+/// leg names the index, `ok()` is false, `backup create` refuses it and a
+/// rotation refuses it before any work — its files byte-identical. **`repair`
+/// does not mend it, and must not**: its closing VACUUM copies each index's
+/// cells as they stand and rebuilds none (SQLite's transfer optimization), and
+/// the REINDEX this build first added would conform the index to its table —
+/// which, after a TABLE-side flip, reads exactly like this damage (item 7's
+/// laundering). The remedy is a restore: an archive taken before the damage
+/// restores and `verify` answers OK. The premise IS the counterfactual:
+/// `rows_clean` is exactly the report `verify` returned before.
 #[test]
-fn o269_r3_an_index_flip_fails_verify_backup_and_rotation_and_repair_mends_it() {
+fn o269_r3_an_index_flip_fails_verify_backup_and_rotation_and_a_restore_mends_it() {
     for level in [SecurityLevel::Sealed, SecurityLevel::HmacOnly] {
         let src = corpus(level, 40);
+        // The archive the remedy restores, taken while the vault was intact;
+        // `r3_flip` clones the installation, `backups/` included.
+        let archive = match open_rw(src.path())
+            .unwrap()
+            .backup(&src.path().join("backups"))
+            .unwrap()
+        {
+            BackupOutcome::Created(r) => r.name,
+            BackupOutcome::Refused(r) => panic!("premise ({level:?}): an intact archive: {r:?}"),
+        };
         // The state `verify` answered OK over: every row leg clean.
         let live = r3_flip(src.path(), "idx_drawers_room", |r| {
             rows_clean(r) && !r.storage.is_empty()
@@ -329,8 +397,28 @@ fn o269_r3_an_index_flip_fails_verify_backup_and_rotation_and_repair_mends_it() 
         );
         let mut s = open_rw(root).unwrap();
         let (r, _) = s.repair("test").unwrap();
-        assert!(r.ok(), "{level:?}: repair rebuilt the index: {r:?}");
-        assert!(s.verify().unwrap().ok());
+        assert!(
+            !r.ok() && r.storage.iter().any(|f| f.contains("idx_drawers_room")),
+            "{level:?}: repair rebuilds no index, so the finding stands: {r:?}"
+        );
+        drop(s);
+        assert_ne!(
+            integrity_check(root),
+            ["ok"],
+            "{level:?}: SQLite's own check agrees"
+        );
+        match crate::restore_archive(
+            &mgr(root),
+            &root.join("backups").join(&archive),
+            None,
+            true,
+            &hash,
+        ) {
+            Ok(RestoreOutcome::Restored(r)) => assert!(r.replaced, "{level:?}: {r:?}"),
+            other => panic!("{level:?}: the archive did not restore: {other:?}"),
+        }
+        assert!(open_rw(root).unwrap().verify().unwrap().ok(), "{level:?}");
+        assert_eq!(integrity_check(root), ["ok"], "{level:?}");
     }
 }
 
@@ -708,6 +796,178 @@ fn o269_a_re_key_that_changes_other_than_one_row_refuses() {
     }
 }
 
+/// **A committed head or height moves exactly one row** (ROADMAP O269's
+/// review, item 4's assertion applied to the two values every write moves).
+/// `set_head` and `set_writes` changed whatever their UPDATE matched and
+/// answered `Ok`, so a `chain_meta` whose key no longer finds its row let a
+/// write's rows commit while the head or the height silently did not move.
+/// Now any other count refuses in the integrity class, naming the key, and
+/// the caller's transaction rolls back. Counterfactual: `Ok(())` over zero
+/// rows.
+#[test]
+fn o269_a_head_or_height_that_moves_no_row_refuses() {
+    let c = rusqlite::Connection::open_in_memory().unwrap();
+    c.execute_batch("CREATE TABLE chain_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+        .unwrap();
+    let head = || crate::chain::set_head(&c, crate::chain::Regime::V1, "00ff");
+    let height = || crate::chain::set_writes(&c, 7);
+    for (what, key, r) in [
+        ("head", "\"head\"", head()),
+        ("height", "\"writes\"", height()),
+    ] {
+        match r {
+            Err(StoreError::IntegrityFinding(why)) => assert!(
+                why.contains("changed 0 row(s)") && why.contains(key),
+                "{what}: {why}"
+            ),
+            other => panic!("{what}: an UPDATE of no row answered {other:?}"),
+        }
+    }
+    c.execute_batch("INSERT INTO chain_meta VALUES ('head', 'x'), ('writes', '1');")
+        .unwrap();
+    head().unwrap();
+    height().unwrap();
+    let read = |k: &str| -> String {
+        c.query_row("SELECT value FROM chain_meta WHERE key = ?1", [k], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!((read("head"), read("writes")), ("00ff".into(), "7".into()));
+}
+
+/// **A corrupt FTS5 table read first does not cancel the check of the rest**
+/// (ROADMAP O269's review). The storage leg reads each FTS5 table before the
+/// pragma (the stale-cache fix); a corruption code met there was handed to
+/// the pragma's error arm, which made the WHOLE leg one line and skipped
+/// `integrity_check` — so an index flip elsewhere in the file went unnamed
+/// beside it. Now the read is its own finding and the check still runs.
+/// Counterfactual: one line, the FTS read's, and no `idx_drawers_room`
+/// (O269's first build).
+#[test]
+fn o269_a_corrupt_fts_table_read_first_does_not_cancel_the_check() {
+    let src = corpus(SecurityLevel::HmacOnly, 40);
+    let live = r3_flip(src.path(), "idx_drawers_room", |r| {
+        rows_clean(r) && !r.storage.is_empty()
+    })
+    .expect("premise: an R3 flip");
+    let root = live.path();
+    // The FTS5 table's content b-tree, its root page's type byte set to one
+    // no page has: the table scan the read makes meets it first.
+    let (ps, page) = (page_size(root), root_page(root, "drawers_fts_content"));
+    let mut bytes = std::fs::read(db(root)).unwrap();
+    bytes[(page - 1) * ps] = 0x00;
+    std::fs::write(db(root), &bytes).unwrap();
+    let premise = raw(root)
+        .query_row("SELECT rowid FROM drawers_fts LIMIT 1", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap_err();
+    assert!(crate::is_storage_corrupt(&premise), "premise: {premise}");
+    // Read-only: the writable open's FTS work meets the page past its named
+    // doors, the residual O269 states.
+    let r = open_ro(root).unwrap().verify().unwrap();
+    assert!(
+        r.storage
+            .iter()
+            .any(|f| f.starts_with("\"drawers_fts\" could not be read: ")),
+        "the read is its own finding: {:?}",
+        r.storage
+    );
+    assert!(
+        r.storage
+            .iter()
+            .any(|f| f.starts_with("integrity_check: ") && f.contains("idx_drawers_room")),
+        "and the check of the rest still ran: {:?}",
+        r.storage
+    );
+}
+
+/// **O427's gate, met by O269's ruling** (ROADMAP O427, closed by this build).
+/// O221's review measured it: `content` rewritten as TEXT and `meta_json`
+/// stored as a BLOB made `verify` and every retention sweep fail with the
+/// conversion error, one such row anywhere in the vault failing every sweep.
+/// Now `verify` names each with its reason — the TEXT content changed the
+/// bytes, so its tag fails over them; the BLOB meta kept them, so it is
+/// `Undecodable` — and a sweep names each unverifiable, destroys neither, and
+/// destroys the other expired members. Counterfactual: O221's walk, the
+/// conversion error from both.
+#[test]
+fn o427_two_retyped_rows_are_named_by_verify_and_held_by_the_sweep() {
+    for level in [SecurityLevel::Sealed, SecurityLevel::HmacOnly] {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let mut s = VaultStore::open(mgr(root).create(VAULT, level).unwrap()).unwrap();
+        let old: Vec<Drawer> = (0..6)
+            .map(|i| {
+                let mut d = drawer("old", &format!("an expired note {i} about the weir"), i);
+                d.meta.filed_at = "2020-01-01T00:00:00Z".into();
+                d
+            })
+            .collect();
+        s.upsert_many(&old).unwrap();
+        s.set_retention("old", None, 30).unwrap();
+        drop(s);
+        let c = raw(root);
+        assert_eq!(
+            c.execute(
+                "UPDATE drawers SET content = 'x' WHERE id = ?1",
+                [&old[0].id]
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.execute(
+                "UPDATE drawers SET meta_json = CAST(meta_json AS BLOB) WHERE id = ?1",
+                [&old[1].id],
+            )
+            .unwrap(),
+            1
+        );
+        drop(c);
+        let mut s = open_rw(root).unwrap();
+        let r = s.verify().expect("a verdict, never a conversion error");
+        assert!(!r.ok(), "{level:?}");
+        assert!(
+            r.bad_records
+                .iter()
+                .any(|b| b.record == old[0].id && b.reason == BadReason::TagFailed),
+            "{level:?}: {:?}",
+            r.bad_records
+        );
+        assert!(
+            r.bad_records.iter().any(|b| b.record == old[1].id
+                && b.reason == BadReason::Undecodable
+                && b.detail == "column meta_json holds a BLOB"),
+            "{level:?}: {:?}",
+            r.bad_records
+        );
+        let sw = s
+            .retention_sweep(false)
+            .expect("a sweep, never a conversion error");
+        let held: Vec<&str> = sw.unverifiable.iter().map(|u| u.id.as_str()).collect();
+        assert!(
+            held.contains(&old[0].id.as_str()) && held.contains(&old[1].id.as_str()),
+            "{level:?}: {sw:?}"
+        );
+        assert_eq!(sw.destroyed, 4, "{level:?}: the rest destroyed: {sw:?}");
+        assert!(!sw.ok, "{level:?}");
+        let left: Vec<String> = raw(root)
+            .prepare("SELECT id FROM drawers ORDER BY seq")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            left,
+            vec![old[0].id.clone(), old[1].id.clone()],
+            "{level:?}"
+        );
+    }
+}
+
 /// **The canonical builders moved onto bytes and their output did not**
 /// (O269 item 2). Pinned against the `format!` strings they replaced, written
 /// out here by hand — a round trip through the builder itself passes on any
@@ -973,6 +1233,175 @@ fn o269_o406s_later_separator_move_is_named_and_blocks_a_rotation() {
         BackupOutcome::Refused(_) => {}
         BackupOutcome::Created(r) => panic!("archived it: {r:?}"),
     }
+}
+
+/// **An `immutable=1` handle's storage findings are no verdict** (ROADMAP
+/// O269, the review of its first build). Such a handle reads the main file with
+/// no lock and no WAL, so beside a process still writing the vault a read can
+/// tear — P-O269g measured 721 of 61,742 bare reads answering `SQLITE_CORRUPT`
+/// on an intact vault — and SQLite's answer then says nothing about the file.
+/// The open's named doors excluded such a handle (option B); `verify`'s own
+/// leg did not: it put the pragma's rows and the codes a later leg met into
+/// the report, and the CLI exited 2 on them. Now `verify` on such a handle
+/// answers `StorageUnverifiable` — exit 1, 409 with no class — naming why,
+/// while the same file opened the ordinary way still gets the verdict, and an
+/// intact vault through the same posture still verifies. The damage is real
+/// here only so the outcome is deterministic: the handle cannot tell it from a
+/// torn read, which is the point (the race through a store handle is
+/// `p_o269g_verify_through_an_immutable_handle_beside_a_writer`, measured).
+/// Counterfactual: `Ok(report)` carrying the storage leg's finding.
+#[test]
+fn o269_an_immutable_handle_reports_the_storage_leg_not_verifiable() {
+    // An intact vault through the posture: a report, and a clean one.
+    let clean = corpus(SecurityLevel::Sealed, 40);
+    let r = open_immutable(clean.path()).unwrap().verify().unwrap();
+    assert!(
+        r.ok(),
+        "an intact vault verifies on an immutable handle: {r:?}"
+    );
+    let live = r3_flip(clean.path(), "idx_drawers_room", |r| {
+        rows_clean(r) && !r.storage.is_empty()
+    })
+    .expect("premise: an R3 flip");
+    let root = live.path();
+    let r = open_ro(root).unwrap().verify().unwrap();
+    assert!(
+        !r.ok() && r.storage.iter().any(|f| f.contains("idx_drawers_room")),
+        "control: the ordinary read-only handle gives the verdict: {r:?}"
+    );
+    match open_immutable(root).unwrap().verify() {
+        Err(StoreError::StorageUnverifiable(why)) => assert!(
+            why.contains("immutable=1")
+                && why.contains("idx_drawers_room")
+                && why.contains("Nothing was concluded"),
+            "{why}"
+        ),
+        other => panic!("an immutable handle gave a verdict: {other:?}"),
+    }
+}
+
+/// What [`immutable_beside_a_writer`] counted.
+#[derive(Debug, Default)]
+struct BesideAWriter {
+    /// `verify` calls made.
+    verifies: u64,
+    /// Answers that were `StorageUnverifiable`: a torn read met and no verdict.
+    unverifiable: u64,
+    /// Reports whose storage leg held a finding — each an integrity verdict on
+    /// an intact vault.
+    storage_verdicts: Vec<String>,
+    /// Reports with a finding in another leg only (O-NEW-O269-3's).
+    other_legs: u64,
+    /// Errors, by text: each is exit 1, never a verdict.
+    errors: Vec<String>,
+    /// The writer's saves.
+    saves: u32,
+    /// The fewest and the most records a report checked: whether the handle
+    /// saw the writer's rows at all.
+    checked: (u64, u64),
+}
+
+/// The P-O269g run through the store: `verify` on an `immutable=1` handle with
+/// an eight-page cache beside a writer, for `budget`.
+fn immutable_beside_a_writer(budget: std::time::Duration) -> BesideAWriter {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let dir = corpus(SecurityLevel::Sealed, 300);
+    let root = dir.path().to_path_buf();
+    let s = open_immutable(&root).unwrap();
+    s.conn.execute_batch("PRAGMA cache_size = 8").unwrap();
+    assert!(s.verify().unwrap().ok(), "premise: clean before the writer");
+    let stop = Arc::new(AtomicBool::new(false));
+    let writer = {
+        let (root, stop) = (root.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let mut w = open_rw(&root).unwrap();
+            let mut i = 0u32;
+            // Large saves, so pages split and the WAL checkpoints into the
+            // main file — the bytes an immutable reader reads — often.
+            let body = "the harbour ledger names cargo and its pier ".repeat(60);
+            while !stop.load(Ordering::Relaxed) {
+                i += 1;
+                w.upsert(&drawer("wg", &format!("{body} {i}"), 100_000 + i))
+                    .unwrap();
+                if i.is_multiple_of(4) {
+                    let _ = w.conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE)");
+                }
+            }
+            i
+        })
+    };
+    let mut run = BesideAWriter {
+        checked: (u64::MAX, 0),
+        ..Default::default()
+    };
+    let until = std::time::Instant::now() + budget;
+    while std::time::Instant::now() < until {
+        run.verifies += 1;
+        let answer = s.verify();
+        if let Ok(r) = &answer {
+            run.checked = (
+                run.checked.0.min(r.records_checked),
+                run.checked.1.max(r.records_checked),
+            );
+        }
+        match answer {
+            Err(StoreError::StorageUnverifiable(_)) => run.unverifiable += 1,
+            Ok(r) if !r.storage.is_empty() => run.storage_verdicts.push(r.storage.join("; ")),
+            Ok(r) if !r.ok() => run.other_legs += 1,
+            Ok(_) => {}
+            Err(e) => {
+                if run.errors.len() < 5 {
+                    run.errors.push(e.to_string());
+                }
+            }
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    run.saves = writer.join().unwrap();
+    println!("immutable verify beside a writer: {run:?}");
+    run
+}
+
+/// **P-O269g's setup, through the store** (ROADMAP O269, the review of its
+/// first build): an `immutable=1` handle opened over an intact vault, then a
+/// writer saving large drawers and checkpointing into the main file beside it,
+/// and `verify` run on the handle for `O269G_SECS`. Printed, never asserted:
+/// it is a measurement of whether the bare-connection race P-O269g measured
+/// reaches a store handle's `verify`, and every answer it can give is counted
+/// — `StorageUnverifiable` (a torn read met, no verdict), a storage finding
+/// (the verdict this build's review closed), a finding in another leg, an
+/// error, and the range of records the reports checked.
+///
+/// **Measured 2026-10-12 at O269's review**: with the default cache, 38,363
+/// verifies beside 4,857 saves; with the cache cut to eight pages, 16,773
+/// beside 1,920 and 7,416 beside 884. Not one torn read, and the last run's
+/// reports each checked exactly 306 records (the first's printed reports read
+/// the same): a long-lived `immutable=1` handle here never read the writer's
+/// rows at all. What it answered instead, on all but the
+/// first few verifies, was a report failing the CHAIN leg — the handle's rows
+/// replayed against an anchor the writer moved on disk — which is an
+/// integrity verdict on an intact vault, filed as O-NEW-O269-3. The race this
+/// build's review named is therefore pinned by
+/// `o269_an_immutable_handle_reports_the_storage_leg_not_verifiable`, whose
+/// damage is real only so its outcome is deterministic.
+#[test]
+#[ignore = "P-O269g through the store; run by name with --ignored (O269G_SECS)"]
+fn p_o269g_verify_through_an_immutable_handle_beside_a_writer() {
+    let secs: u64 = std::env::var("O269G_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    let run = immutable_beside_a_writer(std::time::Duration::from_secs(secs));
+    println!(
+        "P-O269g (store): {} verifies, {} unverifiable, {} storage verdicts, {} other-leg \
+         findings, errors {:?}",
+        run.verifies,
+        run.unverifiable,
+        run.storage_verdicts.len(),
+        run.other_legs,
+        run.errors
+    );
 }
 
 /// **P-O269g** (ROADMAP O269, the maintainer's ruling of 2026-10-08): does an

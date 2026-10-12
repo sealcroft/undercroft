@@ -3993,6 +3993,11 @@ fn store_err(e: StoreError) -> RestError {
         // one has been since A33 — a retry only meets the same bytes again. It
         // was a 500, the one class that tells an operator to retry.
         StoreError::StorageCorrupt(_) => 409,
+        // `verify` on an `immutable=1` handle met a storage finding it cannot
+        // tell from a torn read beside a writer (ROADMAP O269): the posture is
+        // wrong for the question — 409 with no class, `ReadOnlyUnmigrated`'s
+        // shape — and the CLI exits 1.
+        StoreError::StorageUnverifiable(_) => 409,
         // Two conditions of the vault's CURRENT state rather than of the
         // request, and neither a verdict about stored evidence (ROADMAP
         // O257): another process holds the vault (a rotation refused beside a
@@ -4318,6 +4323,13 @@ mod tests {
                 "StorageCorrupt",
                 || S::StorageCorrupt("database disk image is malformed".into()),
                 true,
+            ),
+            // ROADMAP O269: the same finding met on an `immutable=1` handle is
+            // no verdict — it cannot be told from a torn read beside a writer.
+            (
+                "StorageUnverifiable",
+                || S::StorageUnverifiable("integrity_check: row 3 missing from index".into()),
+                false,
             ),
             // Its neighbour, and the reason the set is not "everything that
             // answers 409": the vault is intact, the posture is wrong for it.

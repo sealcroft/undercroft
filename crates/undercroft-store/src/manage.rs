@@ -245,7 +245,7 @@ pub struct VaultStats {
     /// the tree, and it cannot have one: the replay starts at the constant
     /// `Vault::chain_genesis_hex()`, so storing a start head anywhere
     /// writable turns `DELETE FROM audit` plus two `chain_meta` writes into
-    /// a keyless total erasure that passes all nine legs of `verify`. A
+    /// a keyless total erasure that passes every leg of `verify`. A
     /// retention model is right for content and wrong for evidence —
     /// `forget_with_proof` destroys drawers and APPENDS tombstones, so
     /// erasure GROWS this number.
@@ -2209,17 +2209,14 @@ impl VaultStore {
     fn repair_stmts(&mut self, sent: &mut u64) -> Result<(u64, String, u64), StoreError> {
         // Re-embedding below bypasses upsert; drop any warmed cache.
         *self.emb_cache.borrow_mut() = None;
-        // **Every index rebuilt FROM ITS TABLE, first** (ROADMAP O269 item
-        // 11). The remedy the ruling names for damage `verify`'s storage leg
-        // reports in an index assumed the closing VACUUM rebuilt each index
-        // from its table; measured, it does not — VACUUM's transfer copies an
-        // index's b-tree as it stands, and `row N missing from index` survived
-        // `repair` unchanged. REINDEX does rebuild, so damage confined to an
-        // index is repaired — and, by the same mechanism, damage on the TABLE
-        // side of an indexed column is conformed rather than repaired, which
-        // is why `UPGRADING.md` names a restore as the alternative. First, so
-        // the fingerprint backfill below finds every row through `fp`'s index.
-        self.conn.execute_batch("REINDEX;")?;
+        // **No REINDEX here, and no index rebuilt anywhere in `repair`**
+        // (ROADMAP O269). Its closing VACUUM copies each index's cells as they
+        // stand (SQLite's transfer optimization), so index damage `verify`'s
+        // storage leg names survives a repair; and REINDEX would conform the
+        // indexes to a table-side flip that reads exactly like index damage —
+        // the laundering O269's item 7 refused for a restore's stage. Which
+        // remedy index damage gets is O-NEW-O269-2's ruling; today it is a
+        // restore.
         let missing: Vec<String> = self
             .conn
             .prepare("SELECT id FROM drawers WHERE fp IS NULL")?

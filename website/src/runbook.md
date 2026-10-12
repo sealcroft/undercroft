@@ -91,15 +91,23 @@ cannot read it (ROADMAP O269).
 
 `storage:` is SQLite's own `integrity_check` of the file the rows live in, run
 first (ROADMAP O269). `STORAGE: integrity_check: row 11 missing from index
-idx_drawers_room` is damage confined to an index: an index hides rows from
-every read that finds one through it — `forget` included — so a vault can
-answer every other leg clean and still serve wrong answers. `undercroft repair`
-rebuilds every index from its table and then `verify` is clean again; a
-rebuild conforms an index to its table, so for any line that is not an index's,
-or any doubt, restore the newest archive whose restore is accepted instead.
-`STORAGE: <leg> not run: database disk image is malformed` is a leg that met
-damaged pages partway; and a file damaged at its first pages refuses to open
-at all, exit 2 with *the vault's database is damaged*. Both mean restore.
+idx_drawers_room` names an index that disagrees with its table: an index hides
+rows from every read that finds one through it — `forget` included — so a vault
+can answer every other leg clean and still serve wrong answers. Restore the
+newest archive whose restore is accepted; a restore refuses one carrying the same
+damage. `undercroft repair` does not mend it, on purpose: its closing VACUUM
+copies an index as it stands, and rebuilding the index from its table would
+conform it to the table — while one byte changed on the TABLE side of an indexed
+column gives exactly this line, so a rebuild could turn an edit into a clean
+`verify` (ROADMAP O-NEW-O269-2 asks whether a rebuild that first rules that out
+should exist). `STORAGE: <leg> not run: database disk image is malformed` is a
+leg that met damaged pages partway; and a file damaged at its first pages
+refuses to open at all, exit 2 with *the vault's database is damaged*. All of
+them mean restore. One exception is not damage: a read-only handle that had to
+open its database with `immutable=1` — a write-protected mount, a snapshot —
+answers *the storage leg cannot be verified on this handle*, exit 1, rather
+than a storage line, because beside a process still writing the vault its reads
+can tear; run `verify` where the directory is writable, or on a copy.
 
 **A broken chain also stops work before you get here, and that is deliberate
 (ROADMAP O237).** Every read that DECIDES from an audit label — a

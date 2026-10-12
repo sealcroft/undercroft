@@ -1151,9 +1151,9 @@ pub(crate) fn storage_corrupt_at(
     }
     StoreError::StorageCorrupt(format!(
         "{} could not be read at {door}: SQLite answered \"{e}\", which says the file's own \
-         bytes do not hold together — a retry only meets them again. Nothing was written. \
-         Restore the newest backup whose restore is accepted; `undercroft repair` mends only \
-         damage confined to an index (UPGRADING.md, ROADMAP O269)",
+         bytes do not hold together — a retry only meets them again, and the open stops here. \
+         Restore the newest backup whose restore is accepted; `undercroft repair` rebuilds no \
+         index and mends none of this (UPGRADING.md, ROADMAP O269)",
         path.display()
     ))
 }
@@ -2175,6 +2175,19 @@ pub enum StoreError {
     /// the verdict, through its storage leg ([`VerifyReport::storage`]).
     #[error("the vault's database is damaged: {0}")]
     StorageCorrupt(String),
+    /// `verify` on a handle opened `immutable=1` met a storage finding — a
+    /// corruption code, or a row SQLite's `integrity_check` returned — that
+    /// such a handle cannot tell from a torn read of a file another process
+    /// is writing (ROADMAP O269; P-O269g measured 721 of 61,742 immutable
+    /// reads beside a writer raising `SQLITE_CORRUPT` on an intact vault).
+    ///
+    /// **Not a verdict, and so not the integrity family**: exit 1 on the CLI,
+    /// 409 with NO class on `/v1` — the posture is wrong for the question, as
+    /// `ReadOnlyUnmigrated` says of a schema. The message names what was met
+    /// and where `verify` can answer: a writable directory, or a copy taken
+    /// while nothing writes.
+    #[error("the storage leg cannot be verified on this handle: {0}")]
+    StorageUnverifiable(String),
     /// The named record does not exist. Kept apart from [`Self::Invalid`]
     /// so "you asked about something that is not here" has ONE answer
     /// across the surfaces: `forget` and `admission` raised it as
@@ -4270,6 +4283,14 @@ pub struct VaultStore {
     /// degradation from a prefiltered search to a full scan is a
     /// performance cliff a replica operator must be told about.
     read_only: bool,
+    /// This read-only store reads its file with `immutable=1` — the
+    /// escalation `connect_read_only` takes where the directory cannot hold a
+    /// wal-index — so its reads are not a consistent view of a file another
+    /// process writes (ROADMAP O269). Measured beside a writer: 721 of 61,742
+    /// such reads raised `SQLITE_CORRUPT` on an intact vault (P-O269g). So a
+    /// corruption code, or any storage finding, on this handle is no verdict
+    /// about the file: `verify` refuses as [`StoreError::StorageUnverifiable`].
+    immutable: bool,
     /// Which prefilter tiers have already announced their read-only
     /// fallback this session. The condition is per-store, not per-query, so
     /// warning per search would bury the one line that matters.
@@ -6117,6 +6138,9 @@ impl VaultStore {
             }
         }
         let mut store = Self::assemble(conn, vault, embedder, true)?;
+        // Kept for the handle's life, not only the open's: `verify` reads it
+        // (ROADMAP O269, the immutable handle's storage leg).
+        store.immutable = immutable;
         store.unhealed.extend(foreign_note);
         // What the manifest records, read BEFORE the database's tables and
         // chain are (O253's order, ROADMAP O213): read after, a first writable
@@ -7187,6 +7211,7 @@ impl VaultStore {
             // false and `open_inner_read_only` true, and every other door is
             // one of those two.
             read_only,
+            immutable: false,
             ro_prefilter_warned: std::cell::RefCell::new(std::collections::HashSet::new()),
             unhealed: Vec::new(),
             kg_secret: std::cell::RefCell::new(None),
@@ -11727,7 +11752,35 @@ impl VaultStore {
             report = Some(self.verify_in(snap, &anchor)?);
             Ok(())
         });
-        report_despite_the_end(ended, report)
+        let found = report_despite_the_end(ended, report);
+        if !self.immutable {
+            return found;
+        }
+        // **On an `immutable=1` handle a storage finding is no verdict**
+        // (ROADMAP O269). Such a handle reads the main file without its WAL
+        // and without a lock, so beside a writer a page can be torn mid-read —
+        // 721 of 61,742 reads raised `SQLITE_CORRUPT` on an intact vault
+        // (P-O269g) — and folding that into the report answered exit 2 and
+        // `ok: false`, after which `UPGRADING.md` tells the operator to
+        // restore. The leg is reported as not verifiable instead: exit 1, a
+        // class-less 409, naming what was met.
+        let unverifiable = |met: String| {
+            StoreError::StorageUnverifiable(format!(
+                "this handle reads {} with immutable=1 (its directory cannot hold the -shm \
+                 wal-index), without the WAL and without a lock, so beside a process still \
+                 writing the vault a read can tear, and SQLite's answer — {met} — says nothing \
+                 about the file. Nothing was concluded. Run `verify` where the vault's directory \
+                 is writable, or on a copy taken while nothing writes (ROADMAP O269)",
+                self.vault.db_path().display()
+            ))
+        };
+        match found {
+            Ok(r) if !r.storage.is_empty() => Err(unverifiable(r.storage.join("; "))),
+            Err(StoreError::Sqlite(e)) if is_storage_corrupt(&e) => {
+                Err(unverifiable(e.to_string()))
+            }
+            other => other,
+        }
     }
 
     /// [`verify`](Self::verify)'s legs, read in `snap` against `anchor` — the
@@ -11924,18 +11977,20 @@ impl VaultStore {
     /// an error: a file whose header does not parse cannot be checked at all,
     /// and that is the finding.
     fn storage_check_in(&self, snap: &chain::Snapshot<'_>) -> Result<Vec<String>, StoreError> {
-        let read = (|| -> Result<Vec<String>, rusqlite::Error> {
-            // **Every FTS5 table READ first, in this snapshot.** FTS5 caches
-            // its index structure on the connection and its integrity pass
-            // reuses that cache: measured, a long-lived handle whose last FTS
-            // read predated another connection's FTS write reported
-            // `malformed inverted index for FTS5 table main.drawers_fts` on an
-            // intact hmac-only vault — every `verify` and `backup create`
-            // beside a legitimate writer failed — while a fresh connection,
-            // or the same one after one ordinary read of the table, reported
-            // `ok`. A read through the table's own scan reloads the structure
-            // this snapshot holds; it skips no part of the check. Every
-            // FTS5 table the file names, whoever made it.
+        // **Every FTS5 table READ first, in this snapshot.** FTS5 caches its
+        // index structure on the connection and its integrity pass reuses that
+        // cache: measured, a long-lived handle whose last FTS read predated
+        // another connection's FTS write reported `malformed inverted index
+        // for FTS5 table main.drawers_fts` on an intact hmac-only vault —
+        // every `verify` and `backup create` beside a legitimate writer failed
+        // — while a fresh connection, or the same one after one ordinary read
+        // of the table, reported `ok`. A read through the table's own scan
+        // reloads the structure this snapshot holds; it skips no part of the
+        // check. Every FTS5 table the file names, whoever made it. A
+        // corruption code met here is a finding and the check still runs:
+        // damage to one table must not hide the rest of the file.
+        let mut found: Vec<String> = Vec::new();
+        let pre_read = (|| -> Result<(), rusqlite::Error> {
             let fts: Vec<String> = {
                 let mut q = snap.conn().prepare(
                     "SELECT name FROM sqlite_schema WHERE type = 'table' \
@@ -11952,34 +12007,60 @@ impl VaultStore {
             };
             for name in fts {
                 let quoted = name.replace('"', "\"\"");
-                snap.conn()
-                    .prepare(&format!("SELECT rowid FROM \"{quoted}\" LIMIT 1"))?
-                    .query([])?
-                    .next()?;
+                let read = snap
+                    .conn()
+                    .prepare(&format!("SELECT rowid FROM \"{quoted}\" LIMIT 1"))
+                    .and_then(|mut st| st.query([])?.next().map(|_| ()));
+                match read {
+                    Ok(()) => {}
+                    Err(e) if is_storage_corrupt(&e) => {
+                        found.push(format!("{name:?} could not be read: {e}"));
+                    }
+                    Err(e) => return Err(e),
+                }
             }
+            Ok(())
+        })();
+        match pre_read {
+            Ok(()) => {}
+            Err(e) if is_storage_corrupt(&e) => {
+                found.push(format!("the schema could not be read: {e}"))
+            }
+            Err(e) => return Err(e.into()),
+        }
+        // The rows the pragma returned are kept when it then stops on a
+        // corruption code: what it already named is still a finding, and the
+        // code is one more (ROADMAP O269's review — a pass that aborts in its
+        // last table must not erase what it said about the others).
+        let mut rows: Vec<String> = Vec::new();
+        let read = (|| -> Result<(), rusqlite::Error> {
             let mut stmt = snap.conn().prepare("PRAGMA integrity_check")?;
-            let mut rows = stmt.query([])?;
-            let mut out = Vec::new();
-            while let Some(r) = rows.next()? {
+            let mut q = stmt.query([])?;
+            while let Some(r) = q.next()? {
                 // The text SQLite chose, read by its type: an index or table
                 // name in a row is whatever the file's writer named it.
                 let v = r.get_ref(0)?;
-                out.push(match v {
+                rows.push(match v {
                     rusqlite::types::ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
                     other => value_kind(&other).to_string(),
                 });
             }
-            Ok(out)
+            Ok(())
         })();
         match read {
-            Ok(rows) if rows == ["ok"] => Ok(Vec::new()),
-            Ok(rows) => Ok(rows
-                .into_iter()
-                .map(|r| format!("integrity_check: {r}"))
-                .collect()),
-            Err(e) if is_storage_corrupt(&e) => Ok(vec![format!("integrity_check: {e}")]),
-            Err(e) => Err(e.into()),
+            Ok(()) if rows == ["ok"] => {}
+            Ok(()) => found.extend(rows.into_iter().map(|r| format!("integrity_check: {r}"))),
+            Err(e) if is_storage_corrupt(&e) => {
+                found.extend(
+                    rows.into_iter()
+                        .filter(|r| r != "ok")
+                        .map(|r| format!("integrity_check: {r}")),
+                );
+                found.push(format!("integrity_check: {e}"));
+            }
+            Err(e) => return Err(e.into()),
         }
+        Ok(found)
     }
 
     /// The orphan-label leg (`VerifyReport::orphan_labels`), read in the

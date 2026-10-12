@@ -120,7 +120,7 @@ fn rotation_refusal(blockers: &[String]) -> String {
          verifies; for a policy finding, re-declare the policy (`trust set`, \
          `retention set` or `retention clear`); for a storage finding or a row \
          no read takes, restore the newest backup whose restore is accepted \
-         (`undercroft repair` mends damage confined to an index).",
+         (`undercroft repair` rebuilds no index, so it mends none of these).",
         blockers.len()
     )
 }

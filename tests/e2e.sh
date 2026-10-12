@@ -2418,6 +2418,9 @@ o269_flip() {
 }
 check "O269: premise — the vault verifies before any damage" 0 "storage:         0" -- \
   env UNDERCROFT_HOME="$O269_HOME" "$BIN" verify
+# The archive the remedy restores, taken while the vault is intact.
+o269 backup create >/dev/null 2>&1
+O269_BK0="$(ls "$O269_HOME/backups" | grep '^default-' | head -1)"
 if O269_OFF="$(o269_flip "$O269_DB" idx_drawers_room)"; then
   echo "ok    O269: premise — one index byte flipped, integrity_check names a missing row (offset $O269_OFF)"; PASS=$((PASS+1))
 else
@@ -2484,16 +2487,26 @@ if [ "$(tail -1 <<<"$O269_C")" = 409 ] && grep -qF '"class":"integrity"' <<<"$O2
 else
   echo "FAIL  O269: /v1 on a file cut in half"; echo "$O269_C" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
-# The remedy `UPGRADING.md` names for damage confined to an index.
-check "O269: repair rebuilds the index from its table" 0 "integrity: ok" -- \
+# `repair` rebuilds no index: its VACUUM copies one as it stands, and a
+# rebuild would conform the index to a table-side edit that reads exactly like
+# this damage (O269's review; O-NEW-O269-2). The remedy `UPGRADING.md` names is
+# a restore.
+check "O269: repair leaves the index finding standing, exit 2" 2 "integrity: FAILED" -- \
   env UNDERCROFT_HOME="$O269_HOME" "$BIN" repair
-# Read by SQLite itself, not by the binary under test: a `repair` whose verify
-# could not see the index would print `integrity: ok` over it (it did).
+# Read by SQLite itself, not by the binary under test.
+O269_IC="$(sqlite3 "$O269_DB" 'PRAGMA integrity_check' 2>&1)"
+if grep -qF -- "missing from index idx_drawers_room" <<<"$O269_IC"; then
+  echo "ok    O269: and SQLite's own check still names the index after repair"; PASS=$((PASS+1))
+else
+  echo "FAIL  O269: after repair SQLite reports: $O269_IC"; FAIL=$((FAIL+1))
+fi
+check "O269: the archive taken before the damage restores" 0 "Restored $O269_BK0" -- \
+  env UNDERCROFT_HOME="$O269_HOME" "$BIN" backup restore "$O269_BK0" --force
 O269_IC="$(sqlite3 "$O269_DB" 'PRAGMA integrity_check' 2>&1)"
 if [ "$O269_IC" = "ok" ]; then
-  echo "ok    O269: and SQLite's own check agrees the index was rebuilt"; PASS=$((PASS+1))
+  echo "ok    O269: and SQLite's own check agrees the file holds together"; PASS=$((PASS+1))
 else
-  echo "FAIL  O269: after repair SQLite still reports: $O269_IC"; FAIL=$((FAIL+1))
+  echo "FAIL  O269: after the restore SQLite reports: $O269_IC"; FAIL=$((FAIL+1))
 fi
 check "O269: and the vault verifies again" 0 "VERIFY OK" -- \
   env UNDERCROFT_HOME="$O269_HOME" "$BIN" verify
@@ -2515,7 +2528,7 @@ check "O269: retyped back, the vault verifies" 0 "VERIFY OK" -- \
 # carries the storage findings on both surfaces — the one diagnostic about an
 # archive the operator cannot verify any other way (O269 item 6).
 o269 backup create >/dev/null 2>&1
-O269_BK="$(ls "$O269_HOME/backups" | grep '^default-' | head -1)"
+O269_BK="$(ls "$O269_HOME/backups" | grep '^default-' | grep -vxF -- "$O269_BK0" | head -1)"
 o269_flip "$O269_HOME/backups/$O269_BK/vault.db" idx_drawers_room >/dev/null
 check "O269: a restore refuses the archive and prints its storage findings, exit 2" 2 \
   "STORAGE: integrity_check: row" -- \

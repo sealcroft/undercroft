@@ -695,7 +695,13 @@ vault database. Run the new binary's `verify --read-only` before the upgrade.
 - `backup restore` of an archive with such damage prints the refused archive's
   findings after `What its verification found:`, every leg, where it printed one
   line; `/v1`'s 409 carries them as `report`.
-- `undercroft repair` runs `REINDEX` before its other work.
+- `verify` on a read-only handle that opened its database with `immutable=1`
+  (the start-up warning says so: a write-protected mount or a snapshot) exits 1
+  with `the storage leg cannot be verified on this handle: …` where SQLite's own
+  check, or a later leg, met damage; `/v1` answers 409 with no class. Such a
+  handle reads with no lock and no WAL, so beside a process still writing the
+  vault a read can tear, and it cannot tell that from damage. On a vault nothing
+  writes, run `verify` where its directory is writable, or on a copy.
 
 **Cause:** `verify` walked tags and the chain and never the structure the rows
 live in, so one flipped byte in an index page passed it while SQLite's
@@ -713,15 +719,17 @@ Corruption met PARTWAY through a command other than `verify` is still exit 1;
 the next `verify` gives the verdict. The full check costs time on every
 `verify`, `backup create` and rotation, measured in ROADMAP O269.
 
-**Fix:** if every `STORAGE:` line names an index (`… missing from index …`,
-`wrong # of entries in index …`), the damage is confined to that index:
-`undercroft repair --vault <name>` rebuilds every index from its table, then
-`verify` again. `repair` also re-embeds every drawer, which under a served
-embedder sends the corpus to its endpoint. A rebuild CONFORMS an index to its
-table, so damage on the table side of an indexed column is conformed rather than
-repaired: for any other line, or any doubt, restore the newest archive whose
-restore is accepted — a restore refuses an archive carrying the same damage and
-says why. A row named `UNREADABLE` with `holds a BLOB` or `holds TEXT` over bytes
+**Fix:** for any `STORAGE:` line, one that names an index (`… missing from
+index …`, `wrong # of entries in index …`) included, restore the newest archive
+whose restore is accepted — a restore refuses an archive carrying the same
+damage and says why. `undercroft repair` does not mend it, and that is
+deliberate: its closing VACUUM copies each index as it stands, so the lines
+survive it, and rebuilding an index from its table would CONFORM the index to
+the table — while one byte changed on the TABLE side of an indexed column
+produces exactly the lines index damage does, so a rebuild would turn that edit
+into a vault `verify` calls clean. Whether index damage should get a rebuild
+that first rules out the table side is an open question (ROADMAP
+O-NEW-O269-2). A row named `UNREADABLE` with `holds a BLOB` or `holds TEXT` over bytes
 that are otherwise intact can be retyped back with `sqlite3` (`CAST(col AS
 TEXT)`/`AS BLOB`), after a `cp -a` evidence copy; otherwise restore an archive, or
 `drawer delete` it. A database that does not open: restore an archive.
@@ -817,8 +825,10 @@ offline writer has touched — none on an intact one.
 - A drawer an offline writer RETYPED (a covered column stored with another
   storage type) is reported by `admission list` as `column-retyped` when
   either copy places it in the queue, is refused by every fence there, and is
-  deleted like any unreadable row outside it; `verify` and a retention sweep
-  still fail on it with a conversion error, as before (ROADMAP O427).
+  deleted like any unreadable row outside it. One whose retype also changed the
+  bytes is reported `tag-fails`, its tag being checked over them. `verify`
+  names it (exit 2) and a retention sweep reports it unverifiable, where both
+  failed with a conversion error (ROADMAP O269, which answers O427).
 
 **Cause:** ROADMAP O221. One function decided "pending" for every
 destruction fence by the clear `wing` column, so one offline flip of that

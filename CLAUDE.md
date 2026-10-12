@@ -920,9 +920,14 @@ Consequences that are binding, not advisory:
   `report_despite_the_end`). A database whose bytes do not hold together is
   `StoreError::StorageCorrupt`, the integrity family, at the open's named
   doors on a handle that is not `immutable=1` (the maintainer's option B);
-  met partway through any other command it stays exit 1. `repair` REINDEXes
-  first: its VACUUM copies an index as it stands, so it never rebuilt one,
-  which the ruling had assumed.
+  met partway through any other command it stays exit 1. On an
+  `immutable=1` handle `verify` answers `StorageUnverifiable` (exit 1, 409
+  with no class) instead of a storage finding: such a handle cannot tell
+  damage from a read a writer tore. `repair` rebuilds no index — its VACUUM
+  copies each as it stands, which the ruling's item 11 assumed otherwise, and
+  a REINDEX would conform an index to a table-side edit that reads exactly
+  like index damage — so index damage is a restore's (a rebuild is
+  O-NEW-O269-2's question).
   **The first leg is `bad_records`, a `Vec<BadRecord>` since O231**: a record
   id and a `BadReason` — a failed HMAC, or a drawer whose HMAC VERIFIES over
   covered meta that does not parse, which `verify` counted and reported in no
