@@ -2713,7 +2713,7 @@ impl Tenancy {
         // and no chain record appended; a held row that fails its tag is 409
         // `integrity` through `store_err`. The status stays the documented 201
         // either way — any other status for a repeat moves a documented
-        // contract, so it is a 2.0.0 question, ROADMAP O-NEW-O236-1.
+        // contract, so it is a 2.0.0 question, ROADMAP O402.
         Ok((
             201,
             Body::Json(json!({

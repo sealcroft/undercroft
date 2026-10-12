@@ -2,9 +2,9 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and thirty-three fixes. The witness
+MINOR: one new capability, backward compatible, and thirty-nine fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Seven fixes change what a deployment must do: every process writing a
+start-up. Nine fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
@@ -13,12 +13,20 @@ vault's embedder environment and refuses under `--read-only` (O268); a
 restore refuses over a symbolic link (O283); a vault delete refuses while
 any other process has the vault open, a replica included (O291);
 `--read-only backup create`, `bundle keygen` and `bundle sign-keygen` exit 1
-instead of writing (O212); and a command whose stdout reader leaves early
-exits 141 where it panicked with 101 (O287) — all in `UPGRADING.md`, beside
-O279's note that a filesystem whose inode numbers are not stable now refuses
-every open (which `config check` pre-flights), O255's note that a destruction now
-holds the write lock for as long as it runs and O256's that an archive taken by an
-older release beside a writer may be torn. (This line said "one fix" while O243 and
+instead of writing (O212); a command whose stdout reader leaves early
+exits 141 where it panicked with 101 (O287); the systemd unit template runs
+`init` before it serves and waits for its data directory's mount, so a mount that
+fails at boot leaves the unit failed rather than restarting it (O200); and
+`forget`, `admission deny` and `retention sweep` read `--sign` before they
+destroy, so a bad identity exits 1 even where nothing would be destroyed, and a
+sweep that is not clean and cannot write `--out` exits 2 (O262) — all in
+`UPGRADING.md`, beside O279's note that a filesystem whose inode numbers are not
+stable now refuses every open (which `config check` pre-flights), O255's note that
+a destruction now holds the write lock for as long as it runs, O256's that an
+archive taken by an older release beside a writer may be torn, O303's that a
+vault whose `chain_meta` has lost its committed head or its height is refused
+instead of adopted, and O236's that a repeated tunnel create, or an import, over a
+tunnel row edited offline exits 2. (This line said "one fix" while O243 and
 O246 were both below it; corrected with O247. It said "nine" until O268,
 "ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
 until O279, which closed four entries, "seventeen" until O281, "eighteen" until O284,
@@ -26,10 +34,13 @@ until O279, which closed four entries, "seventeen" until O281, "eighteen" until 
 "twenty-two" until O290, "twenty-three" until O291, "twenty-four" until O296,
 "twenty-five" until O304 — O303 should have made it twenty-six and did not, which O304 found
 by counting the entries — "twenty-seven" until O305, "twenty-eight" until O309, "twenty-nine"
-until O314, "thirty" until O212 and "thirty-one" until O287, which closed two entries; it said
-"Three fixes change what a deployment must do" until O283 made it four,
-"Four" until O291 made it five, "Five" until O212 made it six, and "Six"
-until O287 made it seven.)
+until O314, "thirty" until O212, "thirty-one" until O287, which closed two entries, and
+"thirty-three" until train 1's integration, which closed six — O331, O199, O200, O177,
+O236 and O262; it said "Three fixes change what a deployment must do" until O283 made
+it four, "Four" until O291 made it five, "Five" until O212 made it six, "Six"
+until O287 made it seven, and "Seven" until train 1 made it nine (O200, O262). O303's
+note was missing from it from O303 until train 1's integration, which found it by reading
+`UPGRADING.md`'s entries against this line.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -1661,7 +1672,7 @@ and the leg read the row as written after its destruction. Measured on a copy wi
 still served. This fix closes that: a repeat appends nothing and the finding stands. **A vault a
 1.6.0 or 1.6.1 binary wrote may already hold such a hidden resurrection** — the records it appended
 stay, the trail being append-only — and today's `verify` does not see one; finding them is filed as
-O-NEW-O236-2, whose shape reads the laundered row's tag sitting only below its tombstone.
+O403, whose shape reads the laundered row's tag sitting only below its tombstone.
 
 Now the insert's own row count decides, inside the transaction that would append: a create that
 inserted nothing appends nothing and anchors nothing, and `create_tunnel` returns
@@ -1669,13 +1680,13 @@ inserted nothing appends nothing and anchors nothing, and `create_tunnel` return
 and `undercroft tunnel create` answer a repeat with `already exists — nothing was written` (still a
 success: exit 0, `isError: false`); `POST /v1/vaults/{id}/tunnels` adds `"created"` to its body and
 keeps its documented 201 — any other status for a repeat moves that documented answer, so it is
-filed as a 2.0.0 question, O-NEW-O236-1; and both imports say how many tunnels were new — `N
+filed as a 2.0.0 question, O402; and both imports say how many tunnels were new — `N
 tunnel(s) (k new, m already present)` on the CLI, an additive `tunnels_new` beside an unchanged
 `tunnels` on `/v1`, whose record count the orchestrator's migration still compares with the
 export's. "Already exists" is said only after the stored row verifies under the vault's key: a row
 edited offline is the integrity verdict (exit 2, 409 `integrity`, naming `tunnel/{id}`), with nothing
 written — never "nothing was written" over a tampered row. An import meeting one stops there; it
-does not yet repair it as it would a drawer (O-NEW-O236-3), and `tunnel delete` then the import
+does not yet repair it as it would a drawer (O404), and `tunnel delete` then the import
 again restores it. The name guard and the label screen still run first, so a repeat whose label the
 screen now flags is refused as before. The records 1.6.x appended stay where
 they are, because the trail is append-only, which is also why tunnels keep the version leg's
@@ -1932,7 +1943,7 @@ writing nothing where the default vault exists, and fails only where `serve-http
 observability change therefore needs no `UPGRADING.md` entry. The unit's does, once an operator copies
 the new template: a data-directory mount that fails at boot now leaves the unit failed rather than
 looping until the directory appears. Filed from the measurement: init's error over a `vaults/default` it
-cannot create names no path (O-NEW-O199-1).
+cannot create names no path (O398).
 
 ### One loopback predicate for a listen host, and `--host ::1` still starts without a token (O177)
 
@@ -1967,9 +1978,9 @@ vault, a tokenless `--host ::1` server answered `/v1` search over `[::1]`, while
 
 PATCH inside the unreleased 1.7.0: no surface's answer changed, so `UPGRADING.md` owes nothing and
 `config check` has nothing new to detect. Three defects found on the way are filed rather than fixed:
-the banner prints `http://::1:<port>`, which no client accepts; a bare `::1` passes both
-listen-address pre-flights and then dies at the orchestrator's bind; and `serve-http` opens the vault
-before it applies its bind rule.
+the banner prints `http://::1:<port>`, which no client accepts (O399); a bare `::1` passes both
+listen-address pre-flights and then dies at the orchestrator's bind (O400); and `serve-http` opens
+the vault before it applies its bind rule (O401).
 
 ### A destruction's receipt survives a bad `--sign` or an unwritable `--out` (O262)
 
@@ -2050,7 +2061,7 @@ refused twice with all 85 drawers kept, then with `--out` a directory destroyed 
 29,919-byte receipt on stdout that verifies; a deny and a 170-drawer sweep the same, both verifying;
 `VERIFY OK` on both vaults.
 
-Filed beside it: O-NEW-O262-1 — a destruction through the orchestrator whose receipt exceeds the
+Filed beside it: O405 — a destruction through the orchestrator whose receipt exceeds the
 256 MiB body ceiling is destroyed on the engine and its receipt refused at the control plane
 (288 to 289 bytes per drawer on `/v1`, measured in two runs, so about 930,000 drawers in one
 destruction).

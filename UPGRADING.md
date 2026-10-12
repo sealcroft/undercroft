@@ -496,7 +496,7 @@ vault.
 (ROADMAP O236), and "it already exists" is a claim about the stored row, so the
 row is verified before the claim is made. An import stops at that record, after
 the drawers and graph records before it have landed: it does not yet repair a
-tampered tunnel row as it repairs a tampered drawer (ROADMAP O-NEW-O236-3).
+tampered tunnel row as it repairs a tampered drawer (ROADMAP O404).
 
 **Fix:** run `undercroft verify`, then `undercroft tunnel delete <id>` for the
 tunnel it names — the delete does not read the row and records the deletion —

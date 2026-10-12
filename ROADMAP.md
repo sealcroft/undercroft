@@ -4012,7 +4012,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**427** of the **442** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**435** of the **450** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4375,7 +4375,7 @@ The carrier is settled by the reference-holder and mixed-version evidence, the d
 - **Keep O163 for 2.0.0 as M3.** Every legacy vault, mirror and archive refuses until FORCE plus `repair`, for a defect a fix can close, and O154 bars its stated `config check` arm.
 - **Leave it filed.** The swap stays silent for every deployment that does not declare a name and rename it on every swap — and for declared-name deployments that swap a file under a kept name.
 
-### O-NEW-O236-1 — `POST /v1/vaults/{id}/tunnels` answers 201 for a create that created nothing
+### O402 — `POST /v1/vaults/{id}/tunnels` answers 201 for a create that created nothing
 
 **Filed 2026-10-08 by O236; placed under 2.0.0 by that unit's independent review.** O236 makes a
 repeated tunnel create write nothing and say so: `create_tunnel` returns `TunnelOutcome { id,
@@ -6974,7 +6974,7 @@ repeated id is named once).
 opens, and a failure after the destruction prints the receipt on stdout before
 the command fails. A receipt lost between the COMMIT and its delivery is still this
 entry's residual, and O262's build filed one more way to lose it, at the
-orchestrator's body ceiling (O-NEW-O262-1).
+orchestrator's body ceiling (O405).
 
 ### O256 — CLOSED 2026-09-25: `backup create` archives exactly the state its verify judged — the pages copied inside the verified snapshot, beside the manifest those rows were verified against, published by one rename
 
@@ -14245,14 +14245,14 @@ the three hosts.
   as test code.
 
 **Found while building it, filed:**
-- O-NEW-O177-1: the banner and the refusal print an IPv6 `--host`
+- O399: the banner and the refusal print an IPv6 `--host`
   unbracketed, and so does the orchestrator's banner for an unbracketed
   address. `http://::1:18811` is what an operator copies, and `curl` refuses
   it, exit 3. Three of the assertions above pin today's text and must invert
   with that fix.
-- O-NEW-O177-2: a bare `::1` passes both listen-address pre-flights as host
+- O400: a bare `::1` passes both listen-address pre-flights as host
   `":"` and dies at the orchestrator's bind.
-- O-NEW-O177-3: `serve-http` resolves its bearer and its bind rule only after
+- O401: `serve-http` resolves its bearer and its bind rule only after
   opening the vault.
 
 ### O236 — CLOSED 2026-10-08: a tunnel create that inserted nothing appends nothing, and every surface that reaches it says the create was a no-op
@@ -14354,9 +14354,9 @@ of writes that never happened — and `verify` OK all the same, which is why the
 The self-import's other 2,720 `audit` rows on both binaries are O215's: the import re-stamps
 `added_by`, so every drawer is `replaced`, not this entry's.
 
-**What remains**: O-NEW-O236-1 (under `## 2.0.0`, moved there by the review below) — whether
+**What remains**: O402 (under `## 2.0.0`, moved there by the review below) — whether
 `POST …/tunnels` should answer something other than 201 for a repeat, which moves a documented
-answer; O-NEW-O236-2 and O-NEW-O236-3 (under `## Open`) — finding the resurrections 1.6.x's surplus
+answer; O403 and O404 (under `## Open`) — finding the resurrections 1.6.x's surplus
 records already hide, and an import repairing a tampered tunnel row.
 
 #### REVIEWED 2026-10-08 by an independent reviewer — the code correct; four findings in what it claimed and recorded and one gap, all mine, each fixed
@@ -14372,7 +14372,7 @@ this tree with the repeat's append put back (recompiled, the edit counted presen
 stays green; GREEN here. **The residual**: a vault a 1.6.0 or 1.6.1 binary wrote may
 already hold such a laundered resurrection, and today's `verify` cannot see it, the trail being
 append-only. It is not beyond reach — the laundered row's tag sits only in a write record BELOW the
-tombstone — so it is filed as work, O-NEW-O236-2, not stated as permanent.
+tombstone — so it is filed as work, O403, not stated as permanent.
 
 **2 (low) — the gap: "already exists" was decided by the id alone.** A row whose `to_wing` was edited
 offline answered `created: false` — "nothing was written" to an agent, "already present" to an import
@@ -14386,10 +14386,10 @@ an untouched tunnel's repeat as the control) and a CLI arm added to
 `import` exit 2 over an edited row, writing nothing). With the row check removed on the same copy,
 both fail — the store test on `Ok(created: false)` over the edited row, the CLI arm on `tunnel
 create`'s exit code — and the resurrection test stays green. **Not done, filed with its argument**: an import repairing such a row on O215's
-precedent (O-NEW-O236-3).
+precedent (O404).
 
 **3 (low)** — this record named the retired-handle classes wrongly; corrected in place above.
-**4 (low)** — O-NEW-O236-1 was filed under `## Open` as though a patch could answer it: `docs/AGENTS.md`
+**4 (low)** — O402 was filed under `## Open` as though a patch could answer it: `docs/AGENTS.md`
 documents the route as "201 with the tunnel id", so any other status for a repeat moves a documented
 contract, MAJOR by this file's test. Moved under `## 2.0.0`, citing `POST /v1/vaults` answering 409
 for a vault that exists. **5 (nit)** — the note beside O234 said a 1.7.0 vault's newest `tunnel/`
@@ -15012,7 +15012,7 @@ across it); when it does not, `serve-http`'s unlock fails anyway. So
 served, only the message changes, and `config check` has nothing to detect.
 
 **Found by the measurement and filed**: init's error names no path
-(O-NEW-O199-1).
+(O398).
 
 ### O200 — CLOSED 2026-10-08: `deploy/undercroft-server.service` runs `init` as its `ExecStartPre`, so a fresh install serves on its first start
 
@@ -15247,7 +15247,7 @@ and the reply is serialization (`unwrap_or_else(|_| json!({}))`), which cannot f
 for these derived structs, and the socket write, which is O255's stated residual.
 The orchestrator's `ops` prints the engine's body before any status check, and the
 consoles show the receipt they receive. One gap of the same kind was found there
-and filed: O-NEW-O262-1, a receipt past the 256 MiB body ceiling refused at the
+and filed: O405, a receipt past the 256 MiB body ceiling refused at the
 control plane after the engine destroyed.
 
 **Gates.** Four CLI integration tests (`tests/cli.rs`), RED on the unfixed tree for
@@ -17001,7 +17001,7 @@ deleted and written back offline is exactly arm 3's finding; a 1.6.x repeat crea
 `tunnel/{id}` ABOVE the tombstone, arm 3 read it as a newer write, and `verify` went from
 `ok=false` with one finding to `ok=true` with none (measured on a copy with the old append). A
 1.7.0 repeat appends nothing, so the finding stands. A vault 1.6.0 or 1.6.1 wrote may already hold
-such a laundered resurrection; finding it is filed as O-NEW-O236-2.
+such a laundered resurrection; finding it is filed as O403.
 
 ### O233 — CLOSED 2026-09-19: the audit chain binds each record's label and time, so a relabelled audit row no longer passes `verify`
 
@@ -36960,7 +36960,7 @@ rather than passes, which is safe and would be a new trap.
 - The new refusing state is reporting surface for a fix (the 2026-09-08 ruling).
 - **`UPGRADING.md` is not owed**: legacy rows carry no field and land as before, and nothing that runs today stops. CHANGELOG states the landing change.
 
-### O-NEW-O199-1 — an `undercroft init` that cannot make the default vault's directory says `File exists (os error 17)` and names no path
+### O398 — an `undercroft init` that cannot make the default vault's directory says `File exists (os error 17)` and names no path
 
 **Filed 2026-10-08 by O199, from its gate's own measurement.** With
 `vaults/default` a regular file, `init` exits 1 with
@@ -42106,7 +42106,7 @@ doctrine the old exit contradicted. The maintainer confirms it with the wording.
 client enumerating `verdict` meets a third value where it met a 409. `docs/AGENTS.md`'s documented exit-2 example and
 enumeration move with it. `undercroft config check` has nothing to detect.
 
-### O-NEW-O262-1 — a destruction through the orchestrator whose receipt passes the 256 MiB body ceiling is destroyed on the engine and its receipt refused at the control plane
+### O405 — a destruction through the orchestrator whose receipt passes the 256 MiB body ceiling is destroyed on the engine and its receipt refused at the control plane
 
 **Filed 2026-10-08 by O262's build; read in code, the per-drawer size measured,
 not executed at scale.** O262 read `/v1` and the orchestrator for the shape it
@@ -42458,7 +42458,7 @@ which changed nothing measurable at 40,000).
 
 **Relations:** sequenced after O258 — that entry's busy handler, and the typed refusal a refused writer receives, are what this entry's bound restates.
 
-**Relations:** shares a decision with O-NEW-O262-1 — the chunked shape would also bound a receipt's size, which that entry finds refused at the orchestrator's 256 MiB body ceiling after the engine destroyed, near 930,000 drawers (288 to 289 bytes each on `/v1`, measured).
+**Relations:** shares a decision with O405 — the chunked shape would also bound a receipt's size, which that entry finds refused at the orchestrator's 256 MiB body ceiling after the engine destroyed, near 930,000 drawers (288 to 289 bytes each on `/v1`, measured).
 
 **Relations:** shares a diff surface with O350 — rewriting the destroyed codes inside the destruction lock is a cost on the hold this entry bounds.
 
@@ -42466,7 +42466,7 @@ which changed nothing measurable at 40,000).
 here with O262 (a destruction's receipt is delivered before the next call). O262 closed under 1.7.0 the
 same day — the CLI now attempts a receipt's delivery before anything else is written — so the edge is
 no longer one between open entries and is not declared. The half a destruction through the orchestrator
-still owes is O-NEW-O262-1's, declared above.
+still owes is O405's, declared above.
 
 #### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
 
@@ -48266,7 +48266,7 @@ restated reason gets this file's backwards test.
 **Version class.** None for the recommended answer: governance text. The rejected option would change
 documented install contracts and owe `UPGRADING.md` and every install document.
 
-### O-NEW-O177-1 — `serve-http` prints an IPv6 `--host` unbracketed, so the URL its banner gives an operator is not a URL
+### O399 — `serve-http` prints an IPv6 `--host` unbracketed, so the URL its banner gives an operator is not a URL
 
 **Filed 2026-10-08 by O177's unit, which found it driving `--host ::1`
 through the release binary.**
@@ -48303,7 +48303,7 @@ strings), and `http.rs`'s
 `the_refuse_to_bind_rule_lets_every_loopback_host_through_without_a_token`,
 whose `::` row asserts `refusing to bind :::8765`.
 
-### O-NEW-O177-2 — a bare `::1` passes both listen-address pre-flights as host `":"` and dies at the orchestrator's bind
+### O400 — a bare `::1` passes both listen-address pre-flights as host `":"` and dies at the orchestrator's bind
 
 **Filed 2026-10-08 by O177's unit.**
 
@@ -48338,7 +48338,7 @@ value that binds, which breaks O160's strict-subset rule.
 Add an `e2e-orchestrator` arm in which the pre-flight and `serve` agree on
 `::1`. Counterfactual: drop the new refusal, and the first test names `::1`.
 
-### O-NEW-O177-3 — `serve-http` opens the vault before it resolves its bearer or applies its refuse-to-bind rule
+### O401 — `serve-http` opens the vault before it resolves its bearer or applies its refuse-to-bind rule
 
 **Filed 2026-10-08 by O177's unit.**
 
@@ -49621,7 +49621,7 @@ on) and the two annotations.
 
 **Relations:** shares a diff surface with O326 — the publishing jobs' permissions.
 
-### O-NEW-O236-2 — a vault 1.6.0 or 1.6.1 wrote may hold a resurrected tunnel that a surplus repeat record hides from `verify`
+### O403 — a vault 1.6.0 or 1.6.1 wrote may hold a resurrected tunnel that a surplus repeat record hides from `verify`
 
 **Filed 2026-10-08 by O236's independent review; measured for the mechanism, not for any real vault.**
 O234's arm 3 reports a row present after a newer destruction record. A 1.6.x repeat tunnel create
@@ -49649,7 +49649,7 @@ it) fails `verify` and blocks a rotation; create → delete → re-create, with 
 record, before and after a rotation, stays clean — the false-alarm sweep O234's ruling required,
 repeated for this arm.
 
-### O-NEW-O236-3 — an import over a tampered tunnel row refuses rather than repairing it, as it repairs a drawer
+### O404 — an import over a tampered tunnel row refuses rather than repairing it, as it repairs a drawer
 
 **Filed 2026-10-08 by O236's independent review, with the argument for not building it there.**
 Since O236's review a create over a stored tunnel row that fails its tag answers the integrity class

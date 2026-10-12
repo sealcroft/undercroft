@@ -2766,8 +2766,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1308 run,
-                                      # 17 #[ignore]d = 1325 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1332 run,
+                                      # 17 #[ignore]d = 1349 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2913,13 +2913,13 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (767 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (782 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (189 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (62 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
-bash tests/tls-pins.sh                # CA pins readable + both stacks start (31 checks).
+bash tests/tls-pins.sh                # CA pins readable + both stacks start (32 checks).
                                       # Every shipped pin, read as the ENGINE's uid.
                                       # Host-side
                                       # because it DRIVES docker: it brings the real
@@ -3139,7 +3139,7 @@ own teardown was the place it had not been applied. Gated by the
 `destructive compose scope` preflight, which requires every compose teardown
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the twenty-two host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the twenty-three host-side preflights
 and no suite**, which is what CI invokes. They read the release tags since
 O309: a `--depth 1` clone fetches them first, as CI's `preflight` job does. **A count the battery cannot trust is never compared to a published figure, and there are TWO ways to earn that (O97/O103): the suite EXITED NON-ZERO — `cargo test` aborts at the first failing target, so a numeric, replay-free count arrives over a fraction of them — or the reader disowned it with a `PREMISE FAILURE` marker. `count_untrustworthy` is the one place that question is answered, because it used to be answered twice and differently: the cargo arm guarded on the marker, the shell arm stripped it with a trailing `.*`, and neither looked at the exit code. It fails either way — a gate that cannot measure must not report clean — and the verdict names WHICH cause, because the message was written for a replay and told the reader to re-run a failure that was deterministic. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
@@ -3186,7 +3186,7 @@ code — including the post-run comparison of each suite's MEASURED check count
 against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
 and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
 request and a leg dropping from 370 checks to 3 was green. The flag skips the
-twenty-two preflights because the dedicated `preflight` job already runs them
+twenty-three preflights because the dedicated `preflight` job already runs them
 (twice since O314, the second time under Debian 12's mawk). **The shared readers — `test_summary`, `suite_summary`,
 `declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
 skipped block**, and that is not tidiness: with them inside, `--no-preflight`
