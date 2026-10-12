@@ -30,21 +30,23 @@
 //! derived a key no vault was sealed under, and the first unlock reported
 //! tampering; `vault create` under that key then split the installation.
 //!
-//! **A process derives a passphrase's key once** (ROADMAP O211), through a
-//! [`KeyCache`] it holds. The survey and the classification still run on every
-//! open, and the salt is still read from disk on every open; only the
-//! Argon2id output is kept, against the passphrase and the salt bytes that
-//! produced it, because it is a pure function of exactly those two.
+//! **A command derives a passphrase's key once** (ROADMAP O211), through a
+//! [`KeyCache`] its process holds, across the opens a [`KeyHold`] spans. The
+//! survey and the classification still run on every open, and the salt is
+//! still read from disk on every open; only the Argon2id output is kept,
+//! against a digest of the passphrase and the salt bytes that produced it,
+//! because it is a pure function of exactly those two.
 
 use crate::Access;
 use argon2::{Algorithm, Argon2, Params, Version};
 use hkdf::Hkdf;
 use rand::RngCore;
+use sha2::Digest;
 use sha2::Sha256;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -355,25 +357,55 @@ pub struct MasterKey {
 /// **What is cached is the derivation, never the decision.** [`plan`] still
 /// classifies the installation on every open, and `kdf.salt` is still read on
 /// every open; a held key answers only when BOTH inputs equal the ones it was
-/// derived from, compared in constant time. A deleted salt is still refused, a
-/// replaced one derives again, and a different passphrase never meets another
-/// passphrase's key. The key-file source never reaches this: `master.key` is
-/// read on every open, as before.
+/// derived from — the salt bytes, and a SHA-256 digest of the passphrase,
+/// compared in constant time over fixed lengths, so the comparison says nothing
+/// about the passphrase's length and the cache never keeps the passphrase
+/// itself. A deleted salt is still refused, a replaced one derives again, and
+/// a different passphrase never meets another passphrase's key. The key-file
+/// source never reaches this: `master.key` is read on every open, as before.
+///
+/// **A key is kept only while a [`KeyHold`] is alive.** An open with no hold
+/// derives, hands the key out and keeps nothing, so a command that opens once
+/// — `serve-mcp`, `mine`, `refine` — holds the master key exactly as long as
+/// its manager does, as before this cache existed. A command that opens more
+/// than once takes a hold across those opens, and the last hold to drop
+/// zeroizes the key. Forgetting a hold costs a derivation; it never keeps a
+/// key.
 ///
 /// One entry, because one installation has one salt; a second (passphrase,
 /// salt) replaces the first. The held key is a [`SecretKey`], zeroized when it
-/// is replaced or when [`forget`](Self::forget) drops it, and never written
-/// anywhere. `Debug` prints the count and nothing else.
+/// is replaced, when the last hold drops, or when [`forget`](Self::forget)
+/// drops it, and never written anywhere. `Debug` prints the count and nothing
+/// else.
 pub struct KeyCache {
     slot: Mutex<Option<Derived>>,
     runs: AtomicU64,
+    holds: AtomicUsize,
 }
 
 /// One derivation: both of its inputs and its output.
 struct Derived {
-    passphrase: Zeroizing<Vec<u8>>,
+    passphrase_digest: Zeroizing<[u8; 32]>,
     salt: [u8; SALT_LEN],
     key: SecretKey,
+}
+
+/// Keeps a [`KeyCache`]'s derived key across the opens made while it lives
+/// (ROADMAP O211). Holds nest; the last one dropped zeroizes the key.
+#[must_use = "a hold that is dropped at once keeps nothing"]
+pub struct KeyHold<'a> {
+    cache: &'a KeyCache,
+}
+
+impl Drop for KeyHold<'_> {
+    fn drop(&mut self) {
+        // The decrement comes before the slot's lock, and `derive` stores
+        // only while it sees a hold under that same lock, so a key stored by
+        // an open racing this drop is cleared here rather than left behind.
+        if self.cache.holds.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.cache.forget();
+        }
+    }
 }
 
 impl KeyCache {
@@ -383,12 +415,27 @@ impl KeyCache {
         Self {
             slot: Mutex::new(None),
             runs: AtomicU64::new(0),
+            holds: AtomicUsize::new(0),
         }
+    }
+
+    /// Keep the derived key across every open until the hold drops.
+    pub fn hold(&self) -> KeyHold<'_> {
+        self.holds.fetch_add(1, Ordering::AcqRel);
+        KeyHold { cache: self }
     }
 
     /// How many times Argon2id has run through this cache.
     pub fn derivations(&self) -> u64 {
         self.runs.load(Ordering::Relaxed)
+    }
+
+    /// Whether a derived key is held right now.
+    pub fn is_holding(&self) -> bool {
+        self.slot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
     }
 
     /// Drop the held key (zeroized) and its inputs. The next passphrase open
@@ -398,32 +445,36 @@ impl KeyCache {
     }
 
     /// The master key for this passphrase and salt: the held one when both
-    /// match, a fresh derivation otherwise. The lock is held across the
-    /// derivation, so two callers racing on a cold cache run Argon2id once.
+    /// match, a fresh derivation otherwise, kept only while a hold is alive.
+    /// The lock is held across the derivation, so two callers racing on a
+    /// cold cache under one hold run Argon2id once.
     fn derive(&self, passphrase: &str, salt: &[u8; SALT_LEN]) -> Result<SecretKey, KeyError> {
+        let mut digest = Zeroizing::new([0u8; 32]);
+        digest.copy_from_slice(&Sha256::digest(passphrase.as_bytes()));
         // A poisoned lock only means a holder panicked; the slot is replaced
         // whole or not at all, so what it holds is either a complete
         // derivation or nothing.
         let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(held) = slot.as_ref() {
-            // Unequal lengths answer "different" (and say only that).
+            // Both comparisons run over fixed lengths: a 16-byte salt and a
+            // 32-byte digest.
             let same_salt: bool = held.salt[..].ct_eq(&salt[..]).into();
-            let same_passphrase: bool = held
-                .passphrase
-                .as_slice()
-                .ct_eq(passphrase.as_bytes())
-                .into();
+            let same_passphrase: bool = held.passphrase_digest[..].ct_eq(&digest[..]).into();
             if same_salt && same_passphrase {
                 return Ok(held.key.duplicate());
             }
         }
         self.runs.fetch_add(1, Ordering::Relaxed);
         let key = derive_from_passphrase(passphrase, salt)?;
-        *slot = Some(Derived {
-            passphrase: Zeroizing::new(passphrase.as_bytes().to_vec()),
-            salt: *salt,
-            key: key.duplicate(),
-        });
+        *slot = if self.holds.load(Ordering::Acquire) > 0 {
+            Some(Derived {
+                passphrase_digest: digest,
+                salt: *salt,
+                key: key.duplicate(),
+            })
+        } else {
+            None
+        };
         Ok(key)
     }
 }
@@ -438,6 +489,7 @@ impl std::fmt::Debug for KeyCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KeyCache")
             .field("derivations", &self.derivations())
+            .field("holds", &self.holds.load(Ordering::Relaxed))
             .finish_non_exhaustive()
     }
 }
@@ -463,8 +515,8 @@ pub fn master_key(
 /// [`master_key`], deriving a passphrase's key through `cache` (ROADMAP
 /// O211). The survey, the classification and the read of the declared
 /// source's file run on every call exactly as they do uncached; only
-/// Argon2id is skipped, and only when the passphrase and the salt just read
-/// are the ones the held key came from.
+/// Argon2id is skipped, and only when a [`KeyHold`] on `cache` kept a key
+/// whose passphrase and salt are the ones just declared and read.
 pub fn master_key_cached(
     root: &Path,
     passphrase: Option<&str>,
@@ -1078,6 +1130,7 @@ mod tests {
     fn a_cache_derives_a_passphrase_key_once_across_every_open() {
         let dir = tempdir().unwrap();
         let cache = KeyCache::new();
+        let _held = cache.hold();
         // The create derives through the cache too: `init` then reopens.
         let created = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
         assert_eq!(cache.derivations(), 1);
@@ -1107,6 +1160,7 @@ mod tests {
     fn a_held_key_never_answers_for_another_passphrase_or_salt() {
         let dir = tempdir().unwrap();
         let cache = KeyCache::new();
+        let _held = cache.hold();
         let right = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
         with_a_vault(dir.path());
         for (pw, runs) in [
@@ -1145,6 +1199,7 @@ mod tests {
     fn the_classification_runs_on_every_open_while_a_key_is_held() {
         let dir = tempdir().unwrap();
         let cache = KeyCache::new();
+        let _hold = cache.hold();
         let held = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
         with_a_vault(dir.path());
         let salt = fs::read(dir.path().join(KDF_SALT_FILE)).unwrap();
@@ -1204,6 +1259,7 @@ mod tests {
     fn the_key_file_source_never_reaches_the_cache() {
         let dir = tempdir().unwrap();
         let cache = KeyCache::new();
+        let _held = cache.hold();
         let first = cached(dir.path(), None, Access::ReadWrite, &cache);
         let _ = cached(dir.path(), None, Access::ReadOnly, &cache);
         assert_eq!(cache.derivations(), 0);
@@ -1219,17 +1275,57 @@ mod tests {
         assert_ne!(now.as_bytes(), first.as_bytes());
         assert_eq!(now.as_bytes(), &[3u8; KEY_LEN]);
         assert_eq!(cache.derivations(), 0);
+        assert!(!cache.is_holding());
+    }
+
+    /// **A key is kept only while a hold is alive** (the independent review of
+    /// O211's first build: a `serve-mcp`, `mine` or `refine` process kept the
+    /// master key and a copy of the passphrase in the process cache for its
+    /// whole life, where before the key went with the manager after its one
+    /// open). An open with no hold keeps nothing; holds nest, and the last one
+    /// dropped zeroizes the key.
+    #[test]
+    fn a_cache_keeps_nothing_outside_a_hold() {
+        let dir = tempdir().unwrap();
+        let cache = KeyCache::new();
+        let k = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        assert!(!cache.is_holding(), "a one-open command keeps nothing");
+        let again = cached(dir.path(), Some("correct horse"), Access::ReadOnly, &cache);
+        assert_eq!(again.as_bytes(), k.as_bytes());
+        assert_eq!(cache.derivations(), 2, "nothing was held to reuse");
+        assert!(!cache.is_holding());
+
+        let outer = cache.hold();
+        let _ = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        assert!(cache.is_holding());
+        {
+            let _inner = cache.hold();
+            let _ = cached(dir.path(), Some("correct horse"), Access::ReadOnly, &cache);
+        }
+        assert!(
+            cache.is_holding(),
+            "an inner hold leaves the outer one's key"
+        );
+        let _ = cached(dir.path(), Some("correct horse"), Access::ReadOnly, &cache);
+        assert_eq!(cache.derivations(), 3, "one run for the three held opens");
+        drop(outer);
+        assert!(!cache.is_holding(), "the last hold zeroizes the key");
+        let _ = cached(dir.path(), Some("correct horse"), Access::ReadOnly, &cache);
+        assert_eq!(cache.derivations(), 4);
+        assert!(!cache.is_holding());
     }
 
     /// `forget` drops the held key, so the next open derives again; `Debug`
-    /// shows the count and nothing else.
+    /// shows the counts and nothing else.
     #[test]
     fn a_forgotten_key_is_derived_again_and_debug_shows_only_the_count() {
         let dir = tempdir().unwrap();
         let cache = KeyCache::new();
+        let _held = cache.hold();
         let k = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
         let shown = format!("{cache:?}");
         assert!(shown.contains("derivations: 1"), "{shown}");
+        assert!(shown.contains("holds: 1"), "{shown}");
         assert!(!shown.contains("correct horse"), "{shown}");
         assert!(!shown.contains(&hex::encode(k.as_bytes())), "{shown}");
         cache.forget();
@@ -1246,6 +1342,7 @@ mod tests {
         let _ = key(dir.path(), Some("correct horse"));
         with_a_vault(dir.path());
         let cache = KeyCache::new();
+        let _held = cache.hold();
         let keys: Vec<[u8; KEY_LEN]> = std::thread::scope(|s| {
             let handles: Vec<_> = (0..4)
                 .map(|_| {

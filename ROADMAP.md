@@ -14419,22 +14419,28 @@ settled shape forbids, and carries one posture across call sites that state diff
 (`witness` opens read-only under a writable command line).
 
 **What landed.**
-- `undercroft-vault/src/keys.rs`: `KeyCache`, one entry — the passphrase (in `Zeroizing`), the salt
-  bytes and the derived `SecretKey`. It answers from the held key only when BOTH inputs equal the
-  ones it was derived from (constant time, `subtle`), because Argon2id is a pure function of exactly
-  those two and its parameters are constants; otherwise it derives and replaces. The lock is held
-  across the derivation, so a cold race derives once. `derivations()` counts runs, `forget()` drops
-  the key, `Debug` prints the count alone, and `new()` is `const`. `master_key_cached` runs the
+- `undercroft-vault/src/keys.rs`: `KeyCache`, one entry — a SHA-256 digest of the passphrase (in
+  `Zeroizing`), the salt bytes and the derived `SecretKey`. It answers from the held key only when
+  BOTH inputs equal the ones it was derived from (constant time, `subtle`, over fixed lengths: a
+  16-byte salt and a 32-byte digest), because Argon2id is a pure function of exactly those two and
+  its parameters are constants; otherwise it derives. **It keeps what it derived only while a
+  `KeyHold` is alive** (`hold()`; holds nest, the last one dropped zeroizes the key), so an open with
+  no hold keeps nothing. The lock is held across the derivation, so a cold race under one hold
+  derives once. `derivations()` counts runs, `is_holding()` says whether a key is kept, `forget()`
+  drops it, `Debug` prints the counts alone, and `new()` is `const`. `master_key_cached` runs the
   survey, `plan` and the read of the declared file exactly as before and only then asks the cache;
   `master_key` derives through a fresh cache, so its callers still derive per call.
   `derive_from_passphrase` has one caller, the cache, held by `key_material_has_exactly_one_writer`.
 - `undercroft-vault/src/lib.rs`: `VaultManager::open_cached`; `open_as` is it with a fresh cache, so
   every library caller and test keeps today's behaviour.
-- The CLI: `static KEY_CACHE`, and `manager_at` — the binary's one manager open, reached by `init`,
-  `vault create|list|rotate`, `backup restore`, every `open_store_as` (so every command, `serve-mcp`
-  and `serve-http`'s `/mcp` store) and `Tenancy`'s manager — derives through it. `exit()` forgets it
-  when a command ends; a `process::exit` arm inside `run` skips that as it skips every destructor,
-  and a server holds the key for its life, as its manager always held its own copy.
+- The CLI: `static KEY_CACHE`, and `manager_in` — the binary's one manager open, which `manager_at`
+  and `open_store_as` hand the process cache, reached by `init`, `vault create|list|rotate`, `backup
+  restore`, every store open (so every command, `serve-mcp` and `serve-http`'s `/mcp` store) and
+  `Tenancy`'s manager. Exactly three holds keep its key across opens: `vault list`, `vault rotate`
+  and `serve-http`'s start, whose hold drops before it serves — `Tenancy`'s manager keeping its own
+  copy for the server's life, as it always did. A `process::exit` inside a hold would skip its drop,
+  as it skips every destructor; none of the three encloses one. The StaleUnlock retry takes no hold:
+  the race is rare and a second derivation is its whole cost.
 - Unchanged, read: `/v1`'s per-request opens unlock through the one manager `Tenancy` holds (HKDF
   only), so they derived nothing before either; `config check` runs `plan` and derives nothing; the
   orchestrator links no vault crate and opens no manager — its engines are `serve-http` processes.
@@ -14446,11 +14452,16 @@ every vault unlocks, and a wrong passphrase through the same cache derives its o
 derivation; never for another passphrase (three near misses) or a replaced salt; a deleted salt
 (`MaterialMissing`), a planted key file (`SourceMismatch`) and a short salt (`CorruptKeyFile`)
 refused while a key is held, with nothing written and the both-present flag still raised; the
-key-file source never reaches the cache; `forget` derives again and `Debug` shows the count only;
-four racing opens on a cold cache derive once. At the binary (`main.rs`,
-`every_manager_open_in_this_binary_derives_through_the_process_cache`): one `open_cached` with
-`&KEY_CACHE`, no `VaultManager::open`/`open_as`/direct derivation, one cache, its `forget` at exit,
-and no manager in the control plane. Through the surface: `tests/cli.rs`
+key-file source never reaches the cache; nothing kept outside a hold, holds nesting and the last
+zeroizing (`a_cache_keeps_nothing_outside_a_hold`); `forget` derives again and `Debug` shows counts
+only; four racing opens on a cold cache under one hold derive once. At the binary (`main.rs`):
+`a_one_open_command_keeps_no_key_after_its_open` drives `serve-mcp`'s open body with a cache of its
+own and finds it empty while the store serves, then `vault list`'s shape under a hold deriving once;
+and `every_manager_open_in_this_binary_derives_through_the_process_cache` reads `src/` recursively
+(literal spellings, so an alias or a macro is outside it; the binary has neither): one
+`open_cached`, the process cache handed in by exactly the two adapters, no
+`VaultManager::open`/`open_as`/direct derivation, one cache, exactly three holds and none in the
+`serve-mcp` arm, and no manager in the control plane. Through the surface: `tests/cli.rs`
 `o211_a_passphrase_installation_answers_every_command_that_opens_twice` (`vault list` over three
 vaults on both postures, `vault rotate`, search and `verify` after it, no key file written, and a
 wrong passphrase still exit 2 on every vault listed) and four e2e checks (the same `vault list`, a
@@ -14465,7 +14476,12 @@ present and recompiled: the held key never answering (today's per-open derivatio
 a cache keyed on the salt alone fails the other-input arm and the manager's wrong-passphrase arm;
 keyed on the passphrase alone, the replaced-salt arm; a held key answering before the survey (the
 decision cached) fails the classification gate at its deleted salt, and the replaced-salt arm; and
-`manager_at` put back to `open_as` fails the binary's source gate. The new key tests looped three times on the pristine copy, green each time.
+the binary's opener put back to `open_as` fails the binary's source gate. The new key tests looped
+three times on the pristine copy, green each time. After the review's fix, on a fresh copy: a
+derivation kept whether or not a hold is alive (the first build's behaviour) fails
+`a_cache_keeps_nothing_outside_a_hold`, the manager gate's no-hold arm and
+`a_one_open_command_keeps_no_key_after_its_open`; a hold added to the `serve-mcp` arm fails the
+source gate (four holds); the key tests looped three times again, green.
 
 **A real corpus, before (`5f5fe2f`) and after, three rounds.** The LoCoMo feed mined into two wings
 of each of four sealed vaults under a passphrase, 680 drawers, and the same installation under a key
@@ -14485,7 +14501,9 @@ VmHWM 75,048–75,240 → 70,848–71,232, `search` 71,232–71,424 → 71,040 (
 9,216–9,792). The derivations ran one at a time, so the peak was always one derivation's; what the
 fix removes is time and the 64 MiB touched again per extra open. Eight `/v1` requests across the four vaults (stats and a search each) added
 2,523–2,617 faults on either binary — no derivation per request, before or after — at 1.4–53 ms each,
-VmHWM unmoved.
+VmHWM unmoved. Re-measured with the review's fix built (two rounds, same corpus): `vault list`
+16,862–16,863 faults, `vault rotate` 16,965–16,967, a `serve-http` start 16,951–16,953 — one
+derivation each, as before the fix — and eight `/v1` requests 2,569–2,750 faults, none.
 
 **Drift read.** CLI, MCP (`serve-mcp`: one open, unchanged), `/v1` and `/mcp` in `serve-http` (start
 2 → 1, requests 0 → 0), orchestrator (none), both consoles (they render no key source). Surfaces
@@ -14495,10 +14513,22 @@ how often the key is derived.
 
 **What stays outside it, stated.** No surface reports the derivation count — the gates are the
 manager's count and the binary's source, and the measurement reads page faults; adding a counter is a
-surface this entry did not ask for. The passphrase sits in the cache entry, zeroized when it is
-replaced or forgotten, beside the copy the process environment holds for the process's life anyway.
-PATCH inside the unreleased 1.7.0: a cost goes, no documented contract moves, and nothing can stop a
-deployment, so `UPGRADING.md` owes nothing.
+surface this entry did not ask for. The cache keeps a digest of the passphrase, never the passphrase,
+and only inside a hold; the process environment holds the passphrase itself for the process's life,
+as it always did. PATCH inside the unreleased 1.7.0: a cost goes, no documented contract moves, and
+nothing can stop a deployment, so `UPGRADING.md` owes nothing.
+
+**Corrected after an independent review of the first build (`270acd1`), all four mine.** (1) LOW:
+the first build kept the derived key for the whole process and released it only in `exit()`, so
+`serve-mcp`, `mine` and `refine` held the master key and a copy of the passphrase in the cache for
+their whole run, where before the key went with the manager after the one open; and this record
+said a server "holds it for its life, as its manager always held its own copy", which is true of
+`Tenancy`'s manager and was not true of the cache. The holds above are the fix, and `exit()` no
+longer touches the cache. (2) The CHANGELOG and `main.rs` said the key was zeroized "when a command
+ends", which a `process::exit` arm skips. (3) "Both compared in constant time" was not quite so:
+`ct_eq` over slices answers early on a length difference, so the passphrase's length was compared
+first; the digest makes both comparisons fixed-length. (4) The source gate read `src/` without
+recursing and did not say it matches literal spellings; it recurses now and says so.
 
 ## 1.6.1 — released 2026-09-22
 

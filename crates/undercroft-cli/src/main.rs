@@ -1396,8 +1396,19 @@ fn manager(cli: &Cli, posture: Posture) -> Result<VaultManager> {
 /// also existed for a `'static` re-opener `serve-http` handed `Tenancy`,
 /// ROADMAP O242; O256 removed that re-opener.)
 fn manager_at(dir: &std::path::Path, posture: Posture) -> Result<VaultManager> {
-    let pw = passphrase()?;
-    VaultManager::open_cached(dir, pw.as_deref(), posture.access(), &KEY_CACHE)
+    manager_in(dir, posture, passphrase()?.as_deref(), &KEY_CACHE)
+}
+
+/// [`manager_at`] with its passphrase and key cache stated: the ONE body that
+/// opens a manager, so a test can drive it with a cache of its own instead of
+/// the process's.
+fn manager_in(
+    dir: &std::path::Path,
+    posture: Posture,
+    passphrase: Option<&str>,
+    keys: &undercroft_vault::keys::KeyCache,
+) -> Result<VaultManager> {
+    VaultManager::open_cached(dir, passphrase, posture.access(), keys)
         .with_context(|| format!("opening palace at {}", dir.display()))
 }
 
@@ -1408,13 +1419,22 @@ fn manager_at(dir: &std::path::Path, posture: Posture) -> Result<VaultManager> {
 /// derived once for the list and once per vault it described, and `vault
 /// rotate` and a `serve-http` start twice each; the multi-tenant server's
 /// `/v1` opens already shared the one manager `Tenancy` holds. Every open in
-/// this binary goes through [`manager_at`], and it derives through this cache,
-/// so a process runs Argon2id once. What is held is the derivation alone:
+/// this binary goes through [`manager_in`] with this cache, and the three
+/// commands that open more than once take a hold on it across those opens, so
+/// each runs Argon2id once. What is held is the derivation alone:
 /// each open still classifies the data directory (ROADMAP O204) and reads
 /// `kdf.salt` before the cache is asked, and the cache answers only for the
-/// passphrase and salt its key came from. [`exit`] drops the key when a
-/// command ends; a server holds it for its life, as its manager always held
-/// its own copy.
+/// passphrase and salt its key came from.
+///
+/// **Outside a hold it keeps nothing** — the independent review of the first
+/// build found `serve-mcp`, `mine` and `refine` keeping the master key and a
+/// copy of the passphrase here for their whole run, where before the key went
+/// with the manager after the one open. Now a one-open command holds the key
+/// exactly as long as its manager does, and the last hold to drop zeroizes it
+/// — `serve-http`'s before it serves, its `Tenancy` manager keeping its own
+/// copy for the server's life as it always did. A `process::exit` inside a
+/// hold would skip that drop, as it skips every destructor; none of the three
+/// holds encloses one.
 static KEY_CACHE: undercroft_vault::keys::KeyCache = undercroft_vault::keys::KeyCache::new();
 
 /// Whether a store this process opens is allowed to write to the vault.
@@ -1473,11 +1493,25 @@ fn open_store(cli: &Cli, vault: &str) -> Result<VaultStore> {
 }
 
 fn open_store_as(dir: &std::path::Path, vault: &str, posture: Posture) -> Result<VaultStore> {
+    open_store_in(dir, vault, posture, passphrase()?.as_deref(), &KEY_CACHE)
+}
+
+/// [`open_store_as`] with its passphrase and key cache stated, as
+/// [`manager_in`] is for [`manager_at`]: the one body, which a test drives
+/// with a cache of its own (ROADMAP O211).
+fn open_store_in(
+    dir: &std::path::Path,
+    vault: &str,
+    posture: Posture,
+    passphrase: Option<&str>,
+    keys: &undercroft_vault::keys::KeyCache,
+) -> Result<VaultStore> {
     // An open that read the vault just before another process rotated its
     // keys is told to reopen (ROADMAP O257), and does, ONCE: the reopen reads
     // the current manifest, and a second race in a row is said rather than
-    // chased.
-    match open_store_once(dir, vault, posture) {
+    // chased. No key hold spans the two: the race is rare, and a second
+    // derivation is its whole cost.
+    match open_store_once(dir, vault, posture, passphrase, keys) {
         Err(e)
             if e.chain().any(|link| {
                 matches!(
@@ -1486,14 +1520,20 @@ fn open_store_as(dir: &std::path::Path, vault: &str, posture: Posture) -> Result
                 )
             }) =>
         {
-            open_store_once(dir, vault, posture)
+            open_store_once(dir, vault, posture, passphrase, keys)
         }
         other => other,
     }
 }
 
-fn open_store_once(dir: &std::path::Path, vault: &str, posture: Posture) -> Result<VaultStore> {
-    let mgr = manager_at(dir, posture)?;
+fn open_store_once(
+    dir: &std::path::Path,
+    vault: &str,
+    posture: Posture,
+    passphrase: Option<&str>,
+    keys: &undercroft_vault::keys::KeyCache,
+) -> Result<VaultStore> {
+    let mgr = manager_in(dir, posture, passphrase, keys)?;
     // The posture reaches the UNLOCK, not only the store open. Unlocking was
     // not passive: it deleted a `vault.json.next` it could not authenticate,
     // so a read-only process that stated its posture only one call later had
@@ -2203,9 +2243,6 @@ fn main() -> std::process::ExitCode {
 /// chain, which an outbound socket raises too. The `process::exit(2)` arms
 /// inside `run` keep working, because printing no longer panics.
 fn exit(run: Run) -> std::process::ExitCode {
-    // The command is over: the master key this process derived is zeroized
-    // now rather than left to the process's end (ROADMAP O211).
-    KEY_CACHE.forget();
     let delivery = undercroft_obs::stdio::finish();
     if let Delivery::Failed(why) = &delivery {
         errln!("Error: writing to standard output: {why}");
@@ -2331,6 +2368,9 @@ fn run(cli: Cli) -> Result<()> {
                 );
             }
             VaultAction::List => {
+                // One open for the list and one per vault: one derivation
+                // between them, zeroized when this arm ends (ROADMAP O211).
+                let _keys = KEY_CACHE.hold();
                 let mgr = manager(&cli, cli.posture())?;
                 let vaults = mgr.list()?;
                 // Vaults whose own stored evidence contradicts itself.
@@ -2448,6 +2488,9 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             VaultAction::Rotate { name } => {
+                // The candidate's open and the store's: one derivation between
+                // them (ROADMAP O211).
+                let _keys = KEY_CACHE.hold();
                 let mgr = manager(&cli, cli.posture())?;
                 let candidate = mgr.rotation_candidate(name)?;
                 let mut store = open_store(&cli, name)?;
@@ -3496,17 +3539,26 @@ fn run(cli: Cli) -> Result<()> {
                 Posture::ReadWrite
             };
             let dir = data_dir(&cli);
-            let store = open_store_as(&dir, vault, posture)?;
+            // Two opens at start, one derivation between them; the hold drops
+            // before the server serves, so the process cache keeps nothing and
+            // `Tenancy`'s manager keeps its own copy, as it always did
+            // (ROADMAP O211).
+            let (store, tenants) = {
+                let _keys = KEY_CACHE.hold();
+                (
+                    open_store_as(&dir, vault, posture)?,
+                    manager(&cli, posture)?,
+                )
+            };
             if let Ok(n) = store.warm_embedding_cache() {
                 undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
-            let mut tenancy =
-                tenant::Tenancy::new(manager(&cli, posture)?, embedder_factory(), *read_only)?
-                    // ONE handle on this vault, held by `Tenancy` and borrowed
-                    // by both surfaces (ROADMAP O242). Two handles made every
-                    // `/v1` commit look foreign to the `/mcp` label guard, so
-                    // the next search replayed the whole chain.
-                    .with_mcp_vault(vault.clone(), store);
+            let mut tenancy = tenant::Tenancy::new(tenants, embedder_factory(), *read_only)?
+                // ONE handle on this vault, held by `Tenancy` and borrowed
+                // by both surfaces (ROADMAP O242). Two handles made every
+                // `/v1` commit look foreign to the `/mcp` label guard, so
+                // the next search replayed the whole chain.
+                .with_mcp_vault(vault.clone(), store);
             if let Some(reranker) = reranker_factory()? {
                 tenancy = tenancy.with_reranker(reranker);
             }
@@ -5701,29 +5753,52 @@ mod tests {
     }
 
     /// **Every manager this binary opens derives through the ONE process
-    /// cache** (ROADMAP O211's source gate).
+    /// cache, and only three commands keep its key** (ROADMAP O211's source
+    /// gate).
     ///
     /// The cost was per OPEN, so the gate is on the opens: in the production
-    /// text of every source file of this binary, the manager is opened in
-    /// exactly one place — [`manager_at`], through `open_cached` with
-    /// `KEY_CACHE` — and never through `VaultManager::open`/`open_as`, which
-    /// derive afresh, nor by deriving a master key directly. One cache exists,
-    /// and the command's end drops its key. The control plane opens no
+    /// text of every source file of this binary (`src/`, recursively, each
+    /// file cut at its `mod tests`, `*_tests.rs` skipped), the manager is
+    /// opened in exactly one place — [`manager_in`], through `open_cached` —
+    /// fed the process cache by its two adapters, and never through
+    /// `VaultManager::open`/`open_as`, which derive afresh, nor by deriving a
+    /// master key directly. One cache exists, and exactly three holds keep its
+    /// key: `vault list`, `vault rotate` and `serve-http`'s start — never
+    /// `serve-mcp`, whose one open must leave nothing behind for its whole
+    /// run (the independent review's finding). The control plane opens no
     /// manager at all: it is a `/v1` client, so its engines are `serve-http`
-    /// processes and derive under this gate. Counterfactual: today's
-    /// `open_as` in `manager_at` fails the first two counts.
+    /// processes and derive under this gate.
+    ///
+    /// **Scope, stated**: it matches literal spellings, so an open reached
+    /// through an alias (`use … as`) or a macro is outside it; the binary has
+    /// neither today. Counterfactual: the first build's `open_as` in the
+    /// opener fails the first count, and a hold added to `serve-mcp` fails
+    /// the last.
     #[test]
     fn every_manager_open_in_this_binary_derives_through_the_process_cache() {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    rust_files(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut sources = Vec::new();
+        rust_files(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut sources,
+        );
         let mut production = String::new();
         let mut files = 0;
-        for entry in std::fs::read_dir(&src).unwrap() {
-            let path = entry.unwrap().path();
+        for path in &sources {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            if !name.ends_with(".rs") || name.ends_with("_tests.rs") {
+            if name.ends_with("_tests.rs") {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).unwrap();
+            let text = std::fs::read_to_string(path).unwrap();
             let cut = text
                 .find(concat!("#[cfg(test)]\nmod ", "tests"))
                 .unwrap_or(text.len());
@@ -5736,7 +5811,7 @@ mod tests {
         );
         let count = |needle: &str| production.matches(needle).count();
         assert!(
-            count(concat!("manager_", "at(")) >= 3,
+            count(concat!("manager_", "in(")) >= 3,
             "premise: the one opener and its callers are in the text"
         );
         assert_eq!(
@@ -5746,11 +5821,16 @@ mod tests {
         );
         assert_eq!(
             count(concat!(
-                "VaultManager::open_cached(dir, pw.as_deref(), posture.access(), &KEY_",
-                "CACHE)"
+                "VaultManager::open_cached(dir, passphrase, posture.access(), ",
+                "keys)"
             )),
             1,
-            "and it derives through the process cache"
+            "and it opens through the cache it is handed"
+        );
+        assert_eq!(
+            count(concat!("&KEY_", "CACHE)")),
+            2,
+            "the two adapters hand it the process cache, and nothing else does"
         );
         for uncached in [
             concat!("VaultManager::", "open("),
@@ -5766,9 +5846,29 @@ mod tests {
             "one cache per process"
         );
         assert_eq!(
-            count(concat!("KEY_CACHE.", "forget()")),
-            1,
-            "the command's end drops the key"
+            count(concat!("KEY_CACHE.", "hold()")),
+            3,
+            "vault list, vault rotate and the serve-http start keep the key"
+        );
+        let main = sources
+            .iter()
+            .find(|p| p.file_name().is_some_and(|n| n == "main.rs"))
+            .expect("premise: main.rs");
+        let main = std::fs::read_to_string(main).unwrap();
+        let serve_mcp = main
+            .split_once(concat!("Command::Serve", "Mcp {"))
+            .expect("premise: the serve-mcp arm")
+            .1;
+        let serve_mcp = &serve_mcp[..serve_mcp
+            .find(concat!("Command::Serve", "Http {"))
+            .expect("premise: the arm after it")];
+        assert!(
+            serve_mcp.contains(concat!("open_store_", "as(")),
+            "premise: the arm opens its store"
+        );
+        assert!(
+            !serve_mcp.contains(concat!(".hol", "d()")),
+            "serve-mcp's one open must keep no key for the life of the server"
         );
 
         let orch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -5792,5 +5892,45 @@ mod tests {
             read >= 3,
             "premise: the control plane's sources were read ({read})"
         );
+    }
+
+    /// **A one-open command keeps no key after its open** (the independent
+    /// review of O211's first build): `serve-mcp` opens its store through
+    /// [`open_store_as`], whose body is [`open_store_in`], and the process
+    /// cache then held the master key and a copy of the passphrase for the
+    /// server's whole run. Driven here with a cache of the test's own and a
+    /// stated passphrase — the process cache is shared by every test in this
+    /// binary, so a hold another test takes could keep a key this one is
+    /// asserting gone. That `serve-mcp` takes no hold is the source gate's.
+    #[test]
+    fn a_one_open_command_keeps_no_key_after_its_open() {
+        let home = TempDir::new().unwrap();
+        let keys = undercroft_vault::keys::KeyCache::new();
+        let pw = Some("correct horse");
+        manager_in(home.path(), Posture::ReadWrite, pw, &keys)
+            .unwrap()
+            .create("default", SecurityLevel::Sealed)
+            .unwrap();
+        assert!(!keys.is_holding(), "init's open keeps nothing");
+        let store = open_store_in(home.path(), "default", Posture::ReadWrite, pw, &keys).unwrap();
+        assert!(
+            !keys.is_holding(),
+            "serve-mcp's open keeps nothing while its store serves"
+        );
+        drop(store);
+        assert_eq!(keys.derivations(), 2, "nothing was held, so each derived");
+
+        // `vault list`'s shape: a hold across the opens derives once, and the
+        // key goes when the hold does.
+        {
+            let _held = keys.hold();
+            let lister = manager_in(home.path(), Posture::ReadWrite, pw, &keys).unwrap();
+            for id in lister.list().unwrap() {
+                drop(open_store_in(home.path(), &id, Posture::ReadOnly, pw, &keys).unwrap());
+            }
+            assert!(keys.is_holding());
+        }
+        assert_eq!(keys.derivations(), 3, "one run for the held opens");
+        assert!(!keys.is_holding(), "the hold's end zeroizes the key");
     }
 }

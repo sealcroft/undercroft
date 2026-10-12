@@ -2482,7 +2482,9 @@ impl VaultManager {
     }
 
     /// [`open_as`](Self::open_as), deriving a passphrase's key through a cache
-    /// the caller holds for the life of its process (ROADMAP O211).
+    /// its process holds (ROADMAP O211). The cache keeps the key only while a
+    /// [`keys::KeyHold`] on it is alive, so a caller that opens once keeps
+    /// nothing beyond this manager's own copy.
     ///
     /// Every call still surveys and classifies the installation and reads the
     /// declared source's file, so a key source the installation contradicts is
@@ -4764,6 +4766,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = dir.path();
         let cache = keys::KeyCache::new();
+        let held = cache.hold();
         let pw = Some("correct horse");
         let mgr = VaultManager::open_cached(root, pw, Access::ReadWrite, &cache).unwrap();
         for id in ["default", "b", "c"] {
@@ -4802,6 +4805,16 @@ mod tests {
             Err(VaultError::ManifestTampered)
         ));
         assert_eq!(cache.derivations(), 2);
+
+        // The command's hold ends: the cache keeps nothing, and the managers
+        // still alive hold their own copies, as they always did.
+        drop(held);
+        assert!(!cache.is_holding());
+        wrong.unlock("default").unwrap_err();
+        let one_open = VaultManager::open_cached(root, pw, Access::ReadOnly, &cache).unwrap();
+        one_open.unlock_as("b", Access::ReadOnly).unwrap();
+        assert!(!cache.is_holding(), "an open with no hold keeps nothing");
+        assert_eq!(cache.derivations(), 3);
     }
 
     /// **ROADMAP O266's source gate: one manifest rule, four readers, and

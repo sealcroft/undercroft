@@ -432,16 +432,20 @@ Consequences that are binding, not advisory:
   installation, refuses `create`/`delete`/`rotation_candidate`, and unlocks
   read-only whatever it is asked; `create` refuses as `KeyOpensNoVault`
   (exit 2) when the key opens none of the installation's manifests, the door a
-  split installation was minted through. **A process derives a passphrase's
-  key ONCE (O211)**: `KeyCache` holds the Argon2id output against the
-  passphrase and the salt bytes that produced it (both compared in constant
-  time), and the CLI holds one in a `static` that every manager open — its one
-  door, `manager_at`, through `open_cached` — derives through, so `vault list`,
-  `vault rotate` and a `serve-http` start run Argon2id once rather than once
-  per open; the survey, `plan` and the read of `kdf.salt` still run on every
-  open, because only the DERIVATION may be cached, never the decision about
-  which key file applies. `open_as` keeps deriving per call for library
-  callers; a CLI source gate counts the binary's one open;
+  split installation was minted through. **A command derives a passphrase's
+  key ONCE (O211)**: `KeyCache` keeps the Argon2id output against a SHA-256
+  digest of the passphrase and the salt bytes that produced it (both compared
+  in constant time over fixed lengths) — and only while a `KeyHold` is alive,
+  so an open with no hold keeps nothing. The CLI holds one in a `static` that
+  every manager open — its one door, `manager_in`, through `open_cached` —
+  derives through, and exactly three holds span the opens of `vault list`,
+  `vault rotate` and a `serve-http` start, which run Argon2id once rather than
+  once per open; a one-open command (`serve-mcp`, `mine`) keeps the key only
+  as long as its manager, as before. The survey, `plan` and the read of
+  `kdf.salt` still run on every open, because only the DERIVATION may be
+  cached, never the decision about which key file applies. `open_as` keeps
+  deriving per call for library callers; a CLI source gate counts the
+  binary's one open and its three holds;
   seal.rs: AEAD + HMAC; lib.rs: VaultManager/Vault + manifest-as-rollback-
   anchor + pure chain arithmetic + key rotation primitives
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
