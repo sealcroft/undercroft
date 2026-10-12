@@ -16322,6 +16322,593 @@ filed it, and the witness gate counts three `Ruled`; the review's own
 in-lock fence refusing it with nothing deleted, which is what the witness is
 for.
 
+### O221 — CLOSED 2026-10-12: parts (a) and (b) — `admission list` reports a row it cannot verify beside the readable queue and never fails on one, and ONE predicate (the covered wing where the row verifies, the clear column where it does not) decides every destruction and write fence; part (c), the maintainer's D4, is filed as O-NEW-o221-1
+
+**Filed 2026-09-18 by O216's ruling panel; measured by its probes P2 and P3 on
+the `4ff51ab` binary.**
+- **A pending row whose tag fails** makes `admission list` fail for the WHOLE
+  queue, because `admission_pending` propagates `get`'s error
+  (`crates/undercroft-store/src/admission.rs`). `allow` and `deny` fail on
+  `Integrity` through `quarantined`, `drawer delete` refuses it on the clear
+  column, and, by reading, `repair` aborts on it
+  (`crates/undercroft-store/src/manage.rs:1600-1603`). The one remedy measured
+  is re-importing the genuine queue record with the screen on, which
+  converges onto the row through the diversion. With the screen off there is
+  none.
+- **An ordinary row whose clear `wing` was flipped offline to the reserved
+  wing** is listed with no destination, `allow` answers "not in the quarantine
+  wing", and `drawer delete` refuses it with advice to use `allow`/`deny`,
+  neither of which can act on it. `drawer update` is the one exit, and nothing
+  says so. An import of the IDENTICAL record over it is O215's no-op, because
+  the covered copy matches, so the flip stays; only a changed record heals it
+  (pinned as a cost in `the_covered_wing_decides_what_an_import_may_not_replace`).
+
+**Shape.** `admission list` should report an unverifiable row rather than fail
+on it; the delete fence's advice should match what the ruling doors can do;
+and whether an operator may deny a pending row that fails verification is a
+question of what destroying unverifiable evidence means.
+
+Related, and in prose since O220 closed: O220's slot rule treats a pending row that cannot be read as replaceable, which is what keeps the one remedy measured here working.
+
+**Gate**: with one pending row's tag zeroed, `admission list` lists the others
+and reports that row; the delete refusal on a row flipped to the reserved wing
+names the exit that works. **Counterfactual**: today's whole-queue failure,
+and advice no door can follow.
+
+**Added 2026-09-19 by O206's ruling, in prose because O206 is done.**
+- **The reverse flip destroys review evidence (P4, measured on `129c789`).**
+  A pending row whose clear `wing` was flipped offline from the reserved wing
+  to `notes` is destroyed by an operator's `drawer delete` — exit 0, the row
+  gone, a plain `del/` tombstone — where the unflipped row is refused. The
+  destruction fence (`is_quarantine_pending`) reads the clear column, so the
+  flip lifts it. MCP is not affected: its by-id fence is `_for_read`, which
+  refuses when either copy names the queue.
+- **O206's retention sweep meets the forward flip.** A drawer whose covered
+  scope is a policy's and whose clear `wing` names the queue is withheld by
+  the sweep, through the fence's own function, with `drawer update` as the
+  exit the reason names — because handed to `forget_with_proof` the fence
+  would refuse the whole sweep. O206's panel judged that changing the fence to
+  read the covered copy where the row is readable (the shape of O216's verdict
+  2) is this entry's decision, not O206's; if this entry rules it, the sweep's
+  withheld arm and its advice follow.
+
+**Relations:** shares a question with O148 — this entry's screen-off remedy exists once that entry's hold lands, and this entry owns its wording.
+
+#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
+
+**The question.** This subsection rules parts (a) and (b); part (c) is escalated in the next subsection.
+- **(a)** What `admission list` does with a queue row it cannot verify.
+- **(b)** Which copy the destruction fence `is_quarantine_pending` reads — and so what the list enumerates, what the refusals advise, and what the read fences built on that function do.
+
+**Prior rulings found and their disposition.** No `#### RULED` subsection exists in this entry. The `rul(ed|ing)` search covered O206, O216, O220, O224, O231, O259 and O267.
+- **The fence's own rationale** (`manage.rs:1253-1258`), clause by clause:
+  - "the fence and the queue can never disagree": FOLLOWED, and kept by construction (ruling item 4).
+  - "reading the HMAC-covered `meta.wing` instead would make an unreadable row undeletable … a stuck vault": FOLLOWED on the unreadable arm, where the clear column still decides. Recorded here: it never held for a tag-failing PENDING row, which the clear column refuses. That row is part (c).
+  - "a flipped column is already an integrity failure `verify` reports": REFUTED, recorded beside it. O206's P4 destroyed a reverse-flipped pending row at exit 0 before anyone ran `verify`. Each door that destroys or overwrites such a row also erases the `mirror_drift` that was its only trace, because the walk reads rows that still exist (`lib.rs:10642-10655`); it leaves a keyed tombstone, a receipt or an ordinary row. An offline `DELETE` of the same row would instead be caught by `verify`'s orphan-label leg.
+- **O216 verdict 2** (the covered copy decides; the clear column only where the read fails) and **its lost options** ("either copy" for destruction; "the clear column alone"): FOLLOWED, now applied to the fence O216 left alone. `import_verdict` (`lib.rs:8243-8276`) already implements it inline.
+- **O206 on the fence** — "revising it is O221's", its lost option "breaks the fence's stated invariant", and O221's prose that the sweep's withheld arm follows: FOLLOWED. The invariant is kept by moving the list with the fence.
+- **O206 ruling 2** ("an unverifiable row is reported from anywhere and destroyed nowhere"): FOLLOWED at its scope, the sweep. For the list, its reason — a report scoped by either copy alone reinstates the escape — is followed by scoping the report to the union of both copies' claims (item 7), not to the whole vault.
+- **O206 ruling 3** (the sweep asks "the fence itself, never a copy") and **its split ruling** (destroy a covered member whose mirror disagrees, and report the drift): FOLLOWED.
+- **O206 ruling 4** (`ok` false while drift is reported): FOLLOWED for the list (item 4).
+- **O206's lost option (d)** (`json_extract` candidates beside the mirror, "a second parser deciding scope"): FOLLOWED. Nothing here lets that parser decide.
+- **O224 item 9** ("an unreadable destination … never fails the list"): FOLLOWED, extended to the row itself.
+- **`is_quarantine_pending_for_read`'s own doc** (either copy refuses a READ; on a read, unverifiable means refuse): FOLLOWED, and extended to the agent-scope history fence.
+- **A28** and **the 2026-09-08 versioning ruling**: FOLLOWED.
+
+**Read before ruling.**
+- **(a) One unverifiable row fails every reader of the queue.**
+  - `admission_pending` enumerates the clear column (`admission.rs:1224`) and `get`s each row with `?` (`:1229`). One tag-failing or meta-unparseable row therefore fails the whole queue on every surface (O216's P3). The export stops on the same row (`export_each`, `lib.rs:11070-11104`).
+  - `drawers.id` is an unconstrained `TEXT NOT NULL UNIQUE` (`lib.rs:5190-5201`), and `StoreError::Integrity` renders it through `Display` (`lib.rs:1926`). An id an offline writer planted reaches stderr and the `/v1` body verbatim, terminal escapes included.
+- **(b) The fence has eight production callers, not the brief's six:**
+  - `delete_drawer_ruled` (`manage.rs:1009`);
+  - `delete_by_source` (`:1227`, through `unwrap_or(false)`);
+  - `_for_read`'s clear leg (`:1289`), which MCP's by-id fence (`mcp.rs:164`) and `/v1`'s (`tenant.rs:1252`) ride;
+  - the agent-scope history fence (`manage.rs:2509`);
+  - `forget --backend`'s pre-flight (`forget.rs:364`);
+  - `attest_in` (`forget.rs:463`), which `forget`, the sweep and `deny` reach;
+  - `import_verdict`'s unreadable arm (`lib.rs:8250`);
+  - the sweep's withheld arm (`retention.rs:470`).
+- **Two more doors exclude the queue by the clear column without calling the fence:**
+  - `dedup_groups` (`manage.rs:1680`), which deletes drop members through `delete_drawer` (`:1795`); MCP's `undercroft_dedup` reaches it;
+  - the dedup refresh's scan (`lib.rs:8042-8051`), which writes `{id: match_id, meta: incoming}` through `Screen::Apply` (`:8085`) after a verified `get` of the match (`:8080-8084`).
+
+  Nothing in `write_drawer_stmts` asks whether a non-diverted write lands on a covered-pending row: its guards cover writing INTO the reserved wing (`:7495`) and diverted writes (`:7513`).
+- **The reverse flip launders the destruction of review evidence.** A pending row whose clear wing was set offline to an ordinary wing is destroyed or overwritten by the vault's own doors:
+  - `drawer delete` (O206's P4, measured);
+  - `forget`, with a third-party-verifiable receipt: `attest_in` verifies the row (the tag covers `meta_json`, not the column) and then asks the clear-column fence;
+  - `dedup --apply`;
+  - a `/v1` save with `dedup_threshold`, which answers `deduped`.
+
+  The history fence also shows the agent the labels of its own diverted write.
+- **The forward flip is advised toward doors that refuse it.** An ordinary row whose clear wing was set to the reserved one is listed with a "would proceed" state while `allow` refuses it (`quarantined`, `admission.rs:1451`):
+  - `destination <X> applied` when X re-derives (`aimed_filing` takes the covered wing, `:246-257`, then `:919`);
+  - `unrecorded-absent` when it does not, because its `queued_against` was stripped (`lib.rs:7596-7598`);
+  - and its intended fields print blank (`admission.rs:1244-1245`).
+- **The cost.** O206's covered walk measured about 1.8 µs a drawer, 0.21 s for a dry sweep over 102,000 sealed drawers; O224 measured today's list at 4–9 ms over 23 rows. The console reloads the list after every ruling (`ui.html:1442`, `:1485`), on `/v1`'s one request loop.
+
+**The ruling, part (b): F2, with the list moved to the same rule.**
+1. **One predicate** answers a row's standing — `Pending`, `PendingUnverifiable` or `NotPending`.
+   - It reads the COVERED `meta.wing` wherever the row's tag verifies and its meta parses, and the clear column only where it does not.
+   - It reads through `covered_one` (`lib.rs:10661`, no decrypt) on the caller's own connection — inside the destruction lock where the caller holds one. `attest_in` uses the meta of the drawer it has already verified.
+   - Any other error propagates.
+   - The current function name is retired, so no caller changes meaning silently.
+2. **Destruction and write fences use it**:
+   - `delete_drawer_ruled`;
+   - `delete_by_source`, whose `unwrap_or(false)` becomes `?` in this unit (O259's shape, made worse once the fence reads a row; O259 keeps its one-lock half);
+   - `forget --backend`'s pre-flight;
+   - `attest_in`;
+   - `import_verdict`, which calls it in place of its inline copy;
+   - the sweep (item 6).
+
+   The two doors that bypass the fence today follow it, through lookups they already make:
+   - **the dedup refresh** never refreshes a match whose covered wing is reserved. Such a match counts as none, and the save files as an ordinary insert;
+   - **`dedup_groups`** drops from a group any member, survivor included, whose covered wing is reserved, read from the `get`s it already makes. Without this, moving the fence would make one reverse-flipped duplicate fail a whole `dedup --apply` midway — O206's hostage shape.
+3. **Read fences decide by EITHER copy**, as `_for_read` does: `_for_read` itself and the agent-scope history fence.
+   - Each is rewritten over an explicit clear-column probe, so moving the destruction predicate cannot relax it.
+   - A28 lets a mirror NARROW a read and forbids it to lift an exclusion, and either-copy only narrows.
+   - On a row that does not verify, the history fence omits that row's records. That is the list analogue of `_for_read`'s "unverifiable means refuse": it depends on nothing the writer chose, and it fails no history call.
+4. **The list enumerates by the same rule**, through `walk_covered`, and takes exactly the rows item 1 calls `Pending`.
+   - Those rows are read for content and destination as today, and each carries its own mirror drift (the walk's strings), so a reviewer sees a reverse flip before a ruling erases its only trace. Drift on a listed row makes `ok` false (O206 ruling 4).
+   - A forward-flipped ordinary row is not listed, and the false `applied` goes with it.
+   - `CoveredRow::TagFailed` and `MetaUnparseable` gain the clear wing, the `seq` and the row's own `meta_json` wing claim, which the walk's statement already selects.
+   - The build may nominate candidates instead — `wing = ? OR json_extract(meta_json, '$.wing') = ?`, optionally behind an expression index — only if the cost probe finds the walk too slow, and the predicate still decides each nominee. That is not O206's lost option (d): there the parser decided scope, here it only proposes, and for a verified row both parsers read the same tag-covered serde output. An expression index is a schema migration with a `READ_SCHEMA` row.
+5. **Refusals name the door that works**, from the typed answer.
+   - `Pending` → `admission allow`/`deny`, which now always act on it.
+   - `PendingUnverifiable` → `Integrity`, naming item 8's remedies and whatever part (c) returns.
+   - A forward-flipped ordinary row is no longer fenced, so `drawer delete` deletes it.
+6. **The sweep keeps asking the fence** (O206 ruling 3).
+   - For a member the walk decided, the answer is now `NotPending`, so a forward-flipped member is destroyed and its drift reported — O206's own "destroy" split. O206's test asserting "withheld" for that member is inverted.
+   - The arm stays, with its reason rewritten for the one case that can still reach it: a member re-diverted between the sweep's decision and its lock. `Settle::AsDecided` asks the fence inside the lock (`retention.rs:443-470`), and by reading the case is reachable — an ordinary row sitting at another filing's queue id (O220 item 1(ii) names such residue), which that filing's flagged write replaces. Without the arm, `attest_in`'s fence would refuse the whole sweep. A test reaches it through that route.
+
+**The ruling, part (a): report the row, never fail the list.**
+
+7. **The unverifiable report.** `admission_pending` returns the readable rows and, beside them, `unverifiable`.
+   - **Its scope** is every row that either copy places in the queue and that does not verify. The two copies are the clear `wing` column and the row's own `meta_json` wing claim, read through `claimed_site` (`lib.rs:2190`). "Does not verify" means: the tag fails, the covered meta does not parse, the content does not decrypt, or (O197) the target field is malformed.
+   - **Each entry carries** the `seq`; the id only when `is_drawer_id` holds, and otherwise "malformed id, N bytes"; a reason from a closed vocabulary; and whether the destruction fence holds the row (its clear column names the queue).
+   - **None of the row's own claims travel** — no intended wing, room, signals or filing. Once the tag fails, those are the writer's strings.
+   - `ok` is false while the report is non-empty.
+   - The return type changes and is `#[must_use]`, so the compiler enumerates every caller and no convenience wrapper can drop the report.
+   - `record_read` counts only the readable rows.
+8. **Every surface.**
+   - **CLI**: prints the pending rows, then the unverifiable ones, and exits 2 when `ok` is false. It never prints "Nothing awaits review." (`main.rs:3155`) beside a non-empty report. It names the remedies: re-import the genuine exported queue record with `UNDERCROFT_ADMISSION=quarantine` declared (O216 verdict 3), or `backup restore` an archive older than the tampering.
+   - **`/v1`**: 200, with additive `unverifiable` and `ok` keys beside `pending` and `screening`; the body is already an object (`tenant.rs:2086-2089`).
+   - **Ops plane**: no code change. `is_integrity_verdict` reads `ok: false` on a body under 400 (`orchestrator/src/main.rs:229-237`), so it exits 2.
+   - **Console**: renders the report and the drift through its escaping helper, with no rule buttons on an unverifiable row, and shows NOT CLEAN on `ok: false`.
+   - **`HAND_PROJECTED`**: rows for the new struct, and for `PendingAdmission`'s drift field, on the CLI and on `ui.html`.
+
+**Options that lost.**
+- **Part (b):**
+  - **F1** (the clear column, with corrected advice): keeps the laundering lever on the four doors above, and the history leak.
+  - **F2′** (move the fence only, list on the clear index): the fence refuses a row the list does not show, on exactly the row the flip hid. The "never disagree" invariant would be refuted rather than kept, to save the walk.
+  - **F3** (either copy, for destruction): O216's lost option. It refuses a row its tag proves ordinary, with advice no door can follow.
+  - **Re-pointing `_for_read` silently at the new rule**: relaxes a read fence nobody ruled on.
+  - **A covered-copy boundary in `write_drawer_stmts` for every ordinary write**: O216 rejected a verified read on every overwrite as a cost every re-mine pays. Item 2 closes the two doors that reach a covered-pending row through lookups they already make.
+- **Part (a):**
+  - **Keep failing**: one offline byte denies review of the whole queue.
+  - **A state on the row carrying its own claims**: unverified strings beside verified ones on a reviewer's surface.
+  - **The id shown verbatim**: the id is the writer's on exactly these rows.
+  - **A vault-wide report** (a run-1 lens): turns the list into a second `verify`, and exits 2 on any vault with an unrelated tampered row.
+  - **A report scoped to the clear column alone** (run 1's refuter, a run-2 lens): hides a tag-broken row whose clear column was moved away while its `meta_json` still claims the queue.
+
+**Where the two runs disagreed, and what settled it.**
+- **The history fence.** Run 1 moved it onto the destruction predicate; run 2 put it on the read rule. **Settled for run 2**: it is a READ fence, `_for_read`'s own doc rules either copy for reads, and A28 lets a mirror narrow a read. Tightened here on the unverifiable arm: both runs read the clear column there, and this record omits the row's records instead, on `_for_read`'s rule, because a failing row's clear column is the writer's.
+- **The report's scope.** Run 1 scoped it to the fence's unreadable arm (clear column reserved); run 2 to either copy's claim, with a marker saying whether the fence holds the row. **Settled for run 2**, by O206 ruling 2's reason: a report scoped by one copy reinstates the escape. Run 1's "double flip" residual holds only for a row whose BOTH copies were rewritten.
+- **The report's rendering.** Run 2 showed the id; run 1 rendered by `seq`, with the id only when `is_drawer_id` holds. **Settled for run 1**, by reading `lib.rs:5190-5201` and `:1926`.
+- **The dedup doors.** Run 1 brought both into this unit; run 2 filed the refresh as a new entry and did not see `dedup_groups`. **Settled for run 1**:
+  - `dedup_groups` must move with the fence, or the fence move creates a hostage (reading of `manage.rs:1680-1797`);
+  - the refresh is the same laundering lever, closed through a lookup it already makes, and leaving it out would let this unit claim to close reverse-flip laundering with one door open.
+
+  Run 2's other route, the id framing, remains a new entry.
+- **The sweep's withheld arm.** Run 1 removed it as unreachable; run 2 kept the call (O206 ruling 3). **Settled for run 2**: by reading, the arm is reachable through residue at a queue id (item 6). Run 1's concern is kept: the stale test is inverted, and a new test reaches the arm.
+- **How the list enumerates.** Run 1: the walk, with an expression index in reserve. Run 2: the walk or nomination, at the build's choice. **Settled**: the walk; nomination is the lever only if the cost probe requires it (item 4).
+- **`ok` on drift.** Neither run said so; tightened here on O206 ruling 4's precedent.
+
+**Claims refuted, the brief's included.**
+- **The brief**:
+  - it named six fence callers; there are eight. It missed `forget --backend`, the history fence, and that `_for_read` is built on the fence;
+  - it missed both dedup doors;
+  - "what it can name of an unverifiable row without trusting it is the id": the id column is unconstrained and the writer's.
+- **A run-1 lens**: "the exit code was already 2, so no `UPGRADING.md` entry". The CLI's exit stays 2, but `/v1` moves from 409 to 200 with `ok: false`, and O206 recorded exactly that move for the sweep.
+- **Run 1's refuter**: the sweep's arm "can no longer fire". It can, through residue at a queue id.
+- **Run 1's refuter**: the history fence "moves with item 1 because the helper it calls moves". That is a mechanical reason for a doctrinal question, and the doctrine says it is a read.
+
+**Probes owed by the build**, run by the integrator:
+- **P2a.** One pending row's tag zeroed. The other rows are listed; the row is reported by `seq` and id; CLI exit 2; `/v1` 200 with `ok: false`; ops plane exit 2; the console shows it.
+- **P2a′.** A row inserted offline into the reserved clear wing under a non-hex id carrying an ANSI escape. It is rendered by `seq`, and no control byte reaches stderr, the `/v1` body or the console.
+- **P2a″.** A tag-broken row whose clear wing is `notes` and whose `meta_json` still claims the queue: reported, marked as not held by the fence.
+- **P2b.** A forward flip: not listed, no `applied`, deletable, and swept with its drift reported.
+- **P2c and P4, inverted.** A reverse flip is listed with its drift, `ok` false. `drawer delete`, `delete_by_source`, `forget` and `forget --backend` each refuse it, naming `allow`/`deny`.
+- **P3a.** A reverse flip, then `forget <id>`. Today: a receipt and exit 0. After: refused.
+- **P3b.** A reverse flip, then a `/v1` save with `dedup_threshold` of similar clean text into the flip's wing and room. Today the pending row becomes an ordinary row and `verify` reads green. After: an ordinary insert, with the pending row intact.
+- **P3c.** A reverse flip on a pending text that duplicates a live drawer, then MCP `undercroft_dedup` with `apply`. Today: destroyed. After: excluded, and the rest of the group collapsed.
+- **The history fence, before and after.** A reverse-flipped row's records are hidden; a forward-flipped row's records are hidden; an unverifiable row's records are omitted. **The `_for_read` arm**: MCP's fence and `GET …/drawers/{id}` answer exactly as before.
+- **The sweep arm.** A member that is residue at another filing's `Q0`, re-diverted between the decision and the lock through a retention pause point: withheld, not a failed sweep. O206's forward-flip test, inverted: destroyed, with the drift reported.
+- **P-cost.** `admission list` wall time and peak RSS at 10⁵ sealed drawers, the walk against nomination. 10⁶ is a long run and needs the maintainer's go.
+
+**Fails silently if:**
+- `_for_read` or the history fence changes through a shared helper;
+- `unwrap_or(false)` survives on the new predicate;
+- the list stays on the clear index while the fence moves;
+- `import_verdict` keeps its inline copy;
+- the sweep's old forward-flip test still asserts "withheld";
+- the dedup refresh or `dedup_groups` keeps its clear-column decision;
+- the report renders an unconstrained id raw;
+- any renderer prints "Nothing awaits review." beside a non-empty report;
+- the console reads a 200 as clean without reading `ok`.
+
+**Dissent.** A run-1 lens for a vault-wide report; run 1's refuter and a run-2 lens for a clear-column scope; run 1's refuter for the history fence on the destruction predicate and for removing the sweep's arm; run 2's refuter for leaving the dedup refresh to a new entry. All overruled above.
+
+**What remains.**
+- **The double flip.** A row whose tag is broken AND whose clear column and `meta_json` were both moved away is outside the fence and the report. That is O216's stated residual: it needs an offline writer, who could delete the row outright. `verify`'s `bad_records` names it, and `backup create` and every rotation refuse while it exists.
+- **Three new entries are owed**, listed at the end of this record: the id-framing route into the queue id space; `check_duplicate`'s clear-column oracle; and `StoreError::Integrity`'s raw rendering of an unconstrained id.
+- **Part (c)** is escalated in the next subsection. O231 is untouched.
+
+**Version: PATCH.** Part (a) is reporting surface for a silent defect; part (b) is a fence that keeps its documented promise (`docs/AGENTS.md`: pending review evidence is refused "on every surface"). **`UPGRADING.md` is owed**, for:
+- `/v1 GET …/admission` answering 200 with `ok: false` and the readable rows, where one unverifiable row made it 409; the CLI also exits 2 on drift on a listed row;
+- `drawer delete`, `delete_by_source`, `forget` and `forget --backend` refusing a reverse-flipped pending row; `dedup --apply` skipping it; a `/v1` dedup save no longer refreshing it;
+- a forward-flipped ordinary row no longer being listed, and now being deletable and swept;
+- the list's cost moving from an indexed lookup to one pass over the corpus.
+
+`config check` cannot see data; `admission list` and `verify` are the detectors.
+
+#### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
+
+**The question (O221(c)).** A pending row whose tag fails can be neither allowed, denied, deleted nor forgotten:
+- `quarantined` and `attest_in` `get` it first (`admission.rs:1447-1450`, `forget.rs:455-459`);
+- `drawer delete` refuses it on the clear column, and still will under part (b)'s unreadable arm.
+
+May an operator destroy it, and with what record and what receipt?
+
+**Why it is the maintainer's.** Every shape that destroys the row either changes a documented reply or adds a verb or a flag. `docs/AGENTS.md`'s `POST …/admission` row says a deny "destroys through the attested-forgetting path and the response carries the receipt" (`tenant.rs:2113-2121`). Either way the choice decides what destroying unverifiable evidence means, which borders O228 (escalated) and O267's erasure ruling. A panel does not decide what a surface offers. Both runs escalated it, and both recommend the same shape.
+
+**Read for the analysis** (both runs, re-read here).
+- **The brief's "stuck until… nothing" is partly wrong.**
+  - O220's slot rule lands any diversion of a filing on its `Q0` when `Q0` cannot be read (`admission.rs:815-818`). So any flagged record of that filing, imported with the screen on, overwrites a tag-failing `Q0` row, and `deny` then destroys it with a receipt — for the substituted text, never the evidence. The trail does not record the act for what it was.
+  - A tag-failing version-slot row is reached only by its own text. While `Q0` is free, its genuine re-import lands on `Q0` and leaves the broken `Qv` in place (`:798-819`). With its text unknown, a `Qv` row has no exit at all.
+- **The measured remedy has two costs.**
+  - O216 verdict 3's re-import needs an export taken BEFORE the tampering, because `export_each` stops on the row (`lib.rs:11070-11104`).
+  - Since O224 it also downgraded the repaired row's record to `unrecorded` (P2d: `lib.rs:8529`, `admission.rs:834-836`). O227's ruling item 1 repairs that where the destination is unchanged.
+- **While the row exists, the vault cannot be backed up or rotated.** `verify` fails, so `backup create` refuses (`backup.rs:175-178`); every rotation refuses (`lib.rs:3379-3401`); `repair` aborts (`manage.rs:1824-1826`). Blocking rotation is the sharpest cost, because rotation is the response to a suspected key compromise. An agent can create the pending row over MCP by submitting flagged text; breaking its tag needs an offline writer.
+- **An unverifiable ORDINARY row is destroyable today**, unattested, through `drawer delete`: `delete_drawer_ruled` reads no content, and `destroy_in` writes a keyed `del/` tombstone (`manage.rs:1105-1112`).
+
+**Decided by both panels in the meantime: D1, plus part (a)'s report.** No ruling door destroys such a row. The list reports it and names the remedies: re-import its genuine exported queue record with `UNDERCROFT_ADMISSION=quarantine` declared, or `backup restore` an archive older than the tampering.
+
+**Options and their costs.**
+- **D1 alone.** The vault stays unable to `backup create` or rotate, and a `Qv` row of unknown text has no exit. The only exit for a `Q0` row substitutes text under a ruling. This is the "stuck vault" the fence's own rationale says it exists to prevent, and it never prevented it for this row.
+- **D2, plain `deny` destroys it unattested** (a ruling record plus `destroy_in`'s keyed tombstone, through `delete_drawer_ruled(Ruled)`, the body the allow already uses). It adds no path. But it changes the documented reply ("the response carries the receipt") on one arm without the operator asking, and a script reading a receipt-less 200 can take it for an attested erasure.
+- **D3, an attestation that marks its content unverified** (or carries a fingerprint over unverified bytes): REJECTED on evidence, three ways.
+  - A receipt that cannot verify must never be minted (`attest_in`'s own rule, `forget.rs:507-526`).
+  - O267's `#### RULED 2026-10-06` item 4 forbids any signed extension to the attestation before O315's age fence, because `verify_forget_attestation` checks the signature before the version and drops unknown fields.
+  - Unsigned, an older verifier drops the marker and reads the document as an ordinary receipt.
+- **D4, an explicitly declared act**: a flag on `deny`, or a verb of its own.
+- **A fence change letting `drawer delete` destroy it**: reuses an existing door, but the trail cannot tell it from housekeeping (`PendingEvidence::Protect`'s reason, `manage.rs:108-111`).
+
+**Recommended answer: D4's shape.** The maintainer picks the spelling. The act is explicit, on one named row, and inside one destruction lock it:
+1. re-classifies the row through part (b)'s predicate and refuses unless the row fails verification now AND the destruction fence holds it — so it can never bypass attestation on a readable row;
+2. appends a ruling whose keyed canonical carries a distinct verdict word (for example `denied-unverified`), so "denied" never means two acts and never reads as housekeeping;
+3. destroys through `destroy_in` and its keyed tombstone;
+4. mints no attestation and no fingerprint, and says so on the CLI, `/v1`, the ops plane and the console;
+5. is unreachable from the sweep, bulk deletes and `forget`, and never allows: releasing unverified bytes into the vault is refused on every arm.
+
+**The split, recorded.** One lens (run 2's software engineering lens) preferred D2 with the same distinct verdict word, because it adds no path. Both refuters and every other lens that stated a preference chose the explicit form, because a script that runs `deny` expects a receipt.
+
+**Claims refuted.**
+- **The brief** did not cite O267 item 4 (a run-1 lens found it), and its "stuck until… nothing" missed the `Q0` substitution route and the `Qv` dead end.
+- **A run-1 lens and a run-2 lens**: "the remedy's downgrade is the correct consequence". That holds across vaults, not within one: see O227 item 1.
+
+**Probes owed, whichever is chosen.**
+- **P-L2b.** Two flagged texts for one filing (`Q0`, then `Qv`); export; rule on `Q0`; zero `Qv`'s tag; re-import the genuine `Qv` record with the screen on. Expected by reading: the text lands on `Q0`, `Qv` still fails, and the list still reports it.
+- **P4x.** A crafted flagged record of the same filing replaces a broken `Q0`, and `deny` then succeeds with a receipt for the crafted text.
+- **P2d**, and its inversion under O227 item 1.
+
+**Fails silently if:** a receipt is minted over bytes nothing verified; a destruction carries no ruling record; or the act is reachable from a sweep or a bulk delete.
+
+**Version class.**
+- **D1**: PATCH — nothing beyond part (a).
+- **D4**: MINOR, a new opt-in capability. No `UPGRADING.md` entry, because nothing that runs today stops.
+- **D2**: changes a documented reply on one arm, which is why it is recommended against.
+- **D3**: rejected.
+
+#### RULED 2026-10-08 by the maintainer
+
+**The question (O221(c)).** May an operator destroy a pending row whose tag fails — a row that can be neither
+allowed, denied, deleted nor forgotten — and with what record and what receipt?
+
+**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
+escalated questions, each shown with its panel's recommended answer, this one among them.
+
+**Decided: D4's shape.** The act is explicit, on one named row, and inside one destruction lock it has the five
+properties the recommendation lists, verbatim:
+1. re-classifies the row through part (b)'s predicate and refuses unless the row fails verification now AND the
+   destruction fence holds it — so it can never bypass attestation on a readable row;
+2. appends a ruling whose keyed canonical carries a distinct verdict word (for example `denied-unverified`), so
+   "denied" never means two acts and never reads as housekeeping;
+3. destroys through `destroy_in` and its keyed tombstone;
+4. mints no attestation and no fingerprint, and says so on the CLI, `/v1`, the ops plane and the console;
+5. is unreachable from the sweep, bulk deletes and `forget`, and never allows: releasing unverified bytes into
+   the vault is refused on every arm.
+
+D2 (one lens's preference) and D3 (rejected on evidence) are not taken. Until D4 is built, D1 and part (a)'s
+report stand, as both panels decided. The probes are owed: P-L2b, P4x, and P2d with its inversion under O227
+item 1.
+
+**Version.** "**D4**: MINOR, a new opt-in capability. No `UPGRADING.md` entry, because nothing that runs today
+stops."
+
+**What remains open: the spelling.** The recommendation says "The maintainer picks the spelling" — a flag on
+`deny` or a verb of its own, and the verdict word, `denied-unverified` being the analysis's example only — and
+the answer approved the shape without naming one. It is still the maintainer's; the building unit asks it with
+its pull request.
+
+#### BUILT 2026-10-12 — parts (a) and (b), exactly as ruled; part (c) filed as O-NEW-o221-1
+
+**The predicate (ruling items 1–2).** `VaultStore::queue_standing(conn, id)` in
+`crates/undercroft-store/src/admission.rs` answers `QueueStanding::{Pending, PendingUnverifiable,
+NotPending}`: the covered `meta.wing` wherever the row's tag verifies and its meta parses
+(`QueueStanding::of_covered`), the clear column only where it does not (`of_row` over
+`CoveredRow::TagFailed`/`MetaUnparseable`), read through `covered_one` on the caller's connection,
+every other error propagated. `is_quarantine_pending` is gone. Its callers: `delete_drawer_ruled`
+(inside the destruction lock), `delete_by_source` (a `?` where `unwrap_or(false)` was — O259 keeps its
+one-lock half), the import door's unreadable arm (`import_verdict` asks it in place of its inline copy,
+and its readable arm decides by `of_covered`), and the sweep's withheld arm. `forget --backend`'s
+pre-flight and `attest_in` decide by `of_covered` on the meta they have just verified. The dedup
+refresh (`save_with_dedup_vec`) counts a match whose covered wing is reserved as none and files an
+ordinary insert; `dedup_groups` drops such a member, survivor included, from the verified reads it
+already made — and `DedupReport.duplicate_groups` now counts the groups left with two or more members.
+A refusal names the door that works from the typed answer: `Pending` → `admission allow`/`deny`;
+`PendingUnverifiable` → `StoreError::IntegrityFinding` naming `UNVERIFIABLE_REMEDIES`, with a
+malformed id rendered by its length (`shown_id`). The predicate is its own function so O259's
+`Fenced` witness can be built on it.
+
+**The read fences (item 3).** `is_quarantine_pending_for_read` keeps its contract over its own
+explicit probe, `clear_wing_names_queue`, then the verified `get`. The agent-scope `history` fence
+hides a record when the clear column names the queue (the same probe) OR the covered wing does, and
+omits the records of a row that does not verify.
+
+**The list (items 4, 7, 8).** `admission_pending` returns `AdmissionQueue { pending, unverifiable,
+ok }` (`#[must_use]`, no convenience wrapper): one `walk_covered` pass, listing exactly the `Pending`
+rows, each read for content and destination as before and carrying `PendingAdmission.mirror_drift`
+(the walk's strings); `unverifiable` holds `UnverifiableQueueRow { seq, id, malformed_id_bytes,
+reason, fenced }` for every row either copy places in the queue that does not verify — the clear
+column or the row's own `meta_json` claim (`claimed_site`), which `CoveredRow::TagFailed` and
+`MetaUnparseable` now carry with the `seq` and the clear wing — and for a `Pending` row whose content
+does not decrypt (`content-undecryptable`). `ok` is false while either is non-empty; `record_read`
+counts the readable rows. The CLI prints the rows, the drift, the unverifiable rows and the remedies,
+never "Nothing awaits review." beside a report, and exits 2; `/v1` answers 200 with additive
+`unverifiable` and `ok`; the ops plane is unchanged and exits 2 on `ok: false`; the console renders
+both through `esc`, with no rule buttons on an unverifiable row, and shows NOT CLEAN.
+`HAND_PROJECTED` gains `AdmissionQueue` × {CLI, `/v1`, console} and `UnverifiableQueueRow` × {CLI,
+console}; `PendingAdmission`'s two rows now see `mirror_drift`. Nomination was not needed (cost
+below).
+
+**The sweep's arm (item 6), and a claim of the ruling this build refutes by measurement.** The arm
+stays, asking the predicate on the lock's connection, its reason rewritten. But the residue route the
+ruling names does not reach it: `Settle::Recheck` re-classifies each member through `classify` before
+the fence is asked, and a member re-diverted between the decision and the lock has a covered wing no
+policy covers, so it is dropped as out of scope; `AsDecided` and the dry run decide and fence in one
+state. `o221_a_member_re_diverted_inside_a_sweep_window_is_not_destroyed` drives exactly that route —
+an ordinary row imported at filing F's `Q0`, swept, and F's flagged write landing on it through the
+`Decided { attempt: 0 }` pause point — and measures: not destroyed, not withheld, the sweep `ok`, the
+row pending afterwards. So the arm is a backstop by reading, not a door; the probe's "withheld" is not
+reachable on this route, and O334's sentence that the residue route reaches the arm is corrected
+beside it. O206's forward-flip test is inverted
+(`a_member_flipped_into_the_review_queue_is_destroyed_and_its_drift_reported`).
+
+**Gates and evidence.** `crates/undercroft-store/src/queue_standing_tests.rs`, eleven O221 tests:
+P2a (`o221_one_unverifiable_row_is_reported_beside_the_readable_queue`), P2a′
+(`…_a_planted_malformed_id_is_named_by_seq_and_length_only` — no control byte in the report or the
+refusal), P2a″ (`…_a_broken_row_claiming_the_queue_only_in_its_meta_is_reported_unfenced`),
+`…_a_pending_row_whose_content_does_not_decrypt_is_reported`, P2b
+(`…_a_forward_flip_is_not_listed_and_is_deletable`), P2c/P4/P3a
+(`…_a_reverse_flip_is_listed_with_its_drift_and_every_destruction_refuses_it` — `drawer delete`,
+`delete_by_source`, `forget`, `forget --backend` with a counting mirror that deletes nothing, then a
+`deny` whose receipt verifies), P3b (`…_a_dedup_save_never_refreshes_a_reverse_flipped_pending_row`,
+with an ordinary-match premise), P3c (`…_dedup_excludes_a_reverse_flipped_pending_duplicate_and_collapses_the_rest`),
+the history fence before/after with `_for_read` unchanged, the sweep route above (which pins a
+behaviour the old logic shares, so it is not RED before the fix), and — after the review below — a
+retyped row outside the queue failing no door, one inside it reported and held, `delete_by_source`
+deleting an unreadable member the fence does not hold, and an undecryptable pending row refused with
+the remedies. `tenant.rs`:
+`o221_the_admission_list_reports_unverifiable_rows_at_200_with_ok_false` (P2a and P2a′ on `/v1`,
+the reverse flip refused by `DELETE …/drawers/{id}`). `tests/cli.rs`:
+`o221_admission_list_reports_unverifiable_rows_and_the_fence_reads_the_covered_wing` (exit 2, no
+control byte on stdout or stderr, `drawer delete` and `forget` refusing the reverse flip, the forward
+flip deleted). The console, served by the release binary over a tampered queue and looked at: NOT
+CLEAN, the drift under its row, the two unverifiable rows by `seq` (one as `malformed id, 9 bytes`)
+with no rule buttons, and no control byte in the served body. Counterfactuals, each applied by a script that asserts its anchors, forces a recompile
+and restores byte for byte: the predicate on the clear column fails six of these and the inverted
+sweep test; the list failing on one row, the dedup refresh, `dedup_groups`, the history fence, the
+`unwrap_or(false)` and `attest_in`'s check, reverted together, fail nine — each for its own reason
+(the dedup arm destroyed both live duplicates in the pending row's favour; `forget` minted a receipt).
+
+**A real corpus, through the release binary.** The LoCoMo feed mined into 32 wings of a sealed vault
+(2,720 drawers) and four flagged saves, then the offline writer with `sqlite3`: a clean queue lists
+four rows at exit 0; one tag zeroed, it lists three, reports `seq 2721` as `tag-fails` with the fence
+holding it and the remedies, and exits 2; `drawer delete` and `forget` of a reverse-flipped row exit 1
+naming `allow`/`deny`, the row still there; a forward-flipped mined drawer is not listed and
+`drawer delete` removes it at exit 0. The new e2e checks — six for O221 (a fixture and five arms) and
+one for O226 — pass against this release binary; against the `5108dfa` binary (built from the base
+tree, probed for the absence of the new text) O221's five arms and O226's one fail, the fixture
+passing. **Cost, best of seven `admission list` runs, whole process**,
+measured on 10,884 sealed drawers (128 wings) with nothing else running: 56–86 ms on this build
+against 18–26 ms on `5108dfa`'s indexed lookup — about 3.5–5.5 µs a drawer for the walk; on 2,720
+drawers, 37–54 ms. At 10⁵ (100,049 sealed drawers, 1,177 wings — the ruling's P-cost, measured while
+other containers were running, so contended): 694–714 ms best of seven against 135–175 ms, about
+5.5 µs a drawer for the walk. The walk was kept (item 4); nomination was not needed to stay under a
+second.
+
+**After an independent review of this build, the same day — all mine.** The covered walk read a
+column of the wrong storage type as an error, and the predicate and the list propagated it, so ONE
+offline retyping of any drawer (`content` as TEXT, `meta_json` as a BLOB, on a row not even in the
+queue) failed `admission list`, the agent-scope `history` and `drawer delete` of that row with a raw
+conversion error, where `5108dfa` answered all three — against part (a)'s "never fails on one row",
+item 3's "fails no history call" and the FOLLOWED "an unreadable row stays deletable". Such a row is
+now `CoveredRow::Undecodable`, a row that does not verify: reported as `column-retyped`, omitted from
+the agent history, decided by the fence's unreadable arm; `verify` and the sweep still raise the
+conversion error (O-NEW-o221-2, filed). A pending row whose content does not decrypt is refused with
+the remedies and the filed act, not with `allow`/`deny`, which both refuse it; the sweep's withheld
+reason depends on the row; `delete_by_source`'s first test, which asserted a refusal over a retyped
+ordinary member, is inverted. Merged over trains 1 and 2: `VaultStore::fence`, which mints O259's
+`Fenced` witness, asks `queue_standing` and answers through `queue_refusal`, so the witness and the
+predicate are one door.
+
+**What remains.** Part (c), D4, is O-NEW-o221-1. A retyped column in `verify` and the sweep is
+O-NEW-o221-2. The double flip stays O216's stated residual.
+O334, O335 and O336 are this ruling's three filed entries and are untouched; the fences' own
+refusals render a malformed id by its length, which O336's gate will find already true at these
+sites.
+
+### O226 — CLOSED 2026-10-12: a convergence onto a pending row carries the row's whole covered declaration — only its signals grow — at the door, in the batch's taken map and at the backstop
+
+**Filed 2026-09-18 by O220's refuter, established by reading.** O220's ruled
+design converges a diversion whose text equals the pending row's, and the
+write replaces the row's metadata wholesale: `kind`, `supersedes`, the agent
+claims, `content_date`, `occurrences`. `admission_allow` restores those
+fields, and `PendingAdmission` shows none of them, so what a reviewer allows
+can carry a declaration the screen never saw beside the text it did.
+
+**Why it is a ruling.** Equality deliberately excludes metadata, because
+`filed_at`, `added_by` and the signals legitimately differ on every re-mine
+and restore. Which covered fields are part of "what the screen saw" is the
+question — and the answer decides whether a convergence may write them.
+
+**Gate**: a convergence that changes only `kind` or `supersedes` leaves the
+pending row's covered declaration as the reviewer will allow it, as ruled.
+**Counterfactual**: today, the incoming declaration replaces it.
+
+O224's ruling fixes this entry's answer for one field: a convergence never
+rewrites `queued_against`, the record of what the destination held, because
+that record is what an allow requires to hold and restoring the vault's own
+backup converges every pending row. Whatever is ruled here for the other
+covered fields must not loosen that.
+
+**Relations:** shares a question with O148 — this entry's convergences are reached with the screen off once that entry's hold lands.
+
+#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
+
+**The question.** A diversion whose text equals a pending row's text converges, and its write replaces the row's metadata wholesale (`lib.rs:7647-7653`); only `queued_against` is carried (O224 item 3). The allow restores every covered field it does not clear (`admission.rs:1317-1326`). Which covered fields may a convergence rewrite, and does the list have to show the declaration the allow will restore?
+
+**Prior rulings found and their disposition.** No `#### RULED` subsection exists in this entry.
+- **O220 item 2** (equality is verbatim content; metadata is excluded): FOLLOWED. It rules what is EQUAL, not what is written, and slot choice is untouched (O197's ruling adds the target to identity, beside that item).
+- **O220's "equal text converges and writes, as today"** and **O215** (re-mining is never a no-op): "writes" is FOLLOWED — the convergence still writes and appends its chain record. "As today" is REVISED beside it, on the evidence below, for what the write carries.
+- **O224 item 3** (a convergence copies the stored record verbatim, a stored none included) and **its lost "re-basing" option**: FOLLOWED and generalized. Nothing here loosens it, because `queued_against` is part of what is carried.
+- **`update_drawer`'s "the reviewer must rule on exactly what the screen saw"** (O216) and **O224's converse**: FOLLOWED, extended from the text to the whole row.
+- **O31** (the screen is the only author of screen fields): FOLLOWED. It is why the signals are the one exception (item 1).
+- **O224's residual** (a metadata-only move of the destination is replaced by the allow): untouched.
+
+**Read before ruling.**
+- **What a convergence writes today.** The door clones the incoming candidate and changes only the wing, room, signals, id and `queued_against` (`admission.rs:1134-1140`, `:761-769`). `write_drawer_stmts` replaces `meta_json` wholesale. The batch carry (`lib.rs:7840-7866`) and the backstop `queue_row_raced` (`:7421-7432`) handle `queued_against` alone.
+- **What the allow restores, and what the reviewer sees.** The allow restores verbatim `kind`, `supersedes` (receipted at write time, `lib.rs:7565-7581`), the `agent`/`channel`/`session` claims, `content_date`, `hall`, `occurrences`, `filed_at`, `added_by`, the line span, `normalize_version` and `id_recipe`. `filed_at` is the retention clock, and any past value passes (`admission.rs:472-491`). The list shows none of these except `filed_at` and the signals (`:51-78`).
+- **What the screen reads**: content, wing, room and the writer identity (`admission.rs:1063-1126`). It never reads `kind`, `supersedes`, `content_date` or the claims.
+- **Legitimate convergences differ only in `filed_at`, `added_by` and the signals:**
+  - API saves never converge, because each takes a unique append index;
+  - an unchanged re-mine carries a new `filed_at`;
+  - a self-restore stamps `added_by` as `import` (`lib.rs:8569-8576`) and carries the payload's `filed_at`;
+  - two identical flagged updates keep the stored meta and re-stamp `added_by` (`manage.rs:1335-1336`).
+- **Signals legitimately vary between equal-text submissions.** The rate signal is a function of the window (`admission.rs:1067-1072`, `:1171-1203`) and the tier-2 advisor is a model call (`:1114-1125`). A later screen can therefore carry fewer, or more, signals than the first.
+- **What a hostile converger can do today.** A converger is anyone holding the text and the filing; the filing is recoverable offline (O220), and a tenant reaches the convergence through `/t/import`. Today such a converger can:
+  - back-date `filed_at`, so the allowed drawer is swept at once;
+  - move `content_date` into a date window;
+  - attach a `supersedes` link, receipted at release, or a `kind` the reviewer never saw.
+- **No false alarm.** An identical rewrite raises no version-replay finding: `replay_finding` returns none when the newest record's tag equals the row's (`replay.rs:176-179`).
+
+**The ruling: C1. A pending row's covered declaration changes only by a ruling, as its text already does.**
+1. **What a convergence writes.** It still WRITES (O215, O220), so the chain records every re-submission. What it writes is the stored row's whole covered meta, verbatim, with one exception: `admission_signals` becomes the stored signals followed by any the current screen raised that are not already there, deduplicated by (code, offset), stored order first.
+   - The signals are the screen's own output (O31).
+   - The allow clears them (`admission.rs:1322`), so they cannot widen what is released.
+   - A re-submission's own signal (a rate anomaly, an advisor verdict) is evidence the reviewer should keep.
+2. **Carried by default.** The function clones the stored meta and replaces only the signals. It does not enumerate fields, so a `DrawerMeta` field added later is carried — fail-closed — with no second inventory to keep in step. A gate drives a convergence whose incoming meta differs from the stored row's in every serialized key (iterated from the serialized form, so a new field is covered without editing the test) and requires the stored covered meta back, byte for byte, apart from the signal union.
+3. **One function, three call sites, at `Q0` and at `Qv` alike:**
+   - **the door**: `read_queue_row` returns the stored meta, read in the same `get` that judged `SameText`, and `Slot` carries it;
+   - **the batch `taken` map**: it holds the occupant's meta, not the text-and-record pair;
+   - **`queue_row_raced`**: a row counts as raced unless its text and every carried field equal the candidate's and its stored signals are a subset of the candidate's. A retry converges and carries.
+4. **The target.** With O197's ruling, a convergence requires the same filing, text and target, so carrying the stored target is a no-op. `queued_against` is carried as O224 item 3 ruled.
+5. **The doc.** `PendingAdmission.filed_at`'s doc (`admission.rs:60-63`) is corrected: it is the filing time the FIRST submission carried — for an update the drawer's original time, for a re-mine when its `Drawer` was built, for an import the payload's value.
+
+**Costs, stated.**
+- A re-mine no longer moves a pending row's `filed_at`. An allowed drawer's retention clock therefore starts at the first submission, the earlier of the two and so the stricter.
+- A self-restore no longer moves `added_by` on queue rows. O223 keeps the question for ordinary rows.
+- A corrected declaration takes effect at the first re-mine after the ruling.
+- A bursty self-restore under a declared rate screen adds its rate signal to the rows it converges on, as the wholesale write records it today.
+
+**Options that lost.**
+- **C2, carry a named subset** (a run-2 lens): sound for the declaration, but it lets a convergence move `filed_at` — a crafted one backward, after review — which is the one covered field the reviewer is shown. A subset list also defaults a new field to "rewritable", the fail-open direction.
+- **C3, a slot per declaration**: revises O220 item 2 with no legitimate producer, and puts two rows with one text before a reviewer; the siblings both reach `applied` (`admission.rs:919`), so the later allow rewrites the declaration anyway.
+- **C4, refuse a differing declaration**: breaks "never rejected and never silently dropped", whose cost O220 measured on re-mines and restores (P-tail, P-restore).
+- **C5, the status quo plus showing the declaration**: the list is stale by allow time (O224's r3), and binding the declaration into the allow is O225's question, the maintainer's.
+- **Signals from the incoming write alone** (a run-1 lens): drops evidence a reviewer may already have seen.
+- **The stored signals verbatim** (run 2): see the split below.
+- **A `DrawerMeta` destructure with no `..`** (run 1's mechanism): see the split below.
+
+**Where the two runs disagreed, and what settled it.**
+- **The signals.** Run 1 took the union; run 2 kept the stored signals verbatim. **Settled for run 1.** O220 item 2's own words ("the signals vary") and the screen's code (the rate window, the advisor call) show that a later submission can raise a signal the first did not. Under verbatim that signal is written nowhere durable: the converging write's chain record holds only the row's tag. Run 2's reason — staleness cannot widen what is released — is true, and it answers release, not the loss of review evidence. The union only grows, so it never removes what a reviewer saw.
+- **The mechanism.** Run 1 destructured `DrawerMeta` with no `..`, so a new field would not compile until ruled; run 2 carried by default. **Settled for run 2's mechanism.** Carrying by default is already fail-closed for a new field, and a destructure is a second inventory every future field must touch for no change in outcome. The serialized-key gate (item 2) is what sees a new field.
+- **Agreed by both runs, and kept**: C1, `filed_at` and `added_by` carried, three call sites, and the doc correction.
+
+**Claims refuted.**
+- **The brief**: its list of who converges is right, but it omitted that a later screen can carry different signals from the first.
+- **A run-2 lens**: C2 "costs the legitimate convergences nothing". It keeps today's moving `filed_at`, the one covered field the reviewer is shown, and with it the back-dating lever.
+
+**Probes owed by the build**, run by the integrator:
+- **P5, inverted.** Two converging imports that differ only in `kind`, `supersedes`, a past `filed_at` and `agent`. After an allow, the drawer carries the FIRST declaration, and the chain holds one write record per submission. Counterfactual: today it carries the second.
+- **A back-dated `filed_at` convergence**, then an allow, then a retention sweep. Today the drawer is destroyed; after, it is kept.
+- **An in-batch convergence** (one CLI chunk) that differs only in `kind`.
+- **A raced convergence** carrying a different stored meta: refused by the backstop, and converging on retry.
+- **A convergence whose screen raises a rate signal the first lacked**: the row's signals become the union.
+- **O224's self-restore gate** still passes, and an unchanged re-mine of a flagged file leaves the covered meta byte-identical apart from the signal union.
+
+**Fails silently if:**
+- the carry runs at the door but not in the `taken` map or the backstop;
+- it applies at `Q0` and not at `Qv`;
+- the merge enumerates fields, so a new one takes the incoming value;
+- O224's self-restore gate changes;
+- `filed_at`'s doc keeps the old rule.
+
+**Dissent.** A run-2 lens for C2; run 2's refuter and two run-2 lenses for verbatim signals. Overruled above.
+
+**What remains.**
+- **The list shows little of what an allow restores.** Beyond `filed_at`, the list shows nothing of the restored declaration. That gap exists on every pending row, not only on convergence, and binding the declaration into the allow is O225's question (decided with O229), the maintainer's.
+- **O223's neighbourhood narrows** for queue rows, without ruling O223.
+
+**Version: PATCH.** No surface field is added; one reporting field's documented meaning is corrected. **`UPGRADING.md` is not owed**: nothing that runs today stops. CHANGELOG states that a convergence keeps the pending row's declaration.
+
+#### BUILT 2026-10-12 — C1, exactly as ruled
+
+**One function, three call sites (items 1–3).** `admission::converged_meta(stored, raised)` clones the
+stored row's covered meta and replaces one field: `admission_signals` becomes the stored signals
+followed by any `raised` not already there, deduplicated by code and offset. It enumerates no field,
+so a field added to `DrawerMeta` later is carried. The door: `read_queue_row` returns the stored meta
+from the same `get` that judged `SameText`, `Slot::converged` carries it, and `screen_and_divert`
+writes `converged_meta(stored, the screen's signals)` — at `Q0` and at a version slot alike, its
+`queued_against` (O224 item 3) carried with everything else. The batch's `taken` map holds each
+occupant's meta and a later row converging on it takes `converged_meta` of it. The backstop
+`queue_row_raced` refuses unless `admission::carries(stored, candidate)` holds: every covered field
+but the signals equal in the stored form (`DrawerMeta::at_rest`, which `Drawer::meta_at_rest` now
+calls, so there is one), every stored signal among the candidate's. `PendingAdmission.filed_at`'s doc
+says the FIRST submission's time (item 5). O197's target, when it lands, joins the
+`SameText` comparison beside this; nothing here blocks it.
+
+**Gates and evidence.** In `queue_standing_tests.rs`, six O226 tests:
+`o226_a_convergence_carries_the_stored_declaration_byte_for_byte` (the item-2 gate: a fully populated
+stored row, an incoming meta asserted to differ in every serialized key but the filing's and the
+screen's — read from the serialized form, so a key both sides serialize alike fails the premise —
+and a declared rate screen raising a signal the first submission lacked; the raw `meta_json` after is
+the stored bytes with the union, one chain record per submission, and a third identical submission
+moves nothing), P5 inverted on both import functions
+(`o226_an_allow_restores_the_first_declaration_after_converging_imports`), the back-dated
+convergence (`o226_a_back_dated_convergence_cannot_age_an_allowed_drawer`), the in-batch convergence,
+a convergence at a version slot, and the backstop (a `kind` change and a dropped signal refused, an
+added signal accepted). Reverting the door, the taken map and the backstop together failed all five
+that existed then (the version-slot test was added after); each alone fails its own: the door four,
+the version-slot test among them, the taken map the in-batch test (the backstop refuses the batch as
+raced), the backstop its own. O224's self-restore gate and its convergence tests pass unchanged.
+
+**A real corpus.** On the same 2,720-drawer vault, a flagged file mined into wing `w9` and mined
+again a second later converges: the row's `meta_json` is byte-identical across the re-mine (its
+`filed_at` the first mine's) and its record id holds two chain records, one per submission. The e2e
+check of the same, run against the release binary, passes; against `5108dfa`'s binary it fails, the
+re-mine having moved the row's `filed_at`.
+
 ## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
@@ -35970,15 +36557,17 @@ an ordinary drawer, while the pending row stays at its queue id — so the text
 is retrievable and still awaiting a ruling at once. Whatever is ruled here
 has to answer that arm too.
 
+O226, built 2026-10-12, made every convergence onto a pending row carry that row's
+covered declaration, so the convergences this entry's hold makes reachable with the
+screen off carry it too; its relation line left with it.
+
 **Relations:** shares a diff surface with O147 — both fixes edit `migrate_tenant` in `crates/undercroft-orchestrator/src/proxy.rs`: one conditions its closing source delete, the other refuses before the export or forces `keep_source` in that same branch.
 
 **Relations:** sequenced before O219 — that entry's rule is complete only under the hold this entry adds.
 
 **Relations:** shares a question with O223 — through that entry's arm, a self-restore of a vault with a queue is a no-op in both screening postures.
 
-**Relations:** shares a question with O221 — that entry's screen-off remedy exists once this entry's hold lands, and that entry owns its wording.
-
-**Relations:** shares a question with O226 — that entry's convergences are reached with the screen off once this entry's hold lands.
+**Relations:** shares a question with O-NEW-o221-1 — that entry's screen-off remedy exists once this entry's hold lands, and that entry owns its wording.
 
 **Relations:** shares a question with O227 — that entry's cost lands at every destination once this entry's hold lands.
 
@@ -37815,6 +38404,13 @@ restores to a declared id while the record describes the recipe id refuses
 rather than passes, which is safe and would be a new trap.
 
 **Relations:** shares a diff surface with O217 — both edit `filing_ids` and `aimed_filing`.
+
+**Note from O221's and O226's build (2026-10-12).** `admission list` now reports a row it cannot
+verify through `UnverifiableQueueRow`, whose `UnverifiableReason` is a closed vocabulary this
+entry's malformed target joins as one more arm (ruling item 2's "O221(a)'s report lists such a
+row"). A convergence now carries the pending row's whole covered meta (`admission::converged_meta`),
+so this entry's item 3 adds the target to `read_queue_row`'s `SameText` test, to the `taken` map's
+comparison and to `admission::carries`, beside the declaration those already compare.
 
 #### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
 
@@ -39854,324 +40450,6 @@ two vaults' exports concatenated, for one — now exits 1 or answers 400 with
 nothing written, naming both positions; the remedy is to keep one version.
 `config check` cannot see payload content.
 
-### O221 — a queue row no ruling door can act on: one whose tag fails, and one flipped into the reserved wing
-
-**Filed 2026-09-18 by O216's ruling panel; measured by its probes P2 and P3 on
-the `4ff51ab` binary.**
-- **A pending row whose tag fails** makes `admission list` fail for the WHOLE
-  queue, because `admission_pending` propagates `get`'s error
-  (`crates/undercroft-store/src/admission.rs`). `allow` and `deny` fail on
-  `Integrity` through `quarantined`, `drawer delete` refuses it on the clear
-  column, and, by reading, `repair` aborts on it
-  (`crates/undercroft-store/src/manage.rs:1600-1603`). The one remedy measured
-  is re-importing the genuine queue record with the screen on, which
-  converges onto the row through the diversion. With the screen off there is
-  none.
-- **An ordinary row whose clear `wing` was flipped offline to the reserved
-  wing** is listed with no destination, `allow` answers "not in the quarantine
-  wing", and `drawer delete` refuses it with advice to use `allow`/`deny`,
-  neither of which can act on it. `drawer update` is the one exit, and nothing
-  says so. An import of the IDENTICAL record over it is O215's no-op, because
-  the covered copy matches, so the flip stays; only a changed record heals it
-  (pinned as a cost in `the_covered_wing_decides_what_an_import_may_not_replace`).
-
-**Shape.** `admission list` should report an unverifiable row rather than fail
-on it; the delete fence's advice should match what the ruling doors can do;
-and whether an operator may deny a pending row that fails verification is a
-question of what destroying unverifiable evidence means.
-
-Related, and in prose since O220 closed: O220's slot rule treats a pending row that cannot be read as replaceable, which is what keeps the one remedy measured here working.
-
-**Gate**: with one pending row's tag zeroed, `admission list` lists the others
-and reports that row; the delete refusal on a row flipped to the reserved wing
-names the exit that works. **Counterfactual**: today's whole-queue failure,
-and advice no door can follow.
-
-**Added 2026-09-19 by O206's ruling, in prose because O206 is done.**
-- **The reverse flip destroys review evidence (P4, measured on `129c789`).**
-  A pending row whose clear `wing` was flipped offline from the reserved wing
-  to `notes` is destroyed by an operator's `drawer delete` — exit 0, the row
-  gone, a plain `del/` tombstone — where the unflipped row is refused. The
-  destruction fence (`is_quarantine_pending`) reads the clear column, so the
-  flip lifts it. MCP is not affected: its by-id fence is `_for_read`, which
-  refuses when either copy names the queue.
-- **O206's retention sweep meets the forward flip.** A drawer whose covered
-  scope is a policy's and whose clear `wing` names the queue is withheld by
-  the sweep, through the fence's own function, with `drawer update` as the
-  exit the reason names — because handed to `forget_with_proof` the fence
-  would refuse the whole sweep. O206's panel judged that changing the fence to
-  read the covered copy where the row is readable (the shape of O216's verdict
-  2) is this entry's decision, not O206's; if this entry rules it, the sweep's
-  withheld arm and its advice follow.
-
-**Relations:** shares a question with O148 — this entry's screen-off remedy exists once that entry's hold lands, and this entry owns its wording.
-
-#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
-
-**The question.** This subsection rules parts (a) and (b); part (c) is escalated in the next subsection.
-- **(a)** What `admission list` does with a queue row it cannot verify.
-- **(b)** Which copy the destruction fence `is_quarantine_pending` reads — and so what the list enumerates, what the refusals advise, and what the read fences built on that function do.
-
-**Prior rulings found and their disposition.** No `#### RULED` subsection exists in this entry. The `rul(ed|ing)` search covered O206, O216, O220, O224, O231, O259 and O267.
-- **The fence's own rationale** (`manage.rs:1253-1258`), clause by clause:
-  - "the fence and the queue can never disagree": FOLLOWED, and kept by construction (ruling item 4).
-  - "reading the HMAC-covered `meta.wing` instead would make an unreadable row undeletable … a stuck vault": FOLLOWED on the unreadable arm, where the clear column still decides. Recorded here: it never held for a tag-failing PENDING row, which the clear column refuses. That row is part (c).
-  - "a flipped column is already an integrity failure `verify` reports": REFUTED, recorded beside it. O206's P4 destroyed a reverse-flipped pending row at exit 0 before anyone ran `verify`. Each door that destroys or overwrites such a row also erases the `mirror_drift` that was its only trace, because the walk reads rows that still exist (`lib.rs:10642-10655`); it leaves a keyed tombstone, a receipt or an ordinary row. An offline `DELETE` of the same row would instead be caught by `verify`'s orphan-label leg.
-- **O216 verdict 2** (the covered copy decides; the clear column only where the read fails) and **its lost options** ("either copy" for destruction; "the clear column alone"): FOLLOWED, now applied to the fence O216 left alone. `import_verdict` (`lib.rs:8243-8276`) already implements it inline.
-- **O206 on the fence** — "revising it is O221's", its lost option "breaks the fence's stated invariant", and O221's prose that the sweep's withheld arm follows: FOLLOWED. The invariant is kept by moving the list with the fence.
-- **O206 ruling 2** ("an unverifiable row is reported from anywhere and destroyed nowhere"): FOLLOWED at its scope, the sweep. For the list, its reason — a report scoped by either copy alone reinstates the escape — is followed by scoping the report to the union of both copies' claims (item 7), not to the whole vault.
-- **O206 ruling 3** (the sweep asks "the fence itself, never a copy") and **its split ruling** (destroy a covered member whose mirror disagrees, and report the drift): FOLLOWED.
-- **O206 ruling 4** (`ok` false while drift is reported): FOLLOWED for the list (item 4).
-- **O206's lost option (d)** (`json_extract` candidates beside the mirror, "a second parser deciding scope"): FOLLOWED. Nothing here lets that parser decide.
-- **O224 item 9** ("an unreadable destination … never fails the list"): FOLLOWED, extended to the row itself.
-- **`is_quarantine_pending_for_read`'s own doc** (either copy refuses a READ; on a read, unverifiable means refuse): FOLLOWED, and extended to the agent-scope history fence.
-- **A28** and **the 2026-09-08 versioning ruling**: FOLLOWED.
-
-**Read before ruling.**
-- **(a) One unverifiable row fails every reader of the queue.**
-  - `admission_pending` enumerates the clear column (`admission.rs:1224`) and `get`s each row with `?` (`:1229`). One tag-failing or meta-unparseable row therefore fails the whole queue on every surface (O216's P3). The export stops on the same row (`export_each`, `lib.rs:11070-11104`).
-  - `drawers.id` is an unconstrained `TEXT NOT NULL UNIQUE` (`lib.rs:5190-5201`), and `StoreError::Integrity` renders it through `Display` (`lib.rs:1926`). An id an offline writer planted reaches stderr and the `/v1` body verbatim, terminal escapes included.
-- **(b) The fence has eight production callers, not the brief's six:**
-  - `delete_drawer_ruled` (`manage.rs:1009`);
-  - `delete_by_source` (`:1227`, through `unwrap_or(false)`);
-  - `_for_read`'s clear leg (`:1289`), which MCP's by-id fence (`mcp.rs:164`) and `/v1`'s (`tenant.rs:1252`) ride;
-  - the agent-scope history fence (`manage.rs:2509`);
-  - `forget --backend`'s pre-flight (`forget.rs:364`);
-  - `attest_in` (`forget.rs:463`), which `forget`, the sweep and `deny` reach;
-  - `import_verdict`'s unreadable arm (`lib.rs:8250`);
-  - the sweep's withheld arm (`retention.rs:470`).
-- **Two more doors exclude the queue by the clear column without calling the fence:**
-  - `dedup_groups` (`manage.rs:1680`), which deletes drop members through `delete_drawer` (`:1795`); MCP's `undercroft_dedup` reaches it;
-  - the dedup refresh's scan (`lib.rs:8042-8051`), which writes `{id: match_id, meta: incoming}` through `Screen::Apply` (`:8085`) after a verified `get` of the match (`:8080-8084`).
-
-  Nothing in `write_drawer_stmts` asks whether a non-diverted write lands on a covered-pending row: its guards cover writing INTO the reserved wing (`:7495`) and diverted writes (`:7513`).
-- **The reverse flip launders the destruction of review evidence.** A pending row whose clear wing was set offline to an ordinary wing is destroyed or overwritten by the vault's own doors:
-  - `drawer delete` (O206's P4, measured);
-  - `forget`, with a third-party-verifiable receipt: `attest_in` verifies the row (the tag covers `meta_json`, not the column) and then asks the clear-column fence;
-  - `dedup --apply`;
-  - a `/v1` save with `dedup_threshold`, which answers `deduped`.
-
-  The history fence also shows the agent the labels of its own diverted write.
-- **The forward flip is advised toward doors that refuse it.** An ordinary row whose clear wing was set to the reserved one is listed with a "would proceed" state while `allow` refuses it (`quarantined`, `admission.rs:1451`):
-  - `destination <X> applied` when X re-derives (`aimed_filing` takes the covered wing, `:246-257`, then `:919`);
-  - `unrecorded-absent` when it does not, because its `queued_against` was stripped (`lib.rs:7596-7598`);
-  - and its intended fields print blank (`admission.rs:1244-1245`).
-- **The cost.** O206's covered walk measured about 1.8 µs a drawer, 0.21 s for a dry sweep over 102,000 sealed drawers; O224 measured today's list at 4–9 ms over 23 rows. The console reloads the list after every ruling (`ui.html:1442`, `:1485`), on `/v1`'s one request loop.
-
-**The ruling, part (b): F2, with the list moved to the same rule.**
-1. **One predicate** answers a row's standing — `Pending`, `PendingUnverifiable` or `NotPending`.
-   - It reads the COVERED `meta.wing` wherever the row's tag verifies and its meta parses, and the clear column only where it does not.
-   - It reads through `covered_one` (`lib.rs:10661`, no decrypt) on the caller's own connection — inside the destruction lock where the caller holds one. `attest_in` uses the meta of the drawer it has already verified.
-   - Any other error propagates.
-   - The current function name is retired, so no caller changes meaning silently.
-2. **Destruction and write fences use it**:
-   - `delete_drawer_ruled`;
-   - `delete_by_source`, whose `unwrap_or(false)` becomes `?` in this unit (O259's shape, made worse once the fence reads a row; O259 keeps its one-lock half);
-   - `forget --backend`'s pre-flight;
-   - `attest_in`;
-   - `import_verdict`, which calls it in place of its inline copy;
-   - the sweep (item 6).
-
-   The two doors that bypass the fence today follow it, through lookups they already make:
-   - **the dedup refresh** never refreshes a match whose covered wing is reserved. Such a match counts as none, and the save files as an ordinary insert;
-   - **`dedup_groups`** drops from a group any member, survivor included, whose covered wing is reserved, read from the `get`s it already makes. Without this, moving the fence would make one reverse-flipped duplicate fail a whole `dedup --apply` midway — O206's hostage shape.
-3. **Read fences decide by EITHER copy**, as `_for_read` does: `_for_read` itself and the agent-scope history fence.
-   - Each is rewritten over an explicit clear-column probe, so moving the destruction predicate cannot relax it.
-   - A28 lets a mirror NARROW a read and forbids it to lift an exclusion, and either-copy only narrows.
-   - On a row that does not verify, the history fence omits that row's records. That is the list analogue of `_for_read`'s "unverifiable means refuse": it depends on nothing the writer chose, and it fails no history call.
-4. **The list enumerates by the same rule**, through `walk_covered`, and takes exactly the rows item 1 calls `Pending`.
-   - Those rows are read for content and destination as today, and each carries its own mirror drift (the walk's strings), so a reviewer sees a reverse flip before a ruling erases its only trace. Drift on a listed row makes `ok` false (O206 ruling 4).
-   - A forward-flipped ordinary row is not listed, and the false `applied` goes with it.
-   - `CoveredRow::TagFailed` and `MetaUnparseable` gain the clear wing, the `seq` and the row's own `meta_json` wing claim, which the walk's statement already selects.
-   - The build may nominate candidates instead — `wing = ? OR json_extract(meta_json, '$.wing') = ?`, optionally behind an expression index — only if the cost probe finds the walk too slow, and the predicate still decides each nominee. That is not O206's lost option (d): there the parser decided scope, here it only proposes, and for a verified row both parsers read the same tag-covered serde output. An expression index is a schema migration with a `READ_SCHEMA` row.
-5. **Refusals name the door that works**, from the typed answer.
-   - `Pending` → `admission allow`/`deny`, which now always act on it.
-   - `PendingUnverifiable` → `Integrity`, naming item 8's remedies and whatever part (c) returns.
-   - A forward-flipped ordinary row is no longer fenced, so `drawer delete` deletes it.
-6. **The sweep keeps asking the fence** (O206 ruling 3).
-   - For a member the walk decided, the answer is now `NotPending`, so a forward-flipped member is destroyed and its drift reported — O206's own "destroy" split. O206's test asserting "withheld" for that member is inverted.
-   - The arm stays, with its reason rewritten for the one case that can still reach it: a member re-diverted between the sweep's decision and its lock. `Settle::AsDecided` asks the fence inside the lock (`retention.rs:443-470`), and by reading the case is reachable — an ordinary row sitting at another filing's queue id (O220 item 1(ii) names such residue), which that filing's flagged write replaces. Without the arm, `attest_in`'s fence would refuse the whole sweep. A test reaches it through that route.
-
-**The ruling, part (a): report the row, never fail the list.**
-
-7. **The unverifiable report.** `admission_pending` returns the readable rows and, beside them, `unverifiable`.
-   - **Its scope** is every row that either copy places in the queue and that does not verify. The two copies are the clear `wing` column and the row's own `meta_json` wing claim, read through `claimed_site` (`lib.rs:2190`). "Does not verify" means: the tag fails, the covered meta does not parse, the content does not decrypt, or (O197) the target field is malformed.
-   - **Each entry carries** the `seq`; the id only when `is_drawer_id` holds, and otherwise "malformed id, N bytes"; a reason from a closed vocabulary; and whether the destruction fence holds the row (its clear column names the queue).
-   - **None of the row's own claims travel** — no intended wing, room, signals or filing. Once the tag fails, those are the writer's strings.
-   - `ok` is false while the report is non-empty.
-   - The return type changes and is `#[must_use]`, so the compiler enumerates every caller and no convenience wrapper can drop the report.
-   - `record_read` counts only the readable rows.
-8. **Every surface.**
-   - **CLI**: prints the pending rows, then the unverifiable ones, and exits 2 when `ok` is false. It never prints "Nothing awaits review." (`main.rs:3155`) beside a non-empty report. It names the remedies: re-import the genuine exported queue record with `UNDERCROFT_ADMISSION=quarantine` declared (O216 verdict 3), or `backup restore` an archive older than the tampering.
-   - **`/v1`**: 200, with additive `unverifiable` and `ok` keys beside `pending` and `screening`; the body is already an object (`tenant.rs:2086-2089`).
-   - **Ops plane**: no code change. `is_integrity_verdict` reads `ok: false` on a body under 400 (`orchestrator/src/main.rs:229-237`), so it exits 2.
-   - **Console**: renders the report and the drift through its escaping helper, with no rule buttons on an unverifiable row, and shows NOT CLEAN on `ok: false`.
-   - **`HAND_PROJECTED`**: rows for the new struct, and for `PendingAdmission`'s drift field, on the CLI and on `ui.html`.
-
-**Options that lost.**
-- **Part (b):**
-  - **F1** (the clear column, with corrected advice): keeps the laundering lever on the four doors above, and the history leak.
-  - **F2′** (move the fence only, list on the clear index): the fence refuses a row the list does not show, on exactly the row the flip hid. The "never disagree" invariant would be refuted rather than kept, to save the walk.
-  - **F3** (either copy, for destruction): O216's lost option. It refuses a row its tag proves ordinary, with advice no door can follow.
-  - **Re-pointing `_for_read` silently at the new rule**: relaxes a read fence nobody ruled on.
-  - **A covered-copy boundary in `write_drawer_stmts` for every ordinary write**: O216 rejected a verified read on every overwrite as a cost every re-mine pays. Item 2 closes the two doors that reach a covered-pending row through lookups they already make.
-- **Part (a):**
-  - **Keep failing**: one offline byte denies review of the whole queue.
-  - **A state on the row carrying its own claims**: unverified strings beside verified ones on a reviewer's surface.
-  - **The id shown verbatim**: the id is the writer's on exactly these rows.
-  - **A vault-wide report** (a run-1 lens): turns the list into a second `verify`, and exits 2 on any vault with an unrelated tampered row.
-  - **A report scoped to the clear column alone** (run 1's refuter, a run-2 lens): hides a tag-broken row whose clear column was moved away while its `meta_json` still claims the queue.
-
-**Where the two runs disagreed, and what settled it.**
-- **The history fence.** Run 1 moved it onto the destruction predicate; run 2 put it on the read rule. **Settled for run 2**: it is a READ fence, `_for_read`'s own doc rules either copy for reads, and A28 lets a mirror narrow a read. Tightened here on the unverifiable arm: both runs read the clear column there, and this record omits the row's records instead, on `_for_read`'s rule, because a failing row's clear column is the writer's.
-- **The report's scope.** Run 1 scoped it to the fence's unreadable arm (clear column reserved); run 2 to either copy's claim, with a marker saying whether the fence holds the row. **Settled for run 2**, by O206 ruling 2's reason: a report scoped by one copy reinstates the escape. Run 1's "double flip" residual holds only for a row whose BOTH copies were rewritten.
-- **The report's rendering.** Run 2 showed the id; run 1 rendered by `seq`, with the id only when `is_drawer_id` holds. **Settled for run 1**, by reading `lib.rs:5190-5201` and `:1926`.
-- **The dedup doors.** Run 1 brought both into this unit; run 2 filed the refresh as a new entry and did not see `dedup_groups`. **Settled for run 1**:
-  - `dedup_groups` must move with the fence, or the fence move creates a hostage (reading of `manage.rs:1680-1797`);
-  - the refresh is the same laundering lever, closed through a lookup it already makes, and leaving it out would let this unit claim to close reverse-flip laundering with one door open.
-
-  Run 2's other route, the id framing, remains a new entry.
-- **The sweep's withheld arm.** Run 1 removed it as unreachable; run 2 kept the call (O206 ruling 3). **Settled for run 2**: by reading, the arm is reachable through residue at a queue id (item 6). Run 1's concern is kept: the stale test is inverted, and a new test reaches the arm.
-- **How the list enumerates.** Run 1: the walk, with an expression index in reserve. Run 2: the walk or nomination, at the build's choice. **Settled**: the walk; nomination is the lever only if the cost probe requires it (item 4).
-- **`ok` on drift.** Neither run said so; tightened here on O206 ruling 4's precedent.
-
-**Claims refuted, the brief's included.**
-- **The brief**:
-  - it named six fence callers; there are eight. It missed `forget --backend`, the history fence, and that `_for_read` is built on the fence;
-  - it missed both dedup doors;
-  - "what it can name of an unverifiable row without trusting it is the id": the id column is unconstrained and the writer's.
-- **A run-1 lens**: "the exit code was already 2, so no `UPGRADING.md` entry". The CLI's exit stays 2, but `/v1` moves from 409 to 200 with `ok: false`, and O206 recorded exactly that move for the sweep.
-- **Run 1's refuter**: the sweep's arm "can no longer fire". It can, through residue at a queue id.
-- **Run 1's refuter**: the history fence "moves with item 1 because the helper it calls moves". That is a mechanical reason for a doctrinal question, and the doctrine says it is a read.
-
-**Probes owed by the build**, run by the integrator:
-- **P2a.** One pending row's tag zeroed. The other rows are listed; the row is reported by `seq` and id; CLI exit 2; `/v1` 200 with `ok: false`; ops plane exit 2; the console shows it.
-- **P2a′.** A row inserted offline into the reserved clear wing under a non-hex id carrying an ANSI escape. It is rendered by `seq`, and no control byte reaches stderr, the `/v1` body or the console.
-- **P2a″.** A tag-broken row whose clear wing is `notes` and whose `meta_json` still claims the queue: reported, marked as not held by the fence.
-- **P2b.** A forward flip: not listed, no `applied`, deletable, and swept with its drift reported.
-- **P2c and P4, inverted.** A reverse flip is listed with its drift, `ok` false. `drawer delete`, `delete_by_source`, `forget` and `forget --backend` each refuse it, naming `allow`/`deny`.
-- **P3a.** A reverse flip, then `forget <id>`. Today: a receipt and exit 0. After: refused.
-- **P3b.** A reverse flip, then a `/v1` save with `dedup_threshold` of similar clean text into the flip's wing and room. Today the pending row becomes an ordinary row and `verify` reads green. After: an ordinary insert, with the pending row intact.
-- **P3c.** A reverse flip on a pending text that duplicates a live drawer, then MCP `undercroft_dedup` with `apply`. Today: destroyed. After: excluded, and the rest of the group collapsed.
-- **The history fence, before and after.** A reverse-flipped row's records are hidden; a forward-flipped row's records are hidden; an unverifiable row's records are omitted. **The `_for_read` arm**: MCP's fence and `GET …/drawers/{id}` answer exactly as before.
-- **The sweep arm.** A member that is residue at another filing's `Q0`, re-diverted between the decision and the lock through a retention pause point: withheld, not a failed sweep. O206's forward-flip test, inverted: destroyed, with the drift reported.
-- **P-cost.** `admission list` wall time and peak RSS at 10⁵ sealed drawers, the walk against nomination. 10⁶ is a long run and needs the maintainer's go.
-
-**Fails silently if:**
-- `_for_read` or the history fence changes through a shared helper;
-- `unwrap_or(false)` survives on the new predicate;
-- the list stays on the clear index while the fence moves;
-- `import_verdict` keeps its inline copy;
-- the sweep's old forward-flip test still asserts "withheld";
-- the dedup refresh or `dedup_groups` keeps its clear-column decision;
-- the report renders an unconstrained id raw;
-- any renderer prints "Nothing awaits review." beside a non-empty report;
-- the console reads a 200 as clean without reading `ok`.
-
-**Dissent.** A run-1 lens for a vault-wide report; run 1's refuter and a run-2 lens for a clear-column scope; run 1's refuter for the history fence on the destruction predicate and for removing the sweep's arm; run 2's refuter for leaving the dedup refresh to a new entry. All overruled above.
-
-**What remains.**
-- **The double flip.** A row whose tag is broken AND whose clear column and `meta_json` were both moved away is outside the fence and the report. That is O216's stated residual: it needs an offline writer, who could delete the row outright. `verify`'s `bad_records` names it, and `backup create` and every rotation refuse while it exists.
-- **Three new entries are owed**, listed at the end of this record: the id-framing route into the queue id space; `check_duplicate`'s clear-column oracle; and `StoreError::Integrity`'s raw rendering of an unconstrained id.
-- **Part (c)** is escalated in the next subsection. O231 is untouched.
-
-**Version: PATCH.** Part (a) is reporting surface for a silent defect; part (b) is a fence that keeps its documented promise (`docs/AGENTS.md`: pending review evidence is refused "on every surface"). **`UPGRADING.md` is owed**, for:
-- `/v1 GET …/admission` answering 200 with `ok: false` and the readable rows, where one unverifiable row made it 409; the CLI also exits 2 on drift on a listed row;
-- `drawer delete`, `delete_by_source`, `forget` and `forget --backend` refusing a reverse-flipped pending row; `dedup --apply` skipping it; a `/v1` dedup save no longer refreshing it;
-- a forward-flipped ordinary row no longer being listed, and now being deletable and swept;
-- the list's cost moving from an indexed lookup to one pass over the corpus.
-
-`config check` cannot see data; `admission list` and `verify` are the detectors.
-
-#### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
-
-**The question (O221(c)).** A pending row whose tag fails can be neither allowed, denied, deleted nor forgotten:
-- `quarantined` and `attest_in` `get` it first (`admission.rs:1447-1450`, `forget.rs:455-459`);
-- `drawer delete` refuses it on the clear column, and still will under part (b)'s unreadable arm.
-
-May an operator destroy it, and with what record and what receipt?
-
-**Why it is the maintainer's.** Every shape that destroys the row either changes a documented reply or adds a verb or a flag. `docs/AGENTS.md`'s `POST …/admission` row says a deny "destroys through the attested-forgetting path and the response carries the receipt" (`tenant.rs:2113-2121`). Either way the choice decides what destroying unverifiable evidence means, which borders O228 (escalated) and O267's erasure ruling. A panel does not decide what a surface offers. Both runs escalated it, and both recommend the same shape.
-
-**Read for the analysis** (both runs, re-read here).
-- **The brief's "stuck until… nothing" is partly wrong.**
-  - O220's slot rule lands any diversion of a filing on its `Q0` when `Q0` cannot be read (`admission.rs:815-818`). So any flagged record of that filing, imported with the screen on, overwrites a tag-failing `Q0` row, and `deny` then destroys it with a receipt — for the substituted text, never the evidence. The trail does not record the act for what it was.
-  - A tag-failing version-slot row is reached only by its own text. While `Q0` is free, its genuine re-import lands on `Q0` and leaves the broken `Qv` in place (`:798-819`). With its text unknown, a `Qv` row has no exit at all.
-- **The measured remedy has two costs.**
-  - O216 verdict 3's re-import needs an export taken BEFORE the tampering, because `export_each` stops on the row (`lib.rs:11070-11104`).
-  - Since O224 it also downgraded the repaired row's record to `unrecorded` (P2d: `lib.rs:8529`, `admission.rs:834-836`). O227's ruling item 1 repairs that where the destination is unchanged.
-- **While the row exists, the vault cannot be backed up or rotated.** `verify` fails, so `backup create` refuses (`backup.rs:175-178`); every rotation refuses (`lib.rs:3379-3401`); `repair` aborts (`manage.rs:1824-1826`). Blocking rotation is the sharpest cost, because rotation is the response to a suspected key compromise. An agent can create the pending row over MCP by submitting flagged text; breaking its tag needs an offline writer.
-- **An unverifiable ORDINARY row is destroyable today**, unattested, through `drawer delete`: `delete_drawer_ruled` reads no content, and `destroy_in` writes a keyed `del/` tombstone (`manage.rs:1105-1112`).
-
-**Decided by both panels in the meantime: D1, plus part (a)'s report.** No ruling door destroys such a row. The list reports it and names the remedies: re-import its genuine exported queue record with `UNDERCROFT_ADMISSION=quarantine` declared, or `backup restore` an archive older than the tampering.
-
-**Options and their costs.**
-- **D1 alone.** The vault stays unable to `backup create` or rotate, and a `Qv` row of unknown text has no exit. The only exit for a `Q0` row substitutes text under a ruling. This is the "stuck vault" the fence's own rationale says it exists to prevent, and it never prevented it for this row.
-- **D2, plain `deny` destroys it unattested** (a ruling record plus `destroy_in`'s keyed tombstone, through `delete_drawer_ruled(Ruled)`, the body the allow already uses). It adds no path. But it changes the documented reply ("the response carries the receipt") on one arm without the operator asking, and a script reading a receipt-less 200 can take it for an attested erasure.
-- **D3, an attestation that marks its content unverified** (or carries a fingerprint over unverified bytes): REJECTED on evidence, three ways.
-  - A receipt that cannot verify must never be minted (`attest_in`'s own rule, `forget.rs:507-526`).
-  - O267's `#### RULED 2026-10-06` item 4 forbids any signed extension to the attestation before O315's age fence, because `verify_forget_attestation` checks the signature before the version and drops unknown fields.
-  - Unsigned, an older verifier drops the marker and reads the document as an ordinary receipt.
-- **D4, an explicitly declared act**: a flag on `deny`, or a verb of its own.
-- **A fence change letting `drawer delete` destroy it**: reuses an existing door, but the trail cannot tell it from housekeeping (`PendingEvidence::Protect`'s reason, `manage.rs:108-111`).
-
-**Recommended answer: D4's shape.** The maintainer picks the spelling. The act is explicit, on one named row, and inside one destruction lock it:
-1. re-classifies the row through part (b)'s predicate and refuses unless the row fails verification now AND the destruction fence holds it — so it can never bypass attestation on a readable row;
-2. appends a ruling whose keyed canonical carries a distinct verdict word (for example `denied-unverified`), so "denied" never means two acts and never reads as housekeeping;
-3. destroys through `destroy_in` and its keyed tombstone;
-4. mints no attestation and no fingerprint, and says so on the CLI, `/v1`, the ops plane and the console;
-5. is unreachable from the sweep, bulk deletes and `forget`, and never allows: releasing unverified bytes into the vault is refused on every arm.
-
-**The split, recorded.** One lens (run 2's software engineering lens) preferred D2 with the same distinct verdict word, because it adds no path. Both refuters and every other lens that stated a preference chose the explicit form, because a script that runs `deny` expects a receipt.
-
-**Claims refuted.**
-- **The brief** did not cite O267 item 4 (a run-1 lens found it), and its "stuck until… nothing" missed the `Q0` substitution route and the `Qv` dead end.
-- **A run-1 lens and a run-2 lens**: "the remedy's downgrade is the correct consequence". That holds across vaults, not within one: see O227 item 1.
-
-**Probes owed, whichever is chosen.**
-- **P-L2b.** Two flagged texts for one filing (`Q0`, then `Qv`); export; rule on `Q0`; zero `Qv`'s tag; re-import the genuine `Qv` record with the screen on. Expected by reading: the text lands on `Q0`, `Qv` still fails, and the list still reports it.
-- **P4x.** A crafted flagged record of the same filing replaces a broken `Q0`, and `deny` then succeeds with a receipt for the crafted text.
-- **P2d**, and its inversion under O227 item 1.
-
-**Fails silently if:** a receipt is minted over bytes nothing verified; a destruction carries no ruling record; or the act is reachable from a sweep or a bulk delete.
-
-**Version class.**
-- **D1**: PATCH — nothing beyond part (a).
-- **D4**: MINOR, a new opt-in capability. No `UPGRADING.md` entry, because nothing that runs today stops.
-- **D2**: changes a documented reply on one arm, which is why it is recommended against.
-- **D3**: rejected.
-
-#### RULED 2026-10-08 by the maintainer
-
-**The question (O221(c)).** May an operator destroy a pending row whose tag fails — a row that can be neither
-allowed, denied, deleted nor forgotten — and with what record and what receipt?
-
-**The maintainer's answer, verbatim:** "approve all as recommended" — given on 2026-10-08 to a list of 24
-escalated questions, each shown with its panel's recommended answer, this one among them.
-
-**Decided: D4's shape.** The act is explicit, on one named row, and inside one destruction lock it has the five
-properties the recommendation lists, verbatim:
-1. re-classifies the row through part (b)'s predicate and refuses unless the row fails verification now AND the
-   destruction fence holds it — so it can never bypass attestation on a readable row;
-2. appends a ruling whose keyed canonical carries a distinct verdict word (for example `denied-unverified`), so
-   "denied" never means two acts and never reads as housekeeping;
-3. destroys through `destroy_in` and its keyed tombstone;
-4. mints no attestation and no fingerprint, and says so on the CLI, `/v1`, the ops plane and the console;
-5. is unreachable from the sweep, bulk deletes and `forget`, and never allows: releasing unverified bytes into
-   the vault is refused on every arm.
-
-D2 (one lens's preference) and D3 (rejected on evidence) are not taken. Until D4 is built, D1 and part (a)'s
-report stand, as both panels decided. The probes are owed: P-L2b, P4x, and P2d with its inversion under O227
-item 1.
-
-**Version.** "**D4**: MINOR, a new opt-in capability. No `UPGRADING.md` entry, because nothing that runs today
-stops."
-
-**What remains open: the spelling.** The recommendation says "The maintainer picks the spelling" — a flag on
-`deny` or a verb of its own, and the verdict word, `denied-unverified` being the analysis's example only — and
-the answer approved the shape without naming one. It is still the maintainer's; the building unit asks it with
-its pull request.
-
 ### O223 — a vault's own export restored into that vault rewrites every row, because the import stamp moves `added_by`
 
 **Filed 2026-09-18 by O216's real-corpus drive, measured on the `4ff51ab`
@@ -40590,120 +40868,6 @@ CHANGELOG states that a new diversion's queue id is its text's version slot and 
 reused; `docs/THREAT_MODEL.md`, `docs/MULTI_TENANCY.md`, the `queue_slot` and `admission_divert` doc comments,
 O221's prose sentence on the slot rule and CLAUDE.md's slot-rule sentence move with the build (the CLAUDE.md
 change through the maintainer's approval of the pull request).
-
-### O226 — a convergence with equal content still replaces the pending row's covered declaration
-
-**Filed 2026-09-18 by O220's refuter, established by reading.** O220's ruled
-design converges a diversion whose text equals the pending row's, and the
-write replaces the row's metadata wholesale: `kind`, `supersedes`, the agent
-claims, `content_date`, `occurrences`. `admission_allow` restores those
-fields, and `PendingAdmission` shows none of them, so what a reviewer allows
-can carry a declaration the screen never saw beside the text it did.
-
-**Why it is a ruling.** Equality deliberately excludes metadata, because
-`filed_at`, `added_by` and the signals legitimately differ on every re-mine
-and restore. Which covered fields are part of "what the screen saw" is the
-question — and the answer decides whether a convergence may write them.
-
-**Gate**: a convergence that changes only `kind` or `supersedes` leaves the
-pending row's covered declaration as the reviewer will allow it, as ruled.
-**Counterfactual**: today, the incoming declaration replaces it.
-
-O224's ruling fixes this entry's answer for one field: a convergence never
-rewrites `queued_against`, the record of what the destination held, because
-that record is what an allow requires to hold and restoring the vault's own
-backup converges every pending row. Whatever is ruled here for the other
-covered fields must not loosen that.
-
-**Relations:** shares a question with O148 — this entry's convergences are reached with the screen off once that entry's hold lands.
-
-#### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
-
-**The question.** A diversion whose text equals a pending row's text converges, and its write replaces the row's metadata wholesale (`lib.rs:7647-7653`); only `queued_against` is carried (O224 item 3). The allow restores every covered field it does not clear (`admission.rs:1317-1326`). Which covered fields may a convergence rewrite, and does the list have to show the declaration the allow will restore?
-
-**Prior rulings found and their disposition.** No `#### RULED` subsection exists in this entry.
-- **O220 item 2** (equality is verbatim content; metadata is excluded): FOLLOWED. It rules what is EQUAL, not what is written, and slot choice is untouched (O197's ruling adds the target to identity, beside that item).
-- **O220's "equal text converges and writes, as today"** and **O215** (re-mining is never a no-op): "writes" is FOLLOWED — the convergence still writes and appends its chain record. "As today" is REVISED beside it, on the evidence below, for what the write carries.
-- **O224 item 3** (a convergence copies the stored record verbatim, a stored none included) and **its lost "re-basing" option**: FOLLOWED and generalized. Nothing here loosens it, because `queued_against` is part of what is carried.
-- **`update_drawer`'s "the reviewer must rule on exactly what the screen saw"** (O216) and **O224's converse**: FOLLOWED, extended from the text to the whole row.
-- **O31** (the screen is the only author of screen fields): FOLLOWED. It is why the signals are the one exception (item 1).
-- **O224's residual** (a metadata-only move of the destination is replaced by the allow): untouched.
-
-**Read before ruling.**
-- **What a convergence writes today.** The door clones the incoming candidate and changes only the wing, room, signals, id and `queued_against` (`admission.rs:1134-1140`, `:761-769`). `write_drawer_stmts` replaces `meta_json` wholesale. The batch carry (`lib.rs:7840-7866`) and the backstop `queue_row_raced` (`:7421-7432`) handle `queued_against` alone.
-- **What the allow restores, and what the reviewer sees.** The allow restores verbatim `kind`, `supersedes` (receipted at write time, `lib.rs:7565-7581`), the `agent`/`channel`/`session` claims, `content_date`, `hall`, `occurrences`, `filed_at`, `added_by`, the line span, `normalize_version` and `id_recipe`. `filed_at` is the retention clock, and any past value passes (`admission.rs:472-491`). The list shows none of these except `filed_at` and the signals (`:51-78`).
-- **What the screen reads**: content, wing, room and the writer identity (`admission.rs:1063-1126`). It never reads `kind`, `supersedes`, `content_date` or the claims.
-- **Legitimate convergences differ only in `filed_at`, `added_by` and the signals:**
-  - API saves never converge, because each takes a unique append index;
-  - an unchanged re-mine carries a new `filed_at`;
-  - a self-restore stamps `added_by` as `import` (`lib.rs:8569-8576`) and carries the payload's `filed_at`;
-  - two identical flagged updates keep the stored meta and re-stamp `added_by` (`manage.rs:1335-1336`).
-- **Signals legitimately vary between equal-text submissions.** The rate signal is a function of the window (`admission.rs:1067-1072`, `:1171-1203`) and the tier-2 advisor is a model call (`:1114-1125`). A later screen can therefore carry fewer, or more, signals than the first.
-- **What a hostile converger can do today.** A converger is anyone holding the text and the filing; the filing is recoverable offline (O220), and a tenant reaches the convergence through `/t/import`. Today such a converger can:
-  - back-date `filed_at`, so the allowed drawer is swept at once;
-  - move `content_date` into a date window;
-  - attach a `supersedes` link, receipted at release, or a `kind` the reviewer never saw.
-- **No false alarm.** An identical rewrite raises no version-replay finding: `replay_finding` returns none when the newest record's tag equals the row's (`replay.rs:176-179`).
-
-**The ruling: C1. A pending row's covered declaration changes only by a ruling, as its text already does.**
-1. **What a convergence writes.** It still WRITES (O215, O220), so the chain records every re-submission. What it writes is the stored row's whole covered meta, verbatim, with one exception: `admission_signals` becomes the stored signals followed by any the current screen raised that are not already there, deduplicated by (code, offset), stored order first.
-   - The signals are the screen's own output (O31).
-   - The allow clears them (`admission.rs:1322`), so they cannot widen what is released.
-   - A re-submission's own signal (a rate anomaly, an advisor verdict) is evidence the reviewer should keep.
-2. **Carried by default.** The function clones the stored meta and replaces only the signals. It does not enumerate fields, so a `DrawerMeta` field added later is carried — fail-closed — with no second inventory to keep in step. A gate drives a convergence whose incoming meta differs from the stored row's in every serialized key (iterated from the serialized form, so a new field is covered without editing the test) and requires the stored covered meta back, byte for byte, apart from the signal union.
-3. **One function, three call sites, at `Q0` and at `Qv` alike:**
-   - **the door**: `read_queue_row` returns the stored meta, read in the same `get` that judged `SameText`, and `Slot` carries it;
-   - **the batch `taken` map**: it holds the occupant's meta, not the text-and-record pair;
-   - **`queue_row_raced`**: a row counts as raced unless its text and every carried field equal the candidate's and its stored signals are a subset of the candidate's. A retry converges and carries.
-4. **The target.** With O197's ruling, a convergence requires the same filing, text and target, so carrying the stored target is a no-op. `queued_against` is carried as O224 item 3 ruled.
-5. **The doc.** `PendingAdmission.filed_at`'s doc (`admission.rs:60-63`) is corrected: it is the filing time the FIRST submission carried — for an update the drawer's original time, for a re-mine when its `Drawer` was built, for an import the payload's value.
-
-**Costs, stated.**
-- A re-mine no longer moves a pending row's `filed_at`. An allowed drawer's retention clock therefore starts at the first submission, the earlier of the two and so the stricter.
-- A self-restore no longer moves `added_by` on queue rows. O223 keeps the question for ordinary rows.
-- A corrected declaration takes effect at the first re-mine after the ruling.
-- A bursty self-restore under a declared rate screen adds its rate signal to the rows it converges on, as the wholesale write records it today.
-
-**Options that lost.**
-- **C2, carry a named subset** (a run-2 lens): sound for the declaration, but it lets a convergence move `filed_at` — a crafted one backward, after review — which is the one covered field the reviewer is shown. A subset list also defaults a new field to "rewritable", the fail-open direction.
-- **C3, a slot per declaration**: revises O220 item 2 with no legitimate producer, and puts two rows with one text before a reviewer; the siblings both reach `applied` (`admission.rs:919`), so the later allow rewrites the declaration anyway.
-- **C4, refuse a differing declaration**: breaks "never rejected and never silently dropped", whose cost O220 measured on re-mines and restores (P-tail, P-restore).
-- **C5, the status quo plus showing the declaration**: the list is stale by allow time (O224's r3), and binding the declaration into the allow is O225's question, the maintainer's.
-- **Signals from the incoming write alone** (a run-1 lens): drops evidence a reviewer may already have seen.
-- **The stored signals verbatim** (run 2): see the split below.
-- **A `DrawerMeta` destructure with no `..`** (run 1's mechanism): see the split below.
-
-**Where the two runs disagreed, and what settled it.**
-- **The signals.** Run 1 took the union; run 2 kept the stored signals verbatim. **Settled for run 1.** O220 item 2's own words ("the signals vary") and the screen's code (the rate window, the advisor call) show that a later submission can raise a signal the first did not. Under verbatim that signal is written nowhere durable: the converging write's chain record holds only the row's tag. Run 2's reason — staleness cannot widen what is released — is true, and it answers release, not the loss of review evidence. The union only grows, so it never removes what a reviewer saw.
-- **The mechanism.** Run 1 destructured `DrawerMeta` with no `..`, so a new field would not compile until ruled; run 2 carried by default. **Settled for run 2's mechanism.** Carrying by default is already fail-closed for a new field, and a destructure is a second inventory every future field must touch for no change in outcome. The serialized-key gate (item 2) is what sees a new field.
-- **Agreed by both runs, and kept**: C1, `filed_at` and `added_by` carried, three call sites, and the doc correction.
-
-**Claims refuted.**
-- **The brief**: its list of who converges is right, but it omitted that a later screen can carry different signals from the first.
-- **A run-2 lens**: C2 "costs the legitimate convergences nothing". It keeps today's moving `filed_at`, the one covered field the reviewer is shown, and with it the back-dating lever.
-
-**Probes owed by the build**, run by the integrator:
-- **P5, inverted.** Two converging imports that differ only in `kind`, `supersedes`, a past `filed_at` and `agent`. After an allow, the drawer carries the FIRST declaration, and the chain holds one write record per submission. Counterfactual: today it carries the second.
-- **A back-dated `filed_at` convergence**, then an allow, then a retention sweep. Today the drawer is destroyed; after, it is kept.
-- **An in-batch convergence** (one CLI chunk) that differs only in `kind`.
-- **A raced convergence** carrying a different stored meta: refused by the backstop, and converging on retry.
-- **A convergence whose screen raises a rate signal the first lacked**: the row's signals become the union.
-- **O224's self-restore gate** still passes, and an unchanged re-mine of a flagged file leaves the covered meta byte-identical apart from the signal union.
-
-**Fails silently if:**
-- the carry runs at the door but not in the `taken` map or the backstop;
-- it applies at `Q0` and not at `Qv`;
-- the merge enumerates fields, so a new one takes the incoming value;
-- O224's self-restore gate changes;
-- `filed_at`'s doc keeps the old rule.
-
-**Dissent.** A run-2 lens for C2; run 2's refuter and two run-2 lenses for verbatim signals. Overruled above.
-
-**What remains.**
-- **The list shows little of what an allow restores.** Beyond `filed_at`, the list shows nothing of the restored declaration. That gap exists on every pending row, not only on convergence, and binding the declaration into the allow is O225's question (decided with O229), the maintainer's.
-- **O223's neighbourhood narrows** for queue rows, without ruling O223.
-
-**Version: PATCH.** No surface field is added; one reporting field's documented meaning is corrected. **`UPGRADING.md` is not owed**: nothing that runs today stops. CHANGELOG states that a convergence keeps the pending row's declaration.
 
 ### O227 — a restore into another vault leaves every restored pending update un-allowable as it stands
 
@@ -50237,6 +50401,13 @@ unmeasured. Related: an ordinary import record whose id equals a queue id lands 
 space (O220 item 1(ii) replaces such residue on the next diversion of that filing). O221's ruling of
 2026-10-08 keeps its sweep arm because the residue route reaches it.
 
+**Corrected beside, 2026-10-12, by O221's build (measured):** the residue route does not reach
+the sweep's arm. The in-lock recheck re-classifies a member before the fence is asked, and a
+member re-diverted onto its queue id between the decision and the lock has a covered wing no
+policy covers, so it is dropped as out of scope — not destroyed, not withheld, the sweep `ok`
+(`o221_a_member_re_diverted_inside_a_sweep_window_is_not_destroyed`). The arm stays, as ruled, as
+a backstop.
+
 **Shape, candidates for its build.** Refuse control characters in `source_file` in
 `validate_declaration`; or a covered check scoped to a write landing on an existing row in the queue
 id space.
@@ -51719,6 +51890,68 @@ validation joins that narrower refusal is this entry's question.
 import keeping what its payload says. **Gate**: a `valid_from` that is not a date — or, if only item 10's
 refusal is ruled, one holding a C0 byte — is refused on MCP, the CLI and `/v1`, and an import of the
 vault's own export still lands; counterfactual, today's acceptance.
+
+### O-NEW-o221-1 — a review-queue row whose tag fails can be neither allowed, denied, deleted nor forgotten: the explicit destroy-unverifiable act the maintainer approved (O221(c), D4)
+
+**Filed 2026-10-12 by O221's build**, which built that entry's parts (a) and (b) and not part (c),
+whose ruling is the maintainer's of 2026-10-08, recorded in O221: "approve all as recommended",
+decided as D4's shape. Until this is built, D1 and part (a)'s report stand, as both panels decided:
+`admission list` reports such a row by `seq`, with `fenced: true`, and names the remedies; every
+destruction fence refuses it as an integrity verdict naming the same remedies (O221 item 5); and the
+vault cannot `backup create` or rotate while it exists, because `verify` fails.
+
+**What is built, verbatim from the decision.** The act is explicit, on one named row, and inside one
+destruction lock it:
+1. re-classifies the row through O221(b)'s predicate — `VaultStore::queue_standing`, which answers
+   `PendingUnverifiable` for exactly this row — and refuses unless the row fails verification now AND
+   the destruction fence holds it, so it can never bypass attestation on a readable row;
+2. appends a ruling whose keyed canonical carries a distinct verdict word (for example
+   `denied-unverified`), so "denied" never means two acts and never reads as housekeeping;
+3. destroys through `destroy_in` and its keyed tombstone;
+4. mints no attestation and no fingerprint, and says so on the CLI, `/v1`, the ops plane and the
+   console;
+5. is unreachable from the sweep, bulk deletes and `forget`, and never allows: releasing unverified
+   bytes into the vault is refused on every arm.
+
+**Still the maintainer's: the spelling** — a flag on `deny` or a verb of its own, and the verdict
+word. The building unit asks it with its pull request.
+
+**Probes owed** (from the ruling): P-L2b (two flagged texts for one filing, `Q0` then `Qv`; export;
+rule on `Q0`; zero `Qv`'s tag; re-import the genuine `Qv` record with the screen on — by reading, the
+text lands on `Q0`, `Qv` still fails, and the list still reports it), P4x (a crafted flagged record
+of the same filing replaces a broken `Q0`, and `deny` then succeeds with a receipt for the crafted
+text), and P2d with its inversion under O227 item 1.
+
+**Gate**: the act destroys a tag-failing pending row with a ruling record and a keyed tombstone and
+no receipt, on every surface; it refuses a readable pending row, an ordinary row and an unverifiable
+row the fence does not hold; and the sweep, `delete_by_source` and `forget` cannot reach it.
+**Counterfactual**: today every door refuses the row and the list reports it.
+
+**Version: MINOR**, a new opt-in capability; no `UPGRADING.md` entry, because nothing that runs today
+stops.
+
+**Relations:** shares a question with O148 — the screen-off remedy for a row this act would destroy exists once that entry's hold lands, and this entry owns the remedies' wording (`admission::UNVERIFIABLE_REMEDIES`).
+
+### O-NEW-o221-2 — one covered column retyped offline makes `verify` and the retention sweep fail with a conversion error instead of naming the row
+
+**Filed 2026-10-12 by O221's build, after its independent review; measured by that review's probe.**
+`walk_covered` reads `meta_json` as TEXT and `content` and `tag` as BLOBs. An offline writer who
+rewrites one of them with another storage type (`UPDATE drawers SET content = 'x'`, or
+`meta_json = CAST(meta_json AS BLOB)`) leaves a row no tag can be checked over. Since O221 the walk
+yields it as `CoveredRow::Undecodable`, and the review queue's doors read it as a row that does not
+verify. `verify` and the retention sweep still raise the conversion error, as they did before O221:
+`verify` answers `sqlite error: Conversion error …` rather than an integrity verdict naming the row,
+and one such row anywhere in the vault fails every sweep. By reading, `backup create` and a rotation,
+which run `verify` first, fail with the same error (not measured).
+
+**Why it is its own entry.** It is not O221's: the review queue's doors regressed on it and are
+fixed, while `verify` and the sweep answered it the same way before. What it owes is a verdict, which
+is a ruling: a `BadReason` for `verify` beside O231's `MetaUnparseable` (and whether a rotation
+blocks on it, O232's question), and the sweep's `unverifiable` arm (O206 ruling 2's rule).
+
+**Gate**: a row whose `content` is TEXT, and one whose `meta_json` is a BLOB: `verify` names each
+with its reason and exits 2; a sweep names each as unverifiable and destroys the rest.
+**Counterfactual**: today, both fail with the conversion error.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

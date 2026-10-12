@@ -1076,6 +1076,7 @@ fn o255_a_deny_beside_a_writer_rules_just_before_its_interval() {
         s.upsert(&d).unwrap();
         s.admission_pending()
             .unwrap()
+            .pending
             .into_iter()
             .map(|p| p.id)
             .next()
@@ -1596,7 +1597,7 @@ fn o259_a_failing_fence_query_refuses_with_nothing_deleted() {
     };
     assert_eq!(members.len(), 3);
     assert!(
-        s.is_quarantine_pending(&members[1]).unwrap(),
+        s.queue_standing(&s.conn, &members[1]).unwrap() == crate::admission::QueueStanding::Pending,
         "premise: the second member is the pending one"
     );
     // PREMISE: unarmed, the fence refuses naming the pending row.
@@ -1948,6 +1949,7 @@ fn o259_a_member_filed_for_review_after_the_door_is_refused_in_the_lock() {
         let pending: Vec<String> = s
             .admission_pending()
             .unwrap()
+            .pending
             .into_iter()
             .filter(|p| p.source_file == source)
             .map(|p| p.id)
@@ -2016,6 +2018,7 @@ fn queue_flagged(s: &mut VaultStore, run: u64) -> (String, String, String) {
     let qid = s
         .admission_pending()
         .unwrap()
+        .pending
         .into_iter()
         .find(|p| p.source_file == source)
         .map(|p| p.id)
@@ -2410,6 +2413,7 @@ fn o260_an_allow_never_destroys_a_text_that_reoccupied_its_row() {
             let pending = s
                 .admission_pending()
                 .unwrap()
+                .pending
                 .into_iter()
                 .filter_map(|p| holds(&s, &p.id))
                 .any(|t| t == reoccupying);
@@ -2421,7 +2425,7 @@ fn o260_an_allow_never_destroys_a_text_that_reoccupied_its_row() {
             }
         }
         // Rule off whatever is left pending, so the queue stays small.
-        for p in s.admission_pending().unwrap() {
+        for p in s.admission_pending().unwrap().pending {
             s.admission_deny(&p.id).unwrap();
         }
     }

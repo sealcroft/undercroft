@@ -658,6 +658,74 @@ name: choose a shorter one. `undercroft config check` cannot detect any of
 this: a keygen's path is a flag on one command, the check reads which key files
 exist, never their length, and a link error happens only when a key is written.
 
+### the admission queue is decided by each row's HMAC-covered wing, and `admission list` reports a row it cannot verify instead of failing (O221)
+
+**Symptom:** four observables move, all on a vault whose admission queue an
+offline writer has touched — none on an intact one.
+- `GET /v1/vaults/{id}/admission` answers **200** with the readable rows and
+  `"ok": false` where one row whose tag fails used to make the whole route a
+  **409** `class: "integrity"`; the reply gains `unverifiable` and `ok` beside
+  `pending` and `screening`, and each pending row gains `mirror_drift`. The
+  orchestrator's `ops … admission` still exits 2 (it reads `ok: false` on a
+  200 as an integrity verdict). `undercroft admission list` prints the
+  readable rows, then each `UNVERIFIABLE` one, and exits **2** — as before
+  over an unverifiable row, and now also when a listed row carries mirror
+  drift.
+- A pending row whose clear `wing` column was flipped offline to an ordinary
+  wing is now LISTED, with its drift, and `drawer delete`, `delete_by_source`
+  (CLI, MCP, `/v1`), `forget` and `forget --backend` refuse it (exit 1, 400
+  over `/v1`) naming `admission allow`/`deny`; `dedup --apply` skips it and
+  still collapses the rest of its group; a `/v1` save with
+  `dedup_threshold` (the tenant plane's `/t/drawers` included) no longer
+  refreshes it, and files an ordinary drawer instead.
+- An ordinary drawer whose clear `wing` column was flipped offline INTO
+  `quarantine-pending` is no longer listed (its `destination … applied` line
+  was false), and `drawer delete` and a retention sweep now destroy it — the
+  sweep reporting its mirror drift with `ok: false` — where they refused or
+  withheld it. A queue row that does not verify is refused by every fence as
+  an integrity verdict (exit 2, 409) naming its remedies.
+- `admission list` costs one pass over every drawer — the tag checked over
+  the stored bytes, nothing decrypted — where it was an indexed lookup of the
+  queue. Measured as a whole command on 10,884 sealed drawers: 56–86 ms, where
+  the lookup it replaces took 18–26 ms; on 100,049, about 0.7 s against 0.15 s
+  (measured on a contended machine). It grows with the vault, not with the queue.
+- MCP's `undercroft_history` (the agent scope) now hides a drawer's records
+  when EITHER copy of its wing names the queue — a pending row whose clear
+  column was flipped away included — and OMITS the records of a drawer whose
+  row does not verify (its tag, its covered meta or a column's storage type),
+  where it showed both. The operator scope (CLI `history`, `/v1 …/history`)
+  is unchanged.
+- `dedup`'s `duplicate_groups` (CLI, MCP, `/v1`) counts the groups left with
+  two or more members once review evidence is dropped from them, where it
+  counted every fingerprint group the clear-column scan found — on an intact
+  vault the two are the same number.
+- A drawer an offline writer RETYPED (a covered column stored with another
+  storage type) is reported by `admission list` as `column-retyped` when
+  either copy places it in the queue, is refused by every fence there, and is
+  deleted like any unreadable row outside it; `verify` and a retention sweep
+  still fail on it with a conversion error, as before (ROADMAP O-NEW-o221-2).
+
+**Cause:** ROADMAP O221. One function decided "pending" for every
+destruction fence by the clear `wing` column, so one offline flip of that
+column let `drawer delete`, `forget` (with a third-party-verifiable receipt),
+`dedup --apply` and a dedup save destroy or overwrite review evidence — each
+also erasing the drift that was its only trace — while the list, which
+enumerated the same column, failed on one unverifiable row and listed a
+forward-flipped ordinary row an `allow` then refused. Now ONE predicate reads
+the covered wing wherever the row verifies and the clear column only where it
+does not, every destruction and write fence asks it, the read fences refuse
+when EITHER copy names the queue, and the list enumerates by the same rule.
+
+**Fix:** none for an intact vault. A script that read a `/v1` 409 as "the
+queue is broken" must read `ok` on the 200. A row the list reports as
+`UNVERIFIABLE` can be neither allowed nor denied: re-import its genuine
+exported queue record with `UNDERCROFT_ADMISSION=quarantine` declared, which
+repairs it through the screen, or `backup restore` an archive older than the
+tampering; `undercroft verify` names every such row. Schedule `admission list`
+like any whole-vault read on a very large vault. `undercroft config check`
+cannot see any of this: it concerns rows, not a declaration — `admission
+list` and `verify` are the detectors.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

@@ -355,13 +355,17 @@ impl VaultStore {
             return Err(StoreError::Invalid("nothing to forget".into()));
         }
         for id in ids {
-            if self
-                .get(id, crate::Read::Internal(crate::InternalRead::Verification))?
-                .is_none()
-            {
+            let Some(d) = self.get(id, crate::Read::Internal(crate::InternalRead::Verification))?
+            else {
                 return Err(StoreError::NotFound(id.clone()));
-            }
-            if self.is_quarantine_pending(id)? {
+            };
+            // The destruction fence's one rule on the meta just verified
+            // (ROADMAP O221), as `attest_in` asks it: the covered wing, so a
+            // pending row whose clear column was flipped away is refused here
+            // too, before the mirror loses its copy.
+            if crate::admission::QueueStanding::of_covered(&d.meta)
+                == crate::admission::QueueStanding::Pending
+            {
                 return Err(StoreError::Invalid(format!(
                     "{id} is quarantine-pending — rule on it with `admission allow`/`deny`; \
                      pending review evidence is not deletable, on the mirror either"

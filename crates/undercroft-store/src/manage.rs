@@ -434,7 +434,10 @@ pub struct SemanticChannel {
 /// What a dedup pass did — or, on a dry run, would do.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DedupReport {
-    /// Groups of drawers whose content matched.
+    /// Groups of drawers whose content matched — two or more readable members
+    /// that are not review evidence, which is what a group must hold to be
+    /// collapsed (ROADMAP O221: a member whose covered wing is the review
+    /// queue is no member).
     pub duplicate_groups: u64,
     /// Ids of the drawers removed, or that would be.
     pub removed: Vec<String>,
@@ -1106,8 +1109,11 @@ impl VaultStore {
         id: &str,
         evidence: PendingEvidence,
     ) -> Result<bool, StoreError> {
-        if evidence == PendingEvidence::Protect && self.is_quarantine_pending(id)? {
-            return Err(pending_refusal(id));
+        if evidence == PendingEvidence::Protect {
+            let standing = self.queue_standing(&self.conn, id)?;
+            if let Some(refusal) = self.queue_refusal(id, standing, "deleted") {
+                return Err(refusal);
+            }
         }
         self.under_destruction_lock(|s, snap| {
             let present: bool = snap.conn().query_row(
@@ -1129,11 +1135,14 @@ impl VaultStore {
     /// **The pending-evidence fence, as a witness** — the one place a
     /// [`Fenced`] is minted, and so the one door into
     /// [`VaultStore::destroy_in`]. Inside a write lock only, on that lock's
-    /// snapshot: under `Protect` a drawer the clear `wing` column names as
-    /// awaiting a ruling is refused (the column the reviewer's queue
-    /// enumerates on — see [`VaultStore::is_quarantine_pending`]), and any
-    /// error reading it propagates; under `Ruled` the caller is a ruling and
-    /// says so in one greppable token.
+    /// snapshot: under `Protect` a drawer awaiting a ruling is refused, as
+    /// [`VaultStore::queue_standing`] — the ONE predicate (ROADMAP O221) —
+    /// answers on the lock's connection: the HMAC-covered wing where the row
+    /// verifies, the clear column only where it does not, and the review
+    /// queue enumerates by the same rule. A row that does not verify and whose
+    /// clear column is ordinary stays destroyable; any other error reading it
+    /// propagates. Under `Ruled` the caller is a ruling and says so in one
+    /// greppable token.
     pub(crate) fn fence<'s>(
         &self,
         snap: &'s crate::chain::Snapshot<'_>,
@@ -1147,8 +1156,11 @@ impl VaultStore {
                     .into(),
             ));
         }
-        if evidence == PendingEvidence::Protect && self.is_quarantine_pending(id)? {
-            return Err(pending_refusal(id));
+        if evidence == PendingEvidence::Protect {
+            let standing = self.queue_standing(snap.conn(), id)?;
+            if let Some(refusal) = self.queue_refusal(id, standing, "deleted") {
+                return Err(refusal);
+            }
         }
         Ok(Fenced {
             id: id.to_string(),
@@ -1376,8 +1388,14 @@ impl VaultStore {
         }
         let mut pending: Vec<&str> = Vec::new();
         for id in &ids {
-            if self.is_quarantine_pending(id)? {
-                pending.push(id);
+            // The fence's own predicate and answer (ROADMAP O221): review
+            // evidence a ruling can act on is listed; a member no ruling can
+            // act on refuses with its remedies; errors propagate.
+            let standing = self.queue_standing(&self.conn, id)?;
+            match self.queue_refusal(id, standing, "deleted with its source") {
+                None => {}
+                Some(StoreError::Invalid(_)) => pending.push(id),
+                Some(other) => return Err(other),
             }
         }
         if !pending.is_empty() {
@@ -1417,15 +1435,16 @@ impl VaultStore {
         Ok((gone.len() as u64, gone))
     }
 
-    /// Whether `id` names a drawer currently awaiting an admission ruling.
-    ///
-    /// Reads the CLEAR `wing` column deliberately: `admission_pending` — the
-    /// reviewer's queue — enumerates on exactly this column, so the fence
-    /// and the queue can never disagree about what is pending. (Reading the
-    /// HMAC-covered `meta.wing` instead would make an unreadable row
-    /// undeletable, which turns a repair problem into a stuck vault; a
-    /// flipped column is already an integrity failure `verify` reports.)
-    pub fn is_quarantine_pending(&self, id: &str) -> Result<bool, StoreError> {
+    /// Whether the CLEAR `wing` column of row `id` names the review queue —
+    /// the read fences' explicit probe of the mirror (ROADMAP O221 ruling
+    /// item 3), and nothing else. It is NOT the destruction fence: that is
+    /// [`VaultStore::queue_standing`], which reads the covered copy wherever
+    /// the row verifies. The read fences decide by EITHER copy and so keep a
+    /// probe of their own, so that moving the destruction predicate can never
+    /// relax them through a shared helper. The function this replaces,
+    /// `is_quarantine_pending`, answered both questions with the clear column
+    /// and was retired so no caller changed meaning silently.
+    fn clear_wing_names_queue(&self, id: &str) -> Result<bool, StoreError> {
         let wing: Option<String> = self
             .conn
             .query_row("SELECT wing FROM drawers WHERE id = ?1", params![id], |r| {
@@ -1435,27 +1454,26 @@ impl VaultStore {
         Ok(wing.as_deref() == Some(crate::admission::QUARANTINE_WING))
     }
 
-    /// The same question, for a read that RETURNS CONTENT.
+    /// Whether `id` names review evidence, for a read that RETURNS CONTENT.
     ///
-    /// **A28, on the by-id door.** [`is_quarantine_pending`] reads the clear
-    /// `wing` column, and the argument above for doing so is about the
-    /// DESTRUCTION callers: an unreadable row must stay deletable, and the
-    /// reviewer's queue enumerates on that same column. Neither applies to a
-    /// read. Both by-id read fences — MCP's, over every id-shaped argument,
-    /// and `GET /v1/vaults/{id}/drawers/{drawer_id}` — used the clear-column
-    /// version, so one offline `UPDATE drawers SET wing = 'notes'` handed
-    /// diverted content straight back through the two doors the fence exists
-    /// to close. That is the identical inversion `verified_meta_admits`
-    /// closed for the three bulk reads, on the door nobody re-checked.
+    /// **A28, on the by-id door.** Both by-id read fences — MCP's, over every
+    /// id-shaped argument, and `GET /v1/vaults/{id}/drawers/{drawer_id}` —
+    /// once read the clear column alone, so one offline `UPDATE drawers SET
+    /// wing = 'notes'` handed diverted content straight back through the two
+    /// doors the fence exists to close. That is the identical inversion
+    /// `verified_meta_admits` closed for the three bulk reads, on the door
+    /// nobody re-checked.
     ///
-    /// Refuses when EITHER copy says quarantine, so it is strictly stronger
-    /// than either alone and cannot disagree with the reviewer's queue about
-    /// what is pending. A row whose tag does not verify propagates its
-    /// integrity error rather than being served — on a read, unverifiable
-    /// means refuse, which is the exact opposite of what the destruction
-    /// path needs and the reason these are two functions.
+    /// Refuses when EITHER copy says quarantine — the clear column through
+    /// its own explicit probe, the covered copy through the verified `get` —
+    /// so it is strictly stronger than either alone: a mirror may narrow a
+    /// read and never lift an exclusion. A row whose tag does not verify
+    /// propagates its integrity error rather than being served — on a read,
+    /// unverifiable means refuse, which is the exact opposite of what the
+    /// destruction path needs (ROADMAP O221) and the reason these are two
+    /// functions.
     pub fn is_quarantine_pending_for_read(&self, id: &str) -> Result<bool, StoreError> {
-        if self.is_quarantine_pending(id)? {
+        if self.clear_wing_names_queue(id)? {
             return Ok(true);
         }
         Ok(self
@@ -1778,7 +1796,9 @@ impl VaultStore {
     /// group, or by winning the earliest-`seq` survivor slot and taking a
     /// live drawer down with it. Excluding is better than refusing here:
     /// the operator gets the dedup they asked for, and the review queue is
-    /// simply not its business.
+    /// simply not its business. Since ROADMAP O221 the exclusion that decides
+    /// reads each member's HMAC-covered wing, from the verified read the
+    /// group already makes: the clear-column `WHERE` only narrows the scan.
     ///
     /// **Its advisor consultations are an egress of what the vault holds, and
     /// are recorded** (ROADMAP O167). The survivor it re-screens is a stored
@@ -1858,6 +1878,7 @@ impl VaultStore {
         let mut removed = Vec::new();
         let mut dates_kept = 0u64;
         let mut quarantined = 0u64;
+        let mut collapsible = 0u64;
         for (fp, _) in &groups {
             let ids: Vec<String> = self
                 .conn
@@ -1866,25 +1887,43 @@ impl VaultStore {
                 ))?
                 .query_map(params![fp], |r| r.get(0))?
                 .collect::<Result<_, _>>()?;
-            let Some((keep_id, drop_ids)) = ids.split_first() else {
+            // Each member read once, verified — the reads this already made —
+            // and any member whose HMAC-COVERED wing is the review queue
+            // dropped from the group, survivor included (ROADMAP O221 ruling
+            // item 2). The clear-column exclusion above is the accelerator; a
+            // pending row whose column was flipped away from the queue passes
+            // it, and the destruction fence — which reads the covered copy —
+            // would then refuse its delete half-way through `--apply`, or it
+            // would win the survivor slot and take a live drawer down with
+            // it. A member that vanished since the scan is no member.
+            let mut members: Vec<(String, Drawer)> = Vec::with_capacity(ids.len());
+            for id in ids {
+                if let Some(d) = self.get(
+                    &id,
+                    crate::Read::Internal(crate::InternalRead::WritePathLookup),
+                )? {
+                    if crate::admission::QueueStanding::of_covered(&d.meta)
+                        == crate::admission::QueueStanding::NotPending
+                    {
+                        members.push((id, d));
+                    }
+                }
+            }
+            if members.len() < 2 {
                 continue;
-            };
+            }
+            collapsible += 1;
+            let mut members = members.into_iter();
+            let (_, keep) = members.next().expect("two or more members");
+            let (drop_ids, gone): (Vec<String>, Vec<Drawer>) = members.unzip();
+            let drop_ids = drop_ids.as_slice();
             // Gather first, so a report without `apply` still says truthfully
             // how many appearances the survivor would end up holding.
-            let mut survivor = self.get(
-                keep_id,
-                crate::Read::Internal(crate::InternalRead::WritePathLookup),
-            )?;
+            let mut survivor = Some(keep);
             let before = survivor.as_ref().map(|d| d.all_occurrences().len());
-            for id in drop_ids {
-                if let (Some(keep), Some(gone)) = (
-                    survivor.as_mut(),
-                    self.get(
-                        id,
-                        crate::Read::Internal(crate::InternalRead::WritePathLookup),
-                    )?,
-                ) {
-                    keep.absorb_occurrences_of(&gone);
+            if let Some(keep) = survivor.as_mut() {
+                for g in &gone {
+                    keep.absorb_occurrences_of(g);
                 }
             }
             let mut diverted = false;
@@ -1966,7 +2005,7 @@ impl VaultStore {
             }
         }
         Ok(DedupReport {
-            duplicate_groups: groups.len() as u64,
+            duplicate_groups: collapsible,
             removed,
             applied: apply,
             dates_kept,
@@ -2175,7 +2214,7 @@ impl VaultStore {
         // resolves a destination out of this table and calls `recent(Some(w))`,
         // which opts BACK IN to the quarantine wing when a wing is named (by
         // design, for the reviewer). The MCP fence inspects ARGUMENTS, and a
-        // tunnel id is not the wing string — `is_quarantine_pending` looks an
+        // tunnel id is not the wing string — `is_quarantine_pending_for_read` looks an
         // id up in `drawers`, where a tunnel id never appears — so both fence
         // checks passed and `undercroft_follow_tunnel` handed an agent the
         // whole review queue verbatim. Refusing the destination removes the
@@ -2686,6 +2725,15 @@ impl VaultStore {
         // was diverted into it. The MCP argument fence cannot see this — the
         // agent names no wing here — so it is enforced on the way out, the
         // same shape `recent`/`list_drawers` use.
+        //
+        // **A READ fence, so EITHER copy hides the records** (ROADMAP O221
+        // ruling item 3), over its own explicit clear-column probe rather
+        // than the destruction predicate, which reads the covered copy and
+        // would have let a pending row flipped away from the queue show the
+        // agent the labels of its own diverted write. A row that does not
+        // verify has its records OMITTED — `_for_read`'s "unverifiable means
+        // refuse", for a list: it depends on nothing the writer chose, and it
+        // fails no history call.
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
             let bare = r
@@ -2694,8 +2742,21 @@ impl VaultStore {
                 .next()
                 .unwrap_or(&r.record_id)
                 .to_string();
-            if crate::is_drawer_id(&bare) && self.is_quarantine_pending(&bare)? {
-                continue;
+            if crate::is_drawer_id(&bare) {
+                if self.clear_wing_names_queue(&bare)? {
+                    continue;
+                }
+                match self.covered_one(&self.conn, &bare)? {
+                    Some(crate::CoveredRow::Verified { meta, .. })
+                        if meta.wing == crate::admission::QUARANTINE_WING =>
+                    {
+                        continue;
+                    }
+                    Some(crate::CoveredRow::TagFailed { .. })
+                    | Some(crate::CoveredRow::MetaUnparseable { .. })
+                    | Some(crate::CoveredRow::Undecodable { .. }) => continue,
+                    Some(crate::CoveredRow::Verified { .. }) | None => {}
+                }
             }
             out.push(r);
         }
@@ -3465,8 +3526,9 @@ mod history_tests {
         let landed = s.upsert_screened(&drawer("inbox", poison, 1)).unwrap();
         assert!(landed.quarantined, "premise: the screen really diverted it");
         let q_id = landed.id.clone();
-        assert!(
-            s.is_quarantine_pending(&q_id).unwrap(),
+        assert_eq!(
+            s.queue_standing(&s.conn, &q_id).unwrap(),
+            crate::admission::QueueStanding::Pending,
             "premise: it is in {QUARANTINE_WING}"
         );
         let op = s.history(HistoryScope::Operator, None, 500, 0).unwrap();
@@ -3828,7 +3890,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(
-            s.admission_pending().unwrap().len(),
+            s.admission_pending().unwrap().pending.len(),
             1,
             "premise: the drawer diverted, or there is nothing to disagree about"
         );
@@ -3870,7 +3932,11 @@ mod tests {
             0,
         ))
         .unwrap();
-        assert_eq!(s.admission_pending().unwrap().len(), 1, "premise: diverted");
+        assert_eq!(
+            s.admission_pending().unwrap().pending.len(),
+            1,
+            "premise: diverted"
+        );
 
         // The store-level fact, stated rather than assumed: naming the
         // reserved wing DOES return its rooms. This is not a defect — it is
@@ -3937,7 +4003,7 @@ mod tests {
 
         s.set_admission(true);
         for (wing, room, label) in [(POISON, "r", "wing"), ("ops", POISON, "room")] {
-            let before = s.admission_pending().unwrap().len();
+            let before = s.admission_pending().unwrap().pending.len();
             let d = drawer(wing, room, CLEAN, 7);
             let out = s.upsert_screened(&d).unwrap();
             assert!(
@@ -3945,7 +4011,7 @@ mod tests {
                 "a flagged {label} must divert — the write is kept, the name is not"
             );
             assert_eq!(
-                s.admission_pending().unwrap().len(),
+                s.admission_pending().unwrap().pending.len(),
                 before + 1,
                 "the reviewer must see it ({label})"
             );
@@ -3987,7 +4053,7 @@ mod tests {
 
         // The operator's queue DOES, which is where the evidence belongs,
         // and the signal says which kind of thing tripped.
-        let pending = s.admission_pending().unwrap();
+        let pending = s.admission_pending().unwrap().pending;
         assert!(
             pending
                 .iter()

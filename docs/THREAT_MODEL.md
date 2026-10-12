@@ -927,8 +927,27 @@ write path at all.
   was queued — a digest keyed with the stored KG secret, so it confirms
   nothing to an offline reader — and an allow over a destination written or
   deleted since is refused, checked again inside the write transaction;
-  `admission list` shows the state before anyone rules. What remains, stated:
-  a ruling still binds the id and not the text (O225). Updates are screened on the UPDATING surface, so an
+  `admission list` shows the state before anyone rules. **Nor re-declared by
+  a convergence** (ROADMAP O226): a re-submission of the same text for the
+  same filing replaced the pending row's whole covered declaration, so a
+  converger holding the text could back-date `filed_at` (the allowed drawer
+  then swept at once) or attach a `kind` or a `supersedes` link the reviewer
+  never saw; it now carries the row's declaration, the screen's signals the
+  one field that grows. **And "pending" is the HMAC-covered wing** (ROADMAP
+  O221): every destruction and write fence — `drawer delete`,
+  `delete_by_source`, `forget` with or without a mirror, the import door,
+  both dedup doors and the retention sweep — asks one predicate that reads
+  the covered wing wherever the row verifies and the clear column only where
+  it does not, so one offline flip of the clear `wing` column no longer
+  launders the destruction of review evidence; the read fences refuse when
+  EITHER copy names the queue; and `admission list` enumerates by the same
+  rule and reports a row it cannot verify beside the rest instead of failing
+  on it. What remains, stated: a ruling still binds the id and not the text
+  (O225); a row whose tag fails can be neither allowed, denied nor deleted
+  until its explicit destroy-unverifiable act is built (O221(c), ruled D4);
+  and a row whose tag, clear column and `meta_json` were ALL rewritten is
+  outside the fence and the report, which `verify`'s `bad_records` names.
+  Updates are screened on the UPDATING surface, so an
   untrusted surface cannot ride a trusted writer's standing.
   Deployment-trusted surfaces bypass by declaration
   (`UNDERCROFT_ADMIT_TRUSTED_SOURCES`). A diverted save **says so on
