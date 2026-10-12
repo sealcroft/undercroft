@@ -2,9 +2,9 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and thirty-nine fixes. The witness
+MINOR: one new capability, backward compatible, and forty fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Nine fixes change what a deployment must do: every process writing a
+start-up. Ten fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
@@ -16,10 +16,13 @@ any other process has the vault open, a replica included (O291);
 instead of writing (O212); a command whose stdout reader leaves early
 exits 141 where it panicked with 101 (O287); the systemd unit template runs
 `init` before it serves and waits for its data directory's mount, so a mount that
-fails at boot leaves the unit failed rather than restarting it (O200); and
+fails at boot leaves the unit failed rather than restarting it (O200);
 `forget`, `admission deny` and `retention sweep` read `--sign` before they
 destroy, so a bad identity exits 1 even where nothing would be destroyed, and a
-sweep that is not clean and cannot write `--out` exits 2 (O262) — all in
+sweep that is not clean and cannot write `--out` exits 2 (O262); and `verify`,
+`backup create` and `backup restore` refuse a drawer whose HMAC verifies over covered
+meta that does not parse, so a backup can refuse a vault the previous binary archived,
+and `verify --read-only` is the pre-flight before the upgrade (O231) — all in
 `UPGRADING.md`, beside O279's note that a filesystem whose inode numbers are not
 stable now refuses every open (which `config check` pre-flights), O255's note that
 a destruction now holds the write lock for as long as it runs, O256's that an
@@ -36,9 +39,9 @@ until O279, which closed four entries, "seventeen" until O281, "eighteen" until 
 by counting the entries — "twenty-seven" until O305, "twenty-eight" until O309, "twenty-nine"
 until O314, "thirty" until O212, "thirty-one" until O287, which closed two entries, and
 "thirty-three" until train 1's integration, which closed six — O331, O199, O200, O177,
-O236 and O262; it said "Three fixes change what a deployment must do" until O283 made
+O236 and O262 — and "thirty-nine" until O231; it said "Three fixes change what a deployment must do" until O283 made
 it four, "Four" until O291 made it five, "Five" until O212 made it six, "Six"
-until O287 made it seven, and "Seven" until train 1 made it nine (O200, O262). O303's
+until O287 made it seven, "Seven" until train 1 made it nine (O200, O262), and "Nine" until O231 made it ten. O303's
 note was missing from it from O303 until train 1's integration, which found it by reading
 `UPGRADING.md`'s entries against this line.)
 
