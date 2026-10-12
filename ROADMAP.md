@@ -55791,7 +55791,7 @@ recorded, which this entry follows, and says nothing about the guide's shape.
   `build-and-test.md`, `build-pitfalls.md`, `ci-and-release.md`, `invariants-storage.md`,
   `invariants-retrieval.md`, `invariants-surfaces.md`, `definition-of-done.md`,
   `session-end-hygiene.md` and `config-classes.md`. Each opens with a header saying what it holds,
-  when to read it, that it would govern over the core's one-line form (PROPOSED, below), which gate
+  when to read it, that it governs over the core's one-line form (RULED, below), which gate
   reads a figure in it, and where its moved text points outside it; the core's organisation section says that "this file", in any part of the guide, means the
   whole guide.
 - **Nothing was deleted, and that is measured rather than asserted.** A checker split the old file
@@ -55819,19 +55819,11 @@ recorded, which this entry follows, and says nothing about the guide's shape.
   requires nothing of a clean fixture. `bash tests/battery.sh --preflight-only` exits 0 at the final
   tree.
 
-**Two rules are PROPOSED with this split, not ruled**, and both are marked so in the core for the
-maintainer to approve, change or strike in this entry's pull request: (1) **the 60 KiB limit** on the
-core — the `prose figures` check enforces whatever number the core's sentence states, so changing it
-is changing one sentence; and (2) **the full text in a reference document governs over the core's
-one-line form of the same rule**. The maintainer's answer decided the split and made it the standard;
-it named no size and no precedence, and a reviewer of this unit found both had been written in as
-settled. They stay PROPOSED until the maintainer's approval of the pull request rules them, and that
-approval is to be recorded here.
-
 **Review fixes, 2026-10-12.** An independent review found nothing high. Answered: O313's merge rule
 (a branch behind `main` is updated first; its new head needs the maintainer's word again before a merge
 pinned with `--match-head-commit`; never `--admin`) is in the core now, not only in
-`ci-and-release.md`'s release flow; the two rules above are marked PROPOSED; three moved paragraphs
+`ci-and-release.md`'s release flow; the two rules it found written in unruled were marked PROPOSED
+(and are ruled below); three moved paragraphs
 whose "above" pointed outside their new document are named in that document's header; the
 definition of done's items keep their numbers, a heading separating each; `tests/house-figures.sh`
 reads `FIGURES_DOC` out of `tests/battery.sh`; and `UPGRADING.md`, `tests/context-check.sh` and a
@@ -55855,6 +55847,38 @@ names the thing changed.
 
 **Placement.** A pure decision with no engine code, so the entry stays under `## Unversioned`,
 finished, with its row in the battery's `UNVERSIONED_CLOSED` roster (O101).
+
+#### RULED 2026-10-12 by the maintainer — the two rules the build wrote in
+
+**The question.** The build wrote two rules the first answer did not settle, and the review of this
+unit found them stated as settled; they were marked PROPOSED and put to the maintainer in the pull
+request: (1) the core stays at or under 60 KiB; (2) where the core's one-line form of a rule and a
+reference document's full text differ, the full text governs. The first answer decided the split and
+made it the standard; it named no size and no precedence. The search for a prior ruling on either —
+`rul(ed|ing)` over this file for the guide's size or for which of two statements governs — found
+none.
+
+**The maintainer's answer, verbatim:** "yes if it is best practice".
+
+**Decided**, the session agent judging both against that condition:
+
+1. **The core stays at or under 60 KiB** — RULED as written. A size budget is the ordinary practice
+   for a file that is loaded on every turn, and this one is enforced by the gate this unit built: the
+   `prose figures` check reads the limit out of the core's own sentence, so the number lives in one
+   place, and refuses a core over it.
+2. **The full text governs, AND any divergence found is a defect, fixed in the unit that finds it** —
+   RULED with that clause added, because precedence alone is not best practice here. On its own it
+   would let a one-line form drift from its full text for as long as nobody looked, while every agent
+   — which reads the core on every turn and a reference document only sometimes — acted on the
+   drifted line. This file's own doctrine already refuses that resting state ("a gap is a gap";
+   "accepted" is not a resting state; a stale claim is debt), and the drift-direction doctrine says
+   which side is wrong: the full text is where the rule was written with its argument, so it leads,
+   and the one-line form is corrected to match it.
+
+**What no gate sees.** A one-line form and its full text are prose, and no check compares them; the
+clause is held by the unit that reads both, the same way a reference document going stale beside the
+code is (above). Both rules are stated in the core as ruled, and every reference document's header
+states the second.
 
 ## Beyond 2.0.0 — the competitive track
 

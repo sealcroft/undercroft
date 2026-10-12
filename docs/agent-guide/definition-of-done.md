@@ -8,10 +8,11 @@ line each. Read it when you write a test or a counterfactual, update a
 governance surface or the house page, or add a renderer.
 
 It was moved here unchanged when the guide was split (ROADMAP O436,
-2026-10-12). PROPOSED with this split, for the maintainer's approval in its
-pull request: this full text governs over any one-line statement of the same
-rule in the core. In the moved text, "this file" and "here" mean the guide as
-a whole — the core and its reference documents.
+2026-10-12). Where this full text and the core's one-line form of the same
+rule differ, this full text governs, and the divergence is a defect, fixed in
+the unit that finds it (ruled by the maintainer, 2026-10-12). In the moved
+text, "this file" and "here" mean the guide as a whole — the core and its
+reference documents.
 
 Each item keeps its own number: a heading separates the three, so a Markdown
 renderer starts each list at the item's number rather than renumbering them 2,

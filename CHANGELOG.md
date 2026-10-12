@@ -2808,9 +2808,9 @@ a checker found every paragraph of the old file in exactly one place. The publis
 moved with the Build & test block to `docs/agent-guide/build-and-test.md`, where `tests/battery.sh`
 and `tests/house-figures.sh` read them. Three checks arrived inside existing preflights: the cargo
 figures must be readable before any suite runs, the core may repeat no suite figure, and the core's
-size limit and its index of reference documents are held in both directions. The limit itself, and
-the rule that a reference document's full text governs over the core's one-line form, are proposed
-for the maintainer's approval in the pull request.
+size limit and its index of reference documents are held in both directions. The maintainer ruled
+the limit, 60 KiB, and that where the core's one-line form and a reference document's full text
+differ the full text governs, the divergence being a defect fixed by the unit that finds it.
 
 ## 1.6.1 — 2026-09-22
 

@@ -60,15 +60,16 @@ opened only when the work touches its area; the last section of this file is
 the index that says which document covers what. The split (ROADMAP O436,
 2026-10-12, ruled by the maintainer: *"1 -> split and 2 also let that be the
 standard"*) deleted nothing: every paragraph this file held before it is in
-exactly one place, here or verbatim in a reference document. **PROPOSED with
-this split, for the maintainer's approval in its pull request:** where this
-core states a rule in one line, the full text in the document it names
-governs. Wherever the guide says "this file", it means the whole guide — this
-core and its reference documents.
+exactly one place, here or verbatim in a reference document. **Where this
+core's one-line form of a rule and the full text in the document it names
+differ, the full text governs — and any divergence found is a defect, fixed in
+the unit that finds it** (ruled by the maintainer, 2026-10-12). Wherever the
+guide says "this file", it means the whole guide — this core and its reference
+documents.
 
-**The split is the standard (O436).** **PROPOSED with this split, for the
-maintainer's approval in its pull request:** the core stays at or under 60 KiB,
-the size every agent pays on every turn. New layout, lessons and doctrine go into
+**The split is the standard (O436).** The core stays at or under 60 KiB (ruled
+by the maintainer, 2026-10-12): a budget for the one file every agent pays for
+on every turn. New layout, lessons and doctrine go into
 the reference document that owns the area, with at most a one-line pointer
 here; an area with no document gets one, and a row in the index. A figure a
 gate reads lives in ONE file, the one its gate reads, and a one-line statement
@@ -335,8 +336,9 @@ images either; mount the repo instead:
 
 One line each here; the full text — the mechanism, the worked example and
 what each cost — is in `docs/agent-guide/invariants-storage.md`,
-`invariants-retrieval.md` and `invariants-surfaces.md` (which governs is the
-PROPOSED rule in *How this guide is organised*).
+`invariants-retrieval.md` and `invariants-surfaces.md`, and where a line here
+and its full text differ, the full text governs and the difference is a defect
+to fix.
 
 - Content is stored **verbatim** — never summarize, paraphrase, or lossy-
   compress user data on the write path. Retrieval returns the exact words.

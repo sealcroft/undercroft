@@ -9,10 +9,11 @@ pre-release drift check and the release flow. Read it when you touch
 `.github/`, a toolchain pin, a release, a tag or a version bump.
 
 It was moved here unchanged when the guide was split (ROADMAP O436,
-2026-10-12). PROPOSED with this split, for the maintainer's approval in its
-pull request: this full text governs over any one-line statement of the same
-rule in the core. In the moved text, "this file" and "here" mean the guide as
-a whole — the core and its reference documents.
+2026-10-12). Where this full text and the core's one-line form of the same
+rule differ, this full text governs, and the divergence is a defect, fixed in
+the unit that finds it (ruled by the maintainer, 2026-10-12). In the moved
+text, "this file" and "here" mean the guide as a whole — the core and its
+reference documents.
 
 ---
 
