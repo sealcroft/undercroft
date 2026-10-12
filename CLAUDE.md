@@ -60,13 +60,15 @@ opened only when the work touches its area; the last section of this file is
 the index that says which document covers what. The split (ROADMAP O436,
 2026-10-12, ruled by the maintainer: *"1 -> split and 2 also let that be the
 standard"*) deleted nothing: every paragraph this file held before it is in
-exactly one place, here or verbatim in a reference document, and where this
-core states a rule in one line, the full text in the document it names governs.
-Wherever the guide says "this file", it means the whole guide — this core and
-its reference documents.
+exactly one place, here or verbatim in a reference document. **PROPOSED with
+this split, for the maintainer's approval in its pull request:** where this
+core states a rule in one line, the full text in the document it names
+governs. Wherever the guide says "this file", it means the whole guide — this
+core and its reference documents.
 
-**The split is the standard (O436).** The core stays at or under 60 KiB, the
-size every agent pays on every turn. New layout, lessons and doctrine go into
+**The split is the standard (O436).** **PROPOSED with this split, for the
+maintainer's approval in its pull request:** the core stays at or under 60 KiB,
+the size every agent pays on every turn. New layout, lessons and doctrine go into
 the reference document that owns the area, with at most a one-line pointer
 here; an area with no document gets one, and a row in the index. A figure a
 gate reads lives in ONE file, the one its gate reads, and a one-line statement
@@ -333,7 +335,8 @@ images either; mount the repo instead:
 
 One line each here; the full text — the mechanism, the worked example and
 what each cost — is in `docs/agent-guide/invariants-storage.md`,
-`invariants-retrieval.md` and `invariants-surfaces.md`, and it governs.
+`invariants-retrieval.md` and `invariants-surfaces.md` (which governs is the
+PROPOSED rule in *How this guide is organised*).
 
 - Content is stored **verbatim** — never summarize, paraphrase, or lossy-
   compress user data on the write path. Retrieval returns the exact words.
@@ -635,6 +638,13 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   one that can** — a bearer ending in whitespace, which HTTP strips, is
   refused rather than trimmed — and "cannot work" is measured, not reasoned
   about. (`config-classes.md`)
+- **Merging a pull request (ROADMAP O313).** `main` takes only a branch that
+  is up to date with it, so a branch behind `main` is updated first — and `gh
+  pr update-branch` gives it a NEW head, which needs the maintainer's word
+  again before a merge pinned to that head with `--match-head-commit`. Never
+  merge past the gate with `--admin` or the interface's bypass box: the
+  up-to-date rule binds an administrator only through gh's refusal and this
+  doctrine. (The release flow in `ci-and-release.md` carries the same step.)
 - **Drift check before every release**, re-run as a fan-out over its seven
   dimensions with an adversarial verifier per dimension, then the **release
   flow**: the battery (always `--build`) → `UPGRADING.md`, with `undercroft
@@ -689,7 +699,8 @@ touches before you change anything there; never all of them.
   contradicts the source.
 - `ci-and-release.md` — CI's jobs, matrix and verdict, the pinned toolchain
   and supply chain, `house-figures`; the pre-release drift check and the full
-  release flow. Read it when you touch `.github/`, a pin, a tag or a release.
+  release flow. Read it when you touch `.github/`, a pin, a tag or a release,
+  or merge a pull request.
 - `invariants-storage.md`, `invariants-retrieval.md`,
   `invariants-surfaces.md` — the full invariants summarised above.
 - `definition-of-done.md` — items 2, 4 and 7 in full.

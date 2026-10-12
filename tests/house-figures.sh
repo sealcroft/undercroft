@@ -147,14 +147,19 @@ TRUE_MCP=$(awk '/pub const MCP_TOOLS/,/^\];/' crates/undercroft-cli/src/parity.r
 # The cargo test count as the agent guide publishes it, which
 # `tests/battery.sh` already compares against a real run — so this reads the
 # published figure rather than re-deriving it, and the battery is what keeps
-# that honest. It sat in `CLAUDE.md` until the guide was split (ROADMAP O436);
-# the file below is the battery's `FIGURES_DOC`, and the premise beneath
-# refuses an empty read, so a figure that moves again fails here loudly.
-TRUE_TESTS=$(grep -oE 'cargo unit \+ integration tests \([0-9]+ run' docs/agent-guide/build-and-test.md \
-             | grep -oE '[0-9]+' | head -1)
+# that honest. It sat in `CLAUDE.md` until the guide was split (ROADMAP O436).
+# WHERE it lives is the battery's `FIGURES_DOC`, read out of `tests/battery.sh`
+# rather than repeated here, so the two scripts cannot name two files; an
+# empty read of either is refused by the premise beneath.
+FIGURES_DOC=$(sed -n 's/^FIGURES_DOC="\([^"]*\)"$/\1/p' tests/battery.sh | head -1)
+TRUE_TESTS=""
+if [ -n "$FIGURES_DOC" ] && [ -f "$FIGURES_DOC" ]; then
+  TRUE_TESTS=$(grep -oE 'cargo unit \+ integration tests \([0-9]+ run' "$FIGURES_DOC" \
+               | grep -oE '[0-9]+' | head -1)
+fi
 
 if [ -z "${TRUE_TESTS:-}" ] || [ "${TRUE_MCP:-0}" -lt 10 ]; then
-  echo "FAIL  a truth-side reader came back empty: tests='${TRUE_TESTS:-}' mcp='${TRUE_MCP:-}'"
+  echo "FAIL  a truth-side reader came back empty: tests='${TRUE_TESTS:-}' (from '${FIGURES_DOC:-}') mcp='${TRUE_MCP:-}'"
   echo "      A reader that examined nothing agrees with any page."
   echo ""
   echo "HOUSE FIGURES FAILED — premise"

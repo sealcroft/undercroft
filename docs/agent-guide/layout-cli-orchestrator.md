@@ -10,9 +10,10 @@ when your work touches either binary, a surface (CLI, MCP, `/v1`, the
 orchestrator, a console), or the parity inventories.
 
 It was moved here unchanged when the guide was split (ROADMAP O436,
-2026-10-12), and it governs over any one-line statement of the same rule in
-the core. In the moved text, "this file" and "here" mean the guide as a whole
-— the core and its reference documents.
+2026-10-12). PROPOSED with this split, for the maintainer's approval in its
+pull request: this full text governs over any one-line statement of the same
+rule in the core. In the moved text, "this file" and "here" mean the guide as
+a whole — the core and its reference documents.
 
 The MCP tool count in it is read by the `prose figures` preflight in
 `tests/battery.sh`; reword that sentence only together with its row.

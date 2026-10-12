@@ -10,9 +10,16 @@ what is written to disk, an id or key derivation, the chain, a rotation, a
 migration, or a guard on the write path.
 
 It was moved here unchanged when the guide was split (ROADMAP O436,
-2026-10-12), and it governs over any one-line statement of the same rule in
-the core. In the moved text, "this file" and "here" mean the guide as a whole
-— the core and its reference documents.
+2026-10-12). PROPOSED with this split, for the maintainer's approval in its
+pull request: this full text governs over any one-line statement of the same
+rule in the core. In the moved text, "this file" and "here" mean the guide as
+a whole — the core and its reference documents.
+
+Where the moved text points outside this document: "the mistake the versioning
+doctrine above records", in the last invariant, is in the core — the role
+section's rule that a RULE written into the guide gets the same scrutiny as
+code, whose worked example is that versioning doctrine, and the
+semantic-versioning convention.
 
 ---
 

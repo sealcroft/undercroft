@@ -10,9 +10,10 @@ endings, and the local LLM. Read it when you run the battery or a suite, when
 a test or check count moves, or when you add a suite or a preflight.
 
 It was moved here unchanged when the guide was split (ROADMAP O436,
-2026-10-12), and it governs over any one-line statement of the same rule in
-the core. In the moved text, "this file" and "here" mean the guide as a whole
-— the core and its reference documents.
+2026-10-12). PROPOSED with this split, for the maintainer's approval in its
+pull request: this full text governs over any one-line statement of the same
+rule in the core. In the moved text, "this file" and "here" mean the guide as
+a whole — the core and its reference documents.
 
 **The figures live here and nowhere else in the guide.** The `(N checks)` and
 `(N run, M ignored)` figures in the command block below and its cargo totals

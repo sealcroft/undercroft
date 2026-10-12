@@ -8,11 +8,22 @@ line each. Read it when you write a test or a counterfactual, update a
 governance surface or the house page, or add a renderer.
 
 It was moved here unchanged when the guide was split (ROADMAP O436,
-2026-10-12), and it governs over any one-line statement of the same rule in
-the core. In the moved text, "this file" and "here" mean the guide as a whole
-— the core and its reference documents.
+2026-10-12). PROPOSED with this split, for the maintainer's approval in its
+pull request: this full text governs over any one-line statement of the same
+rule in the core. In the moved text, "this file" and "here" mean the guide as
+a whole — the core and its reference documents.
+
+Each item keeps its own number: a heading separates the three, so a Markdown
+renderer starts each list at the item's number rather than renumbering them 2,
+3 and 4.
+
+Where the moved text points outside this document: "the struct listed above as
+the FIRST one this drift bit", in item 7, is `VaultStats`, named first by the
+invariant *A struct is not a surface* (`invariants-surfaces.md`).
 
 ---
+
+## Item 2 — a test that would have failed before the fix
 
 2. **A test that would have failed before the fix.** Assert the premise, so it
    cannot pass for the wrong reason. Several tests here carry an explicit
@@ -61,6 +72,9 @@ the core. In the moved text, "this file" and "here" mean the guide as a whole
    adding a rule; applied backwards it reclassifies nothing, because no
    earlier counterfactual in this tree was ever run and found to fire
    partially. One instance, and it is this one.
+
+## Item 4 — every governance surface updated in the same unit
+
 4. **Every governance surface updated in the same unit**: CHANGELOG, CLAUDE.md,
    ROADMAP, **the three `.handover/` files and, when present,
    `NEXT_PROMPT.md`** (ignored by git, governance
@@ -105,6 +119,9 @@ the core. In the moved text, "this file" and "here" mean the guide as a whole
    instance is the whole history this rule has**, and that is stated rather
    than implied: it is a sequencing rule earned from a single observed
    failure, not a pattern established across many.
+
+## Item 7 — count the renderers, not the surfaces
+
 7. **Count the renderers, not the surfaces.** The drift doctrine names four
    {CLI, MCP, `/v1`, orchestrator}, and that list is not the same as "everything
    that renders this struct". `ui.html` and the orchestrator console are

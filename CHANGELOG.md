@@ -2734,6 +2734,20 @@ O421's walk exists to heal. `UPGRADING.md` carries that and the native source bu
 builds with 1.98.1 and fetches it on first use, and a build on a toolchain whose std is not Unicode
 17.0.0 fails to compile; `config check` sees neither, a build not being a declaration.
 
+### The agent guide is split: `CLAUDE.md` is a core, and the rest is verbatim under `docs/agent-guide/` (O436)
+
+Not a fix, and not counted in this release's figures above: it changes how an agent working on this
+repository is instructed, which no deployment can observe. `CLAUDE.md` is read by every agent on every
+turn, and it went from 359,360 bytes to 47,260; everything else it held is now, verbatim, in one of
+eighteen reference documents under `docs/agent-guide/`, each read when the work touches its area, and
+a checker found every paragraph of the old file in exactly one place. The published suite figures
+moved with the Build & test block to `docs/agent-guide/build-and-test.md`, where `tests/battery.sh`
+and `tests/house-figures.sh` read them. Three checks arrived inside existing preflights: the cargo
+figures must be readable before any suite runs, the core may repeat no suite figure, and the core's
+size limit and its index of reference documents are held in both directions. The limit itself, and
+the rule that a reference document's full text governs over the core's one-line form, are proposed
+for the maintainer's approval in the pull request.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

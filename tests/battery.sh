@@ -767,7 +767,7 @@ NAMES=("${CU_NAMES_SAVE[@]}"); CODES=("${CU_CODES_SAVE[@]}")
 
 if [ "$SUM_FAIL" -ne 0 ]; then
   echo "      the summary is reporting-only and decides nothing, but it is the"
-  echo "      number a session copies into CLAUDE.md — an unreproducible doc claim"
+  echo "      number a session copies into $FIGURES_DOC — an unreproducible doc claim"
   # `exit 1`, like every other preflight here. The first version of this line
   # incremented a `FAIL` counter that does not exist in this script, so the
   # gate would have printed its complaint and let the battery continue — a

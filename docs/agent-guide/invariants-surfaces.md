@@ -9,9 +9,10 @@ surface. Read it when your work adds or changes a capability on any surface, a
 screen, an inventory gate, or a claim that something is absent.
 
 It was moved here unchanged when the guide was split (ROADMAP O436,
-2026-10-12), and it governs over any one-line statement of the same rule in
-the core. In the moved text, "this file" and "here" mean the guide as a whole
-— the core and its reference documents.
+2026-10-12). PROPOSED with this split, for the maintainer's approval in its
+pull request: this full text governs over any one-line statement of the same
+rule in the core. In the moved text, "this file" and "here" mean the guide as
+a whole — the core and its reference documents.
 
 The CLI absence-partition figures in it are read by the `prose figures`
 preflight in `tests/battery.sh`; reword that sentence only together with its

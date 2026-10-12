@@ -2148,7 +2148,8 @@ listing now sees more lines than before, never fewer.
 ### The embeddings-TLS recipe pins a readable path
 
 **Who is affected:** anyone following the served-embedder recipe in
-`docs/EMBEDDERS.md`, `CLAUDE.md` or `docker-compose.yml` **with the `cli` or
+`docs/EMBEDDERS.md`, the agent guide (`docs/agent-guide/build-and-test.md`;
+`CLAUDE.md` at the time) or `docker-compose.yml` **with the `cli` or
 `mcp` service**. With `bench` it always worked, which is why this went
 unnoticed.
 

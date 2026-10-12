@@ -55383,7 +55383,7 @@ recorded, which this entry follows, and says nothing about the guide's shape.
 
 #### BUILT 2026-10-12
 
-- **The core**, `CLAUDE.md`: 359,360 → 46,487 bytes, about 89,800 → 11,600 tokens. The byte figures
+- **The core**, `CLAUDE.md`: 359,360 → 47,260 bytes, about 89,800 → 11,800 tokens. The byte figures
   are measured (`wc -c`); the token figures are an ESTIMATE, bytes ÷ 4 — the ratio the question's
   own "359 KB ≈ 90k tokens" implies — and no tokenizer was run. The core keeps the project identity
   and the current-release paragraph, the role statement with every binding consequence and the
@@ -55392,13 +55392,13 @@ recorded, which this entry follows, and says nothing about the guide's shape.
   one line each), session-end hygiene, the conventions (the semantic-versioning test verbatim, the
   configuration classes and the release flow in brief), and an index naming every reference
   document and when to read it.
-- **Eighteen reference documents** under `docs/agent-guide/`, 350,811 bytes: nine `layout-*` by
+- **Eighteen reference documents** under `docs/agent-guide/`, 353,425 bytes: nine `layout-*` by
   crate and area (`layout-store.md` alone is 94,796 bytes, the store crate's bullet), then
   `build-and-test.md`, `build-pitfalls.md`, `ci-and-release.md`, `invariants-storage.md`,
   `invariants-retrieval.md`, `invariants-surfaces.md`, `definition-of-done.md`,
   `session-end-hygiene.md` and `config-classes.md`. Each opens with a header saying what it holds,
-  when to read it, that it governs over the core's one-line form, and which gate reads a figure in
-  it; the core's organisation section says that "this file", in any part of the guide, means the
+  when to read it, that it would govern over the core's one-line form (PROPOSED, below), which gate
+  reads a figure in it, and where its moved text points outside it; the core's organisation section says that "this file", in any part of the guide, means the
   whole guide.
 - **Nothing was deleted, and that is measured rather than asserted.** A checker split the old file
   into 136 units — blank-line paragraphs, cut again at every top-level list item, the finest cut
@@ -55420,6 +55420,25 @@ recorded, which this entry follows, and says nothing about the guide's shape.
   in both directions, behind a probe that plants a size, an unindexed and a dangling finding and
   requires nothing of a clean fixture. `bash tests/battery.sh --preflight-only` exits 0 at the final
   tree.
+
+**Two rules are PROPOSED with this split, not ruled**, and both are marked so in the core for the
+maintainer to approve, change or strike in this entry's pull request: (1) **the 60 KiB limit** on the
+core — the `prose figures` check enforces whatever number the core's sentence states, so changing it
+is changing one sentence; and (2) **the full text in a reference document governs over the core's
+one-line form of the same rule**. The maintainer's answer decided the split and made it the standard;
+it named no size and no precedence, and a reviewer of this unit found both had been written in as
+settled. They stay PROPOSED until the maintainer's approval of the pull request rules them, and that
+approval is to be recorded here.
+
+**Review fixes, 2026-10-12.** An independent review found nothing high. Answered: O313's merge rule
+(a branch behind `main` is updated first; its new head needs the maintainer's word again before a merge
+pinned with `--match-head-commit`; never `--admin`) is in the core now, not only in
+`ci-and-release.md`'s release flow; the two rules above are marked PROPOSED; three moved paragraphs
+whose "above" pointed outside their new document are named in that document's header; the
+definition of done's items keep their numbers, a heading separating each; `tests/house-figures.sh`
+reads `FIGURES_DOC` out of `tests/battery.sh`; and `UPGRADING.md`, `tests/context-check.sh` and a
+battery message no longer send a reader to `CLAUDE.md` for text that moved. The verbatim checker and
+the preflights were re-run after them.
 
 **Applied backwards**, as a rule here must be: the standard reclassifies nothing, because the guide
 has never been split before — it is untested by history, and this is its first application. What
