@@ -238,6 +238,32 @@ very large `forget` into several; one destruction near 75,000 drawers holds
 the lock past another writer's busy timeout (ROADMAP O264). `undercroft config
 check` cannot see this: it depends on the data, not on a declaration.
 
+### `drawer delete-by-source` and `admission allow` change everything or nothing (O259, O260)
+
+**Symptom, one of:** a `drawer delete-by-source` — or `DELETE
+/v1/vaults/{id}/drawers?source=`, or MCP's `undercroft_delete_by_source` —
+that fails part-way (the write lock held past the busy timeout, a statement
+failing, the pending-evidence check unable to run) exits 1 (a `/v1` 500) with
+every drawer of the source still there, where it used to delete the drawers
+before the failure and then report the error. An `admission allow` racing a
+`deny` of the same row from another process exits 1 with `not found` (a `/v1`
+404) and writes nothing when the deny got there first — it used to exit 0 with
+both verdicts in the trail and the denied text re-filed at its destination. An
+allow whose queue row changed while it ran exits 1 (a `/v1` 400) saying it
+`changed while this allow ran`, nothing written. While a large source delete
+runs, other writers wait for it.
+
+**Cause:** ROADMAP O259 and O260. Each drawer of a source was deleted in its own
+write lock, and an allow committed its re-filed drawer, its ruling and the queue
+row's removal as three transactions; both are now one write lock, the shape
+O255 gave `forget`, the retention sweep and `admission deny`.
+
+**Fix:** none for ordinary use. Re-run a source delete that was refused — it
+changed nothing. After a refused allow, run `admission list` and rule again: a
+row a deny took is gone, and a row that changed is the text to read before
+ruling. `undercroft config check` cannot see this: it is a command's behaviour,
+not a declaration.
+
 ### an archive taken by 1.6.1 or earlier while anything held the vault may be torn (O256)
 
 **Symptom:** `backup restore` of an older archive refuses with exit 2 (a `/v1`
@@ -258,6 +284,17 @@ refuses cannot be restored as it is. Expect the `-wal` to grow while a backup
 runs — it holds one read snapshot for its verify and copy, 0.7 s at 10⁵ drawers
 — and shrink at the next checkpoint. `undercroft config check` cannot see any
 of this: it concerns the archives on disk, not a declaration.
+
+**And since O273, in the same release:** `backup create` exits 1 (`/v1` 500,
+no `class`) with nothing archived when `backups/.staging` — the directory every
+archive is built in before it is published — is a symbolic link or anything but
+a directory, naming it. It used to follow the link: the copied database was
+built and published from wherever it pointed, and the sweep of abandoned stages
+removed every 32-hex directory over an hour old there. No release creates that
+entry as a link, so a deployment meets this only if one was put there by hand:
+remove it (`backup create` makes the directory itself), then back up again.
+`undercroft config check` cannot see it: it is a state of the data directory,
+not a declaration.
 
 ### `backup restore` proves an archive before it touches the vault, and refuses one that does not verify (O268)
 
@@ -307,8 +344,16 @@ none of the rest.
 linked `vaults/<vault>`, or a linked database or manifest inside it — exits 1
 (`/v1` 400) with nothing changed, where it used to rename the LINK aside, orphan
 the directory it named and move the vault onto the palace's own filesystem: move
-the real directory into place, then restore (ROADMAP O283). A restore into a
-vault that does not exist exits 1 if a vault appears there while it runs, rather
+the real directory into place, then restore (ROADMAP O283). **Since O301 that
+covers every entry of the vault's directory**, by the rule a vault delete
+applies: a linked `vault.db-wal` (committed frames) or `vault.json.next`, a
+subdirectory, a FIFO — anything that is not a regular file — exits 1 (`/v1`
+400) naming it, where a linked `.next` or `-shm` used to be renamed aside with
+the vault and removed as a link, leaving what it named behind, a subdirectory
+was removed with the vault, its files included, and a linked `-wal` failed with
+a raw "unable to open database file" (`/v1` 500) after the archive was staged.
+Replace the link with what it names, or move the entry out, then restore. A
+restore into a vault that does not exist exits 1 if a vault appears there while it runs, rather
 than replacing it with nothing holding it (O282). The refusal for a held vault
 now prints the store's own words — *"… is open in another process, and
 replacing it beneath that process destroys it …"*, or that another restore
@@ -451,6 +496,167 @@ match it (`out=$(undercroft verify 2>&1); rc=$?`), or treat 141 as "completed,
 reader left": it is not a failed run to retry, because a retry of a write that
 committed files it again. `undercroft config check` cannot detect this:
 nothing in an environment predicts a reader closing.
+
+### the systemd unit runs `init` first and waits for its data directory's mount (O200)
+
+**Affects:** an installation that copies the new
+`deploy/undercroft-server.service` over its old one. An installed unit does
+not change on its own.
+
+**Symptom:** if `/var/lib/undercroft` is its own mount and that mount fails at
+boot, `undercroft-server` stays failed with a dependency error and is not
+restarted. The old unit kept restarting every three seconds and came up by
+itself once someone mounted the directory by hand. On a start that finds no
+`default` vault, the unit now creates a sealed one and serves it, where the old
+unit exited `vault "default" not found`.
+
+**Cause:** every start runs `undercroft init` first (`ExecStartPre`), and the
+unit declares `RequiresMountsFor=/var/lib/undercroft` so that init never runs
+against the empty directory beneath a mount that is not up yet. Without that,
+init would write a new master key and an empty `default` vault there and the
+server would serve them in place of your installation — measured under systemd
+252, with the directive and without (ROADMAP O200).
+
+**Fix:** mount the directory, then `systemctl start undercroft-server`. Mount
+it through an fstab entry or a `.mount` unit so systemd orders the two; a
+directory mounted by hand after boot is invisible to `RequiresMountsFor=`.
+Keep `UNDERCROFT_HOME` in the unit, not in `/etc/undercroft/server.env`, so
+the directory the unit waits for is the one it writes to. To serve a vault
+other than `default`, remove `ExecStartPre`. `undercroft config check` cannot
+detect any of this: it is the unit's behaviour, not a declaration.
+
+### creating a tunnel the vault already holds over a row edited offline exits 2, and an import meeting one stops there (O236)
+
+**Symptom:** `undercroft tunnel create`, `undercroft_create_tunnel` over MCP,
+`POST /v1/vaults/{id}/tunnels`, and the tunnel records inside `undercroft
+import` / `POST …/import` answer *"integrity failure on record tunnel/{id}"* —
+exit 2, 409 `class: "integrity"` — for a tunnel the vault already holds whose
+stored row no longer verifies. Before 1.7.0 the same call succeeded: it wrote no
+row, appended a chain record anyway, and said it had created the tunnel; an
+import counted it among its tunnels and exited 0. Only a vault whose tunnel row
+was edited outside the engine meets this; `verify` already fails on such a
+vault.
+
+**Cause:** a repeated create now appends nothing and says it was a no-op
+(ROADMAP O236), and "it already exists" is a claim about the stored row, so the
+row is verified before the claim is made. An import stops at that record, after
+the drawers and graph records before it have landed: it does not yet repair a
+tampered tunnel row as it repairs a tampered drawer (ROADMAP O404).
+
+**Fix:** run `undercroft verify`, then `undercroft tunnel delete <id>` for the
+tunnel it names — the delete does not read the row and records the deletion —
+and create the tunnel again or re-run the import. `undercroft config check`
+cannot detect this: it opens no vault.
+
+### a destruction with a bad `--sign` refuses before it destroys, and one whose `--out` cannot be written prints its receipt (O262)
+
+**Symptom:** `undercroft forget`, `admission deny` or `retention sweep` with a
+`--sign` file that is missing or is not a signing identity exits 1 (*"reading
+signing identity …"*, or *"… is not a signing identity"*) with nothing
+destroyed. **So does a `retention sweep` that has nothing to destroy** — a
+`--dry-run`, and an ordinary sweep with nothing aged out, which is the usual
+daily scheduled run: both used to exit 0 without reading the file, and the
+first sweep that did destroy something then failed over the destruction. One
+whose `--out` cannot be written still exits 1, but prints the receipt's JSON on
+stdout first and says *"the drawers ARE destroyed, so their receipt is printed
+on stdout instead"* — or, when stdout cannot take it either, *"the receipt is
+lost"*. A retention sweep that is NOT clean and whose `--out` cannot be written
+now exits 2, the integrity verdict, where it exited 1. When `--out` fails, the
+receipt's JSON comes first on stdout, ahead of the sweep's summary lines, since
+the file is now written before anything is printed.
+
+**Cause:** ROADMAP O262. All three read `--sign` and wrote `--out` only after
+the store had destroyed the drawers and committed, so a bad signing path, a
+file that was not a signing identity or an unwritable output path exited 1
+over drawers already gone and lost their receipt — whose content fingerprints
+are stored nowhere, so it can never be minted again. The sweep read `--sign`
+only when it had a receipt to sign, which is why a sweep with nothing to
+destroy never noticed a bad path.
+
+**Fix:** none for a correct invocation; correct the `--sign` path a scheduled
+sweep names before upgrading — run it once with `--dry-run`, which now reads
+the file. A script that retries these three commands on exit 1
+must not retry once stdout carries a receipt: the drawers are destroyed, a
+retry answers *not found*, and the receipt on stdout is the only copy — so
+capture stdout on every exit. `undercroft config check` cannot detect this: it
+is a flag on a command, not a declaration.
+
+### `verify`, `backup create` and `backup restore` refuse a drawer whose HMAC verifies over covered meta that does not parse (O231)
+
+**Symptom:** `undercroft verify` exits 2 with `unreadable:      1` and a line
+`UNREADABLE: <id>: its HMAC verifies and its covered meta does not parse, so every
+read refuses it` (MCP: `isError`, `unreadable: 1`; `/v1`: `"ok": false`, the same
+line in `bad_records`), on a vault the previous binary verified. `backup create`
+then exits 2 (`/v1`: 409 `class: "integrity"`), and `backup restore` of an archive
+holding such a row is refused, with the live vault untouched. `vault rotate` is
+not refused over it.
+
+**Cause:** such a row was always unreadable — `drawer get`, and a `search` whose
+candidates include it, answer `corrupt row <id>` — and `verify` counted it and reported it nowhere,
+so it answered OK and a backup archived it (ROADMAP O231). It can be a legacy or a
+defect-written row, and it can also be made without the key, by moving where a
+drawer's meta ends and its content begins (ROADMAP O406). A failed HMAC is
+still printed under `hmac failures:`; this reason has its own line because the
+HMAC verifies. **One shape of this damage is not yet named on a line:** where the
+boundary is moved so that the covered meta is no longer valid UTF-8, `verify` and
+`backup create` exit 1 with `corrupt row …` (a run failure) instead of naming the
+row at exit 2 — O269's build is settling whether that reads as a named verdict
+too. So on this release treat a `corrupt row` exit 1 from `verify` as the same
+finding, not a transient error.
+
+**Fix:** `undercroft verify --vault <name>` names every such drawer. Restore the
+newest archive whose restore is accepted, if one holds the drawer intact; or, if
+its content is not needed or its source can be mined again, `undercroft drawer
+delete <id> --vault <name>`, which records a `del/` tombstone — `verify` is OK
+afterwards and `backup create` works again. An archive taken before 1.7.0 that
+holds such a row can still be restored by the binary that took it; then delete
+the row with this one. `undercroft config check` cannot detect this: it opens no
+vault database. Run the new binary's `verify --read-only` before the upgrade.
+
+### `bundle keygen` and `bundle sign-keygen` refuse a link at the identity's path (O321), and a key file is published whole (O210)
+
+**Symptom:** `undercroft bundle keygen` or `bundle sign-keygen` — at the
+default `<data-dir>/bundle.key` / `bundle-sign.key` or at `--out` — exits 1 with
+*"… already exists — refusing to overwrite an identity key … a link there
+counts, followed or not, and nothing was written"* where a symbolic link sits
+at that path. Before 1.7.0 a link to an existing file was refused the same way,
+but a DANGLING link read as absent and the secret was written through it to
+wherever it pointed, at exit 0. Two smaller observables move: a `master.key` or
+`kdf.salt` of the wrong length is refused with *"master.key is N bytes where 32
+are expected …"* (still exit 1) where the message named neither the file nor
+its length; on a filesystem without hard links (FAT, exFAT) the first start,
+and a keygen writing there, print one warning that the file was created in
+place. And three that can stop a first start or a keygen which worked before:
+where creating the key's hard link fails for any reason other than "this
+filesystem has no hard links" — a full disk, an I/O error — the command exits 1
+naming the error and the temp file that holds the whole secret, where the old
+writer would have tried to create the key in place; a failed write of that
+in-place key now keeps it, and the temp, and names both; and an `--out` file
+name longer than 218 bytes is refused, naming the temp it could not create.
+
+**Cause:** the keygens asked whether the path existed — which follows a link —
+then wrote, then narrowed the mode, so the secret also sat under the umask's
+permissions until the chmod (ROADMAP O321). And a crash between creating
+`master.key` and writing it left a short file every later start refused (ROADMAP
+O210). Both now write through one publisher: an existing entry refused before a
+byte is written, the bytes in a temp file owner-only from its creation, fsynced,
+then hard-linked to the name — which fails if the name exists, so nothing is
+replaced and no link is followed. A crash before the link leaves no key file,
+so the next start creates a whole one; a crash can leave a
+`<name>.tmp.<32 hex digits>` file beside it, which nothing removes, since it may
+hold the only copy of a key.
+
+**Fix:** to write an identity where a link points, pass the link's target as
+`--out`, or remove the link first. A short key file left by a crash under an
+earlier release keys nothing when the refusal says no vault or backup refers to
+a key yet; otherwise restore it from a copy of the data directory. The
+in-place fallback's warning needs no action. A refused link: clear the cause it
+names and run the command again; the kept temp file holds a secret nothing was
+sealed under, and the engine never removes it. A kept in-place key after a failed
+write may already have been loaded by another start: keep it. A long `--out`
+name: choose a shorter one. `undercroft config check` cannot detect any of
+this: a keygen's path is a flag on one command, the check reads which key files
+exist, never their length, and a link error happens only when a key is written.
 
 ## 1.6.1 (released 2026-09-22)
 

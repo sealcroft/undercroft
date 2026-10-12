@@ -23,11 +23,14 @@
 //!   removes the quarantined copy; `admission deny` deletes it (keyed
 //!   tombstone). Both append a DECISION record to the audit chain with
 //!   the verdict inside the tag's canonical, so the review trail is as
-//!   tamper-evident as the data. An allow is three steps — the re-filed
-//!   write, the ruling, the delete — and a crash between them leaves both
-//!   copies present and the pending entry intact: re-running the allow
-//!   converges (same deterministic ids), the append-only crash posture
-//!   everywhere else in this store;
+//!   tamper-evident as the data. An allow is three writes — the re-filed
+//!   drawer, the ruling, the queue row's removal — in ONE write lock since
+//!   ROADMAP O260, as a deny's ruling and destruction are since O255: a
+//!   crash or a refusal anywhere leaves none of them, and a deny of the same
+//!   row from another handle either wins whole or is refused, so the trail
+//!   states one verdict. (They were three transactions; a crash between
+//!   them left both copies present, which re-running the allow still
+//!   converges on — the state a vault written by an older binary can hold.)
 //! * an allow never replaces or re-creates what the screen never saw
 //!   (ROADMAP O224): the queue row records what its destination held when
 //!   the text was queued ([`QueuedAgainst`]), and the allow is refused when
@@ -45,6 +48,11 @@ use crate::{chain_append, Namespace, StoreError, VaultStore};
 /// directly, so presence in this wing always means "the screen put it
 /// here and no one has ruled yet".
 pub const QUARANTINE_WING: &str = "quarantine-pending";
+
+/// What `allow_in` hands its lock: the vector the drawer was re-filed with and
+/// whether its id was new (for `post_write` after the COMMIT), and the queue row
+/// it destroyed (for the lock's RAM-cache bookkeeping).
+type AllowedIn = ((Vec<f32>, bool), Vec<crate::manage::Destroyed>);
 
 /// One pending admission review.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -90,8 +98,10 @@ pub enum DestinationState {
     /// The destination still holds what it held when the text was queued:
     /// an allow replaces it, which is what the text was submitted to do.
     Unchanged,
-    /// The destination already holds this very text — an allow that was
-    /// interrupted after its write. Re-running it converges.
+    /// The destination already holds this very text — an allow an older
+    /// binary interrupted after its write (an allow is one write lock since
+    /// ROADMAP O260, so this build leaves no such state), or the same text
+    /// written there some other way. Re-running it converges.
     Applied,
     /// The row records nothing (queued before 1.6.0, restored from an export,
     /// or its destination was unreadable when queued) and nothing holds the
@@ -1271,9 +1281,19 @@ impl VaultStore {
     /// in the chain, not on the record), then remove the quarantined
     /// copy. Returns the re-filed drawer's id.
     ///
-    /// Three transactions, where `admission_deny` is one lock since ROADMAP
-    /// O255 — so a deny of the same row from another handle can land between
-    /// them and the trail then states both verdicts: ROADMAP O260.
+    /// **The re-filed write, the ruling and the removal are ONE write lock**
+    /// (ROADMAP O260), the shape `admission_deny` has had since O255. They
+    /// were three transactions, so a deny of the same row from another
+    /// handle could land between them: the trail then stated both `allowed`
+    /// and `denied`, and the deny's receipt attested the destruction of text
+    /// that survived, re-filed under its ordinary id. Everything checked here
+    /// before the lock is the MESSAGE door; inside the lock the queue row is
+    /// read again and must still be exactly the row the door judged — present,
+    /// pending, and byte for byte the same text and declaration (O225's ruling
+    /// asks for content, not existence) — so a deny that won refuses this
+    /// allow with nothing written, and a row re-occupied in between is never
+    /// destroyed unread under "allowed". The destination's precondition is
+    /// checked again inside the same transaction by the write boundary (O224).
     pub fn admission_allow(&mut self, id: &str) -> Result<String, StoreError> {
         // The posture first (ROADMAP O167): re-filing is a write that cannot
         // land read-only. The allow sends nothing any more — it reuses the
@@ -1368,27 +1388,67 @@ impl VaultStore {
                 )))
             }
         }
-        // Straight to the write path, NOT through `upsert`: the content
-        // still trips the screen (that is why it was here), and the
-        // human ruling IS the override — re-screening would trap every
-        // allowed drawer forever.
+        let (embedding, is_new) =
+            self.under_destruction_lock(|s, snap| s.allow_in(snap, id, &d, &restored, expected))?;
+        // The re-filed drawer's derived rows and RAM caches, after the COMMIT
+        // and the anchor — as `write_drawer` has always done them.
+        self.post_write(&restored, embedding, is_new);
+        Ok(restored_id)
+    }
+
+    /// `admission_allow`'s body inside its write lock (ROADMAP O260): the
+    /// decision again, the re-filed write, the ruling and the queue row's
+    /// removal — and nothing else, so a source gate reads exactly what runs
+    /// under the lock while the door above it may grow (O228's ruling puts the
+    /// label guard there, outside the lock). Returns the vector it re-filed
+    /// with and whether the destination was new, for `post_write` after the
+    /// COMMIT.
+    fn allow_in(
+        &self,
+        snap: &crate::chain::Snapshot<'_>,
+        id: &str,
+        judged: &Drawer,
+        restored: &Drawer,
+        expected: Expected,
+    ) -> Result<AllowedIn, StoreError> {
+        // The decision again, where nothing can commit between it and the
+        // effect. A deny that committed since the door leaves `NotFound`; a
+        // row that changed — another text on a vacated id, a convergence that
+        // moved its declaration — refuses rather than re-file what the door
+        // judged over a row holding something else.
+        let now = self.quarantined(id)?;
+        if &now != judged {
+            return Err(StoreError::Invalid(format!(
+                "{id} changed while this allow ran (another writer replaced its text \
+                 or its declaration) — nothing was written; read it again and rule again"
+            )));
+        }
         // The quarantined row's own stored vector (ROADMAP O167). Its content
-        // is byte-identical to `restored`'s — only metadata and id moved — so
+        // is byte-identical to `restored`'s — only metadata and id move — so
         // asking the embedder again sent the drawer to a served endpoint for a
         // vector the vault already held, and on an external vault replaced the
         // caller's vector with `ExternalEmbedder`'s zero vector.
         let embedding = self.stored_embedding(id)?;
-        // The human ruling IS the override — stated, not implied.
-        self.write_drawer(
-            &restored,
-            embedding,
+        // Straight to the write statements, NOT through `upsert`: the content
+        // still trips the screen (that is why it was here), and the human
+        // ruling IS the override — re-screening would trap every allowed
+        // drawer forever. Stated, not implied; the boundary checks the
+        // expectation it carries inside this transaction (O224).
+        let is_new = self.write_drawer_in(
+            snap,
+            restored,
+            &embedding,
             crate::Screen::Bypass(crate::BypassReason::OperatorRuling(expected)),
         )?;
-        self.admission_ruling(id, "allowed", Some(&restored_id))?;
-        // `Ruled`: the verdict is already in the chain one line above, which
-        // is exactly what the plain delete path refuses to proceed without.
-        self.delete_drawer_ruled(id, crate::manage::PendingEvidence::Ruled)?;
-        Ok(restored_id)
+        self.admission_ruling_in(snap.conn(), id, "allowed", Some(&restored.id))?;
+        // The queue row, by the one destruction body, its verdict appended one
+        // statement above in this same lock — which is the `Ruled` the fence
+        // is told.
+        let fenced = self.fence(snap, id, crate::manage::PendingEvidence::Ruled)?;
+        let tables = crate::manage::DerivedTables::read(self)?;
+        let gone = self.destroy_in(snap, &tables, fenced)?;
+        self.settle_derived(snap, &tables, std::slice::from_ref(&gone))?;
+        Ok(((embedding, is_new), vec![gone]))
     }
 
     /// Deny a quarantined drawer: the ruling is recorded, then the content
@@ -1440,7 +1500,13 @@ impl VaultStore {
         id: &str,
         verdict: &str,
     ) -> Result<(), StoreError> {
-        self.admission_ruling(id, verdict, None)
+        {
+            let lock = crate::WriteLock::begin(&self.conn)?;
+            self.admission_ruling_in(&self.conn, id, verdict, None)?;
+            lock.commit()?;
+        }
+        self.anchor()?;
+        Ok(())
     }
 
     /// Fetch + verify a drawer and require it to be quarantine-resident.
@@ -1456,28 +1522,14 @@ impl VaultStore {
         Ok(d)
     }
 
-    /// One chain-audited ruling record. The verdict (and the re-filed id,
-    /// when allowing) is inside the tag's canonical, so a review trail
-    /// cannot be rewritten offline without failing the chain.
-    fn admission_ruling(
-        &mut self,
-        id: &str,
-        verdict: &str,
-        restored_id: Option<&str>,
-    ) -> Result<(), StoreError> {
-        {
-            let lock = crate::WriteLock::begin(&self.conn)?;
-            self.admission_ruling_in(&self.conn, id, verdict, restored_id)?;
-            lock.commit()?;
-        }
-        self.anchor()?;
-        Ok(())
-    }
-
-    /// The ruling record's statement, on a connection already inside the
-    /// caller's transaction — `admission_deny` appends it inside its
-    /// destruction's write lock (ROADMAP O255). It neither commits nor
-    /// anchors.
+    /// One chain-audited ruling record, on a connection already inside the
+    /// caller's transaction. The verdict (and the re-filed id, when allowing)
+    /// is inside the tag's canonical, so a review trail cannot be rewritten
+    /// offline without failing the chain. Both rulings append it inside the
+    /// write lock that carries out their effect — `admission_deny` since
+    /// ROADMAP O255, `admission_allow` since O260 — so a ruling never commits
+    /// without its effect, nor an effect without its ruling. It neither
+    /// commits nor anchors.
     pub(crate) fn admission_ruling_in(
         &self,
         conn: &rusqlite::Connection,

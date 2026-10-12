@@ -2598,11 +2598,11 @@ mod tests {
                     proven_by: "dedup_records_its_advisor_consultations_in_both_modes",
                 },
             ),
-            (
-                "admission_allow",
-                "write_drawer(",
-                SendsNothing("`Bypass(OperatorRuling)` consults no advisor, and the vector is the quarantined row's stored one"),
-            ),
+            // `admission_allow` left this table with ROADMAP O260: its write
+            // runs inside its lock through `write_drawer_in`, which refuses
+            // every screen (an advisor call must never run under the write
+            // lock) and so is no custody door; the vector is the quarantined
+            // row's stored one.
             (
                 "migrate_embedding_space",
                 "embedder_embed(",

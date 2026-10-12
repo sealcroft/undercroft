@@ -29,16 +29,36 @@
 //! declared on an installation keyed by `master.key` wrote a fresh `kdf.salt`,
 //! derived a key no vault was sealed under, and the first unlock reported
 //! tampering; `vault create` under that key then split the installation.
+//!
+//! **A command derives a passphrase's key once** (ROADMAP O211), through a
+//! [`KeyCache`] its process holds, across the opens a [`KeyHold`] spans. The
+//! survey and the classification still run on every open, and the salt is
+//! still read from disk on every open; only the Argon2id output is kept,
+//! against a digest of the passphrase and the salt bytes that produced it,
+//! because it is a pure function of exactly those two.
+//!
+//! **And a key file's name never holds fewer bytes than were written**
+//! (ROADMAP O210). [`publish_new_secret`] writes the bytes to a temp file
+//! named with a random nonce, fsyncs it, and only then gives it the final
+//! name by a hard link, which fails if that name exists; a crash before the
+//! link leaves no key file at all, so the next start creates a whole one. It
+//! is also how `bundle keygen` and `bundle sign-keygen` write an identity
+//! (ROADMAP O321).
 
 use crate::Access;
 use argon2::{Algorithm, Argon2, Params, Version};
 use hkdf::Hkdf;
 use rand::RngCore;
+use sha2::Digest;
 use sha2::Sha256;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::Path;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
+use subtle::ConstantTimeEq;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 /// The installation's random master key — the key source when no passphrase is
 /// declared.
@@ -61,9 +81,17 @@ pub enum KeyError {
     #[error("io error: {0}")]
     Io(#[from] io::Error),
     /// `master.key` is not exactly `KEY_LEN` bytes, or, under a passphrase,
-    /// `kdf.salt` is not exactly `SALT_LEN` bytes.
-    #[error("master key material is corrupt (expected a {KEY_LEN}-byte master.key or a {SALT_LEN}-byte kdf.salt)")]
-    CorruptKeyFile,
+    /// `kdf.salt` is not exactly `SALT_LEN` bytes. The refusal names the file
+    /// and its length (ROADMAP O210): a torn key file is never rewritten.
+    #[error("{}", corrupt_key_file_message(.file, .len, .references))]
+    CorruptKeyFile {
+        /// The key file that is the wrong length.
+        file: &'static str,
+        /// Its length in bytes.
+        len: usize,
+        /// Entries under `vaults/` and `backups/` — what may refer to a key.
+        references: usize,
+    },
     /// Argon2id refused; the message is the library's.
     #[error("argon2 failure: {0}")]
     Kdf(String),
@@ -189,6 +217,34 @@ fn material_missing_message(declared: &KeySource, references: &usize) -> String 
     )
 }
 
+/// The refusal for a key file of the wrong length (ROADMAP O210). It names
+/// the file and both lengths, says what leaves such a file, and — like
+/// O204's refusals — never advises deleting it: whether anything refers to
+/// the key is stated, and the operator decides.
+fn corrupt_key_file_message(file: &str, len: &usize, references: &usize) -> String {
+    let expected = if file == KDF_SALT_FILE {
+        SALT_LEN
+    } else {
+        KEY_LEN
+    };
+    let refers = if *references == 0 {
+        "No vault or backup here refers to a key yet.".to_string()
+    } else {
+        format!(
+            "{references} vault or backup entr{} here refer{} to the master key: restore {file} \
+             from a copy of this data directory.",
+            if *references == 1 { "y" } else { "ies" },
+            if *references == 1 { "s" } else { "" },
+        )
+    };
+    format!(
+        "{file} is {len} bytes where {expected} are expected, so no key can be loaded from it \
+         and nothing was written. A crash while a release before 1.7.0 created it leaves a file \
+         like this, and so does truncation; it is never rewritten in place. {refers} (ROADMAP \
+         O210)"
+    )
+}
+
 /// The warning every manager open prints while BOTH key files are present.
 ///
 /// Exactly one of them keys any given vault; an earlier release wrote the
@@ -287,7 +343,9 @@ pub enum KeyPlan {
 
 /// Proof that [`plan`] classified an installation as fresh under a writable
 /// posture. Its field is private, so nothing outside this module can make
-/// one, and the one function that writes key material takes it.
+/// one, and the one function that writes key material takes it — the
+/// publisher beneath it is private too, and its only other door,
+/// [`write_new_identity`], writes an identity (ROADMAP O210, O321).
 #[derive(Debug)]
 pub struct CreateWitness {
     source: KeySource,
@@ -333,25 +391,195 @@ pub struct MasterKey {
     pub both_present: bool,
 }
 
+/// The master key a process derived from its passphrase, held so the process
+/// derives it ONCE (ROADMAP O211).
+///
+/// Argon2id is 64 MiB and three passes by design, and every manager open ran
+/// it: `vault list` once for the list and once per vault it described,
+/// `vault rotate` and a `serve-http` start twice. Nothing the derivation
+/// produces changes between those opens — the master key is never rotated
+/// (a rotation moves a vault's salt), and Argon2id is a pure function of the
+/// passphrase and the salt — so the second run bought nothing.
+///
+/// **What is cached is the derivation, never the decision.** [`plan`] still
+/// classifies the installation on every open, and `kdf.salt` is still read on
+/// every open; a held key answers only when BOTH inputs equal the ones it was
+/// derived from — the salt bytes, and a SHA-256 digest of the passphrase,
+/// compared in constant time over fixed lengths, so the comparison says nothing
+/// about the passphrase's length and the cache never keeps the passphrase
+/// itself. A deleted salt is still refused, a replaced one derives again, and
+/// a different passphrase never meets another passphrase's key. The key-file
+/// source never reaches this: `master.key` is read on every open, as before.
+///
+/// **A key is kept only while a [`KeyHold`] is alive.** An open with no hold
+/// derives, hands the key out and keeps nothing, so a command that opens once
+/// — `serve-mcp`, `mine`, `refine` — holds the master key exactly as long as
+/// its manager does, as before this cache existed. A command that opens more
+/// than once takes a hold across those opens, and the last hold to drop
+/// zeroizes the key. Forgetting a hold costs a derivation; it never keeps a
+/// key.
+///
+/// One entry, because one installation has one salt; a second (passphrase,
+/// salt) replaces the first. The held key is a [`SecretKey`], zeroized when it
+/// is replaced, when the last hold drops, or when [`forget`](Self::forget)
+/// drops it, and never written anywhere. `Debug` prints the count and nothing
+/// else.
+pub struct KeyCache {
+    slot: Mutex<Option<Derived>>,
+    runs: AtomicU64,
+    holds: AtomicUsize,
+}
+
+/// One derivation: both of its inputs and its output.
+struct Derived {
+    passphrase_digest: Zeroizing<[u8; 32]>,
+    salt: [u8; SALT_LEN],
+    key: SecretKey,
+}
+
+/// Keeps a [`KeyCache`]'s derived key across the opens made while it lives
+/// (ROADMAP O211). Holds nest; the last one dropped zeroizes the key.
+#[must_use = "a hold that is dropped at once keeps nothing"]
+pub struct KeyHold<'a> {
+    cache: &'a KeyCache,
+}
+
+impl Drop for KeyHold<'_> {
+    fn drop(&mut self) {
+        // The decrement comes before the slot's lock, and `derive` stores
+        // only while it sees a hold under that same lock, so a key stored by
+        // an open racing this drop is cleared here rather than left behind.
+        if self.cache.holds.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.cache.forget();
+        }
+    }
+}
+
+impl KeyCache {
+    /// An empty cache. `const`, so a binary can hold its one cache in a
+    /// `static` — the process is the scope this cache is for.
+    pub const fn new() -> Self {
+        Self {
+            slot: Mutex::new(None),
+            runs: AtomicU64::new(0),
+            holds: AtomicUsize::new(0),
+        }
+    }
+
+    /// Keep the derived key across every open until the hold drops.
+    pub fn hold(&self) -> KeyHold<'_> {
+        self.holds.fetch_add(1, Ordering::AcqRel);
+        KeyHold { cache: self }
+    }
+
+    /// How many times Argon2id has run through this cache.
+    pub fn derivations(&self) -> u64 {
+        self.runs.load(Ordering::Relaxed)
+    }
+
+    /// Whether a derived key is held right now.
+    pub fn is_holding(&self) -> bool {
+        self.slot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+
+    /// Drop the held key (zeroized) and its inputs. The next passphrase open
+    /// derives again.
+    pub fn forget(&self) {
+        *self.slot.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    /// The master key for this passphrase and salt: the held one when both
+    /// match, a fresh derivation otherwise, kept only while a hold is alive.
+    /// The lock is held across the derivation, so two callers racing on a
+    /// cold cache under one hold run Argon2id once.
+    fn derive(&self, passphrase: &str, salt: &[u8; SALT_LEN]) -> Result<SecretKey, KeyError> {
+        let mut digest = Zeroizing::new([0u8; 32]);
+        digest.copy_from_slice(&Sha256::digest(passphrase.as_bytes()));
+        // A poisoned lock only means a holder panicked; the slot is replaced
+        // whole or not at all, so what it holds is either a complete
+        // derivation or nothing.
+        let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(held) = slot.as_ref() {
+            // Both comparisons run over fixed lengths: a 16-byte salt and a
+            // 32-byte digest.
+            let same_salt: bool = held.salt[..].ct_eq(&salt[..]).into();
+            let same_passphrase: bool = held.passphrase_digest[..].ct_eq(&digest[..]).into();
+            if same_salt && same_passphrase {
+                return Ok(held.key.duplicate());
+            }
+        }
+        self.runs.fetch_add(1, Ordering::Relaxed);
+        let key = derive_from_passphrase(passphrase, salt)?;
+        *slot = if self.holds.load(Ordering::Acquire) > 0 {
+            Some(Derived {
+                passphrase_digest: digest,
+                salt: *salt,
+                key: key.duplicate(),
+            })
+        } else {
+            None
+        };
+        Ok(key)
+    }
+}
+
+impl Default for KeyCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for KeyCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyCache")
+            .field("derivations", &self.derivations())
+            .field("holds", &self.holds.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
 /// Resolve the installation master key: survey, classify, then load or create.
 ///
 /// With a passphrase the key is Argon2id (64 MiB, t=3, p=1) over the
 /// passphrase and the palace-level salt in `<root>/kdf.salt`, and the secret never
 /// touches disk; otherwise it is the random key in `<root>/master.key`. A
-/// created file is owner-only on Unix (not narrowed on Windows). Argon2id
-/// runs only after the classifier has accepted the installation.
+/// created file is written through [`publish_new_secret`]: owner-only on Unix
+/// from its open (not narrowed on Windows), and never visible under its name
+/// holding fewer bytes than were written (ROADMAP O210). Argon2id runs only
+/// after the classifier has accepted the installation.
+///
+/// Derives on every call. A process that opens more than once holds a
+/// [`KeyCache`] and calls [`master_key_cached`] (ROADMAP O211).
 pub fn master_key(
     root: &Path,
     passphrase: Option<&str>,
     access: Access,
 ) -> Result<MasterKey, KeyError> {
+    master_key_cached(root, passphrase, access, &KeyCache::new())
+}
+
+/// [`master_key`], deriving a passphrase's key through `cache` (ROADMAP
+/// O211). The survey, the classification and the read of the declared
+/// source's file run on every call exactly as they do uncached; only
+/// Argon2id is skipped, and only when a [`KeyHold`] on `cache` kept a key
+/// whose passphrase and salt are the ones just declared and read.
+pub fn master_key_cached(
+    root: &Path,
+    passphrase: Option<&str>,
+    access: Access,
+    cache: &KeyCache,
+) -> Result<MasterKey, KeyError> {
     let declared = KeySource::declared(passphrase);
     let mut retried = false;
     loop {
-        match plan(declared, &survey(root)?, access)? {
+        let surveyed = survey(root)?;
+        match plan(declared, &surveyed, access)? {
             KeyPlan::Load { other_present } => {
                 return Ok(MasterKey {
-                    key: Some(load_master(root, passphrase)?),
+                    key: Some(load_master(root, passphrase, cache, surveyed.references)?),
                     both_present: other_present,
                 })
             }
@@ -361,10 +589,10 @@ pub fn master_key(
                     both_present: false,
                 })
             }
-            KeyPlan::Create(witness) => match create_master(root, passphrase, witness) {
-                // A concurrent first start created the file between our stat
-                // and our exclusive create: classify again and load what it
-                // wrote, never overwrite it.
+            KeyPlan::Create(witness) => match create_master(root, passphrase, witness, cache) {
+                // A concurrent first start published the file between our
+                // stat and our publish, which refuses an existing name: classify
+                // again and load what it wrote, never overwrite it.
                 Err(KeyError::Io(e)) if e.kind() == io::ErrorKind::AlreadyExists && !retried => {
                     retried = true;
                 }
@@ -380,22 +608,37 @@ pub fn master_key(
 }
 
 /// Read the declared source's material and derive the master key. Never
-/// writes.
-fn load_master(root: &Path, passphrase: Option<&str>) -> Result<SecretKey, KeyError> {
+/// writes. The salt is read on every call, cached or not: it is half of what
+/// the cache compares. `references` only words the refusal of a torn file.
+fn load_master(
+    root: &Path,
+    passphrase: Option<&str>,
+    cache: &KeyCache,
+    references: usize,
+) -> Result<SecretKey, KeyError> {
     match passphrase {
         Some(pw) => {
             let salt = fs::read(root.join(KDF_SALT_FILE))?;
-            if salt.len() != SALT_LEN {
-                return Err(KeyError::CorruptKeyFile);
-            }
-            derive_from_passphrase(pw, &salt)
+            let salt: [u8; SALT_LEN] =
+                salt.as_slice()
+                    .try_into()
+                    .map_err(|_| KeyError::CorruptKeyFile {
+                        file: KDF_SALT_FILE,
+                        len: salt.len(),
+                        references,
+                    })?;
+            cache.derive(pw, &salt)
         }
         None => {
             let raw = fs::read(root.join(MASTER_KEY_FILE))?;
-            let arr: [u8; KEY_LEN] = raw
-                .as_slice()
-                .try_into()
-                .map_err(|_| KeyError::CorruptKeyFile)?;
+            let arr: [u8; KEY_LEN] =
+                raw.as_slice()
+                    .try_into()
+                    .map_err(|_| KeyError::CorruptKeyFile {
+                        file: MASTER_KEY_FILE,
+                        len: raw.len(),
+                        references,
+                    })?;
             Ok(SecretKey(arr))
         }
     }
@@ -411,6 +654,7 @@ fn create_master(
     root: &Path,
     passphrase: Option<&str>,
     witness: CreateWitness,
+    cache: &KeyCache,
 ) -> Result<SecretKey, KeyError> {
     if witness.source != KeySource::declared(passphrase) {
         return Err(KeyError::Io(io::Error::other(
@@ -422,18 +666,20 @@ fn create_master(
         Some(pw) => {
             let mut salt = [0u8; SALT_LEN];
             rand::thread_rng().fill_bytes(&mut salt);
-            write_new_private(&root.join(KDF_SALT_FILE), &salt)?;
-            derive_from_passphrase(pw, &salt)
+            publish_new_secret(&root.join(KDF_SALT_FILE), &salt)?;
+            cache.derive(pw, &salt)
         }
         None => {
             let mut key = [0u8; KEY_LEN];
             rand::thread_rng().fill_bytes(&mut key);
-            write_new_private(&root.join(MASTER_KEY_FILE), &key)?;
+            publish_new_secret(&root.join(MASTER_KEY_FILE), &key)?;
             Ok(SecretKey(key))
         }
     }
 }
 
+/// Argon2id itself. Reached only through [`KeyCache::derive`], so every run is
+/// counted.
 fn derive_from_passphrase(pw: &str, salt: &[u8]) -> Result<SecretKey, KeyError> {
     let params =
         Params::new(64 * 1024, 3, 1, Some(KEY_LEN)).map_err(|e| KeyError::Kdf(e.to_string()))?;
@@ -453,6 +699,13 @@ impl SecretKey {
     /// The raw key bytes. Never logged and never `Debug`-printed.
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.0
+    }
+
+    /// A second owned copy, itself zeroized on drop. Crate-private and never
+    /// `Clone`: a copy is made only where a holder must keep one and hand one
+    /// out (the [`KeyCache`]).
+    pub(crate) fn duplicate(&self) -> SecretKey {
+        SecretKey(self.0)
     }
 }
 
@@ -484,32 +737,360 @@ pub fn new_vault_salt() -> [u8; SALT_LEN] {
     salt
 }
 
-/// Write a NEW key file: exclusive create, so an entry that appeared after
-/// the survey — a concurrent first start, a planted symlink — fails with
-/// `AlreadyExists` instead of being truncated or followed; owner-only from
-/// the moment it exists on Unix, never narrowed after the bytes land.
+/// How a secret file got its final name (ROADMAP O210).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Published {
+    /// A whole, fsynced temp file was hard-linked to the final name, so the
+    /// name never held fewer bytes than were written.
+    Linked,
+    /// The filesystem has no hard links, so the final name was created
+    /// exclusively and written in place — O204's writer, kept as the
+    /// fallback until O412 is ruled. A crash inside that write leaves
+    /// a torn file, which the next load refuses by name; a warning says so
+    /// when this happens.
+    InPlace,
+}
+
+/// The infix a secret's temp name carries between the final name and the
+/// nonce — the manifest writer's (`lib.rs`), so one shape names both.
+const SECRET_TEMP_INFIX: &str = ".tmp.";
+
+/// Write a bundle identity NEW at `path` — the door `bundle keygen` and
+/// `bundle sign-keygen` use (ROADMAP O321). It is the master key's publisher
+/// (O210) without the classifier's witness, because an identity refers to
+/// no installation and its path is the operator's: it refuses an existing
+/// entry and nothing else, as `write_identity` never did either. The
+/// installation's own key material is written by [`master_key`] alone,
+/// through the private writer that takes [`plan`]'s witness (O204).
+pub fn write_new_identity(path: &Path, data: &[u8]) -> io::Result<Published> {
+    publish_new_secret(path, data)
+}
+
+/// Write `data` as a NEW secret file at `path`, and never anything else there
+/// (ROADMAP O210, O321). Private: its doors are the witness-taking key
+/// writer and [`write_new_identity`].
 ///
-/// Key material is written once and is unrecoverable if lost, so the file
-/// and its directory entry are fsynced before this returns. A crash between
-/// the create and the write still leaves a short file — ROADMAP O210.
-fn write_new_private(path: &Path, data: &[u8]) -> io::Result<()> {
+/// - **An existing entry is refused before a byte is written**, a link
+///   included, dangling or not: `symlink_metadata`, then the publish below,
+///   which refuses it again if it appeared since. `AlreadyExists` either way.
+/// - **Owner-only from the open** on Unix (`0600`, masked by the umask, so
+///   never wider), never narrowed after the bytes exist; Windows has no mode
+///   to set here, as for every key file.
+/// - **The name never holds fewer bytes than were written**: the bytes go to
+///   `<name>.tmp.<32 hex digits>` in the same directory — created with
+///   `create_new`, so a planted link at it is refused rather than followed —
+///   which is fsynced and only then hard-linked to `path`. `link` fails if
+///   `path` exists, so a concurrent writer's secret is never replaced and a
+///   link planted there is never followed. The directory is fsynced, so the
+///   name is durable before its temp twin is removed, and synced again. A
+///   crash before the link leaves no file at `path`; after it, a whole one.
+///   The temp name is 37 bytes longer than `path`'s, so a file name longer
+///   than 218 bytes (on a 255-byte limit) is refused naming the temp.
+/// - **Where the filesystem has no hard links** — and only there: the link
+///   error must read as "unsupported" ([`links_unsupported`]) — it falls back
+///   to O204's writer: `create_new` of `path` itself, mode at the open, the
+///   bytes and an fsync, and it warns. Never a rename, which replaces an
+///   existing file on Unix — a concurrent start's key, sealed under by then,
+///   among them. Which writer a linkless filesystem SHOULD get is
+///   O412's question; this one is what every release before 1.7.0
+///   used. Its residual, stated: a crash inside the in-place write leaves a
+///   torn file, which [`master_key`] refuses by name.
+/// - **Any other link error refuses**, the temp kept: a full disk or an I/O
+///   error on a filesystem that links never opens the torn-key window.
+/// - **Once a name holds bytes, nothing here removes it**, and once the temp
+///   is whole it is removed only after the secret is durable under its name
+///   or the name is another writer's: a concurrent start may already have
+///   loaded what a failing in-place write put there and sealed a vault under
+///   it (O204's race), so a failure after that point keeps both files and
+///   names both.
+///
+/// What a crash leaves besides: before the link, the temp file, holding
+/// bytes nothing was ever sealed under; after it and before the temp name is
+/// removed, a second name for the published secret, owner-only like it.
+/// Nothing sweeps either (O204: never delete key material on a guess); that
+/// nothing REPORTS them is O413.
+fn publish_new_secret(path: &Path, data: &[u8]) -> io::Result<Published> {
+    use std::io::Write;
+    let name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} names no file", path.display()),
+        )
+    })?;
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    if entry_present(path)? {
+        return Err(already_exists(path));
+    }
+    let mut nonce = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    let mut tmp_name = OsString::from(name);
+    tmp_name.push(SECRET_TEMP_INFIX);
+    tmp_name.push(hex::encode(nonce));
+    let tmp = dir.join(tmp_name);
+
+    let mut file = open_new_private(&tmp).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!(
+                "{} was not written: creating its temp file {} failed ({e})",
+                path.display(),
+                tmp.display()
+            ),
+        )
+    })?;
+    #[cfg(any(test, feature = "test-fixture"))]
     {
-        use std::io::Write;
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
+        use crate::fixture::{secret_crash, SecretCrash};
+        if let Some(crash) = secret_crash(SecretCrash::Created) {
+            return Err(crash);
         }
-        let mut f = opts.open(path)?;
-        f.write_all(data)?;
-        f.sync_all()?;
+        if let Some(crash) = secret_crash(SecretCrash::Torn) {
+            file.write_all(&data[..data.len() / 2])?;
+            return Err(crash);
+        }
     }
-    if let Some(parent) = path.parent() {
-        sync_dir(parent)?;
+    let staged = file.write_all(data).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(e) = staged {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
     }
+    #[cfg(any(test, feature = "test-fixture"))]
+    if let Some(crash) = crate::fixture::secret_crash(crate::fixture::SecretCrash::Synced) {
+        return Err(crash);
+    }
+
+    let published = match link_seam().and_then(|()| fs::hard_link(&tmp, path)) {
+        Ok(()) => {
+            #[cfg(any(test, feature = "test-fixture"))]
+            if let Some(crash) =
+                crate::fixture::secret_crash(crate::fixture::SecretCrash::Published)
+            {
+                return Err(crash);
+            }
+            Published::Linked
+        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            // Another writer's name: these bytes were never published under
+            // it nor returned, so nothing was sealed under them.
+            let _ = fs::remove_file(&tmp);
+            return Err(already_exists(path));
+        }
+        Err(link) if links_unsupported(&link) => match write_in_place(path, data) {
+            Ok(()) => {
+                undercroft_obs::diag_warn!(
+                    "{}: this filesystem has no hard links ({link}), so the file was created \
+                     in place; a crash while it was being written would have left a torn \
+                     file, which the next start refuses by name (ROADMAP O210)",
+                    path.display()
+                );
+                Published::InPlace
+            }
+            Err(InPlace::NameTaken) => {
+                let _ = fs::remove_file(&tmp);
+                return Err(already_exists(path));
+            }
+            Err(InPlace::NotCreated(e)) => {
+                return Err(kept(
+                    e,
+                    format!(
+                        "{} was not written: creating it in place failed",
+                        path.display()
+                    ),
+                    &tmp,
+                ))
+            }
+            Err(InPlace::Written(e)) => {
+                return Err(kept(
+                    e,
+                    format!(
+                        "{} was created in place and its write did not complete; it is kept, \
+                         because another start may already have loaded it",
+                        path.display()
+                    ),
+                    &tmp,
+                ))
+            }
+        },
+        Err(link) => {
+            return Err(kept(
+                link,
+                format!(
+                    "{} was not written: the hard link that publishes it failed with an error \
+                     that does not mean this filesystem lacks links",
+                    path.display()
+                ),
+                &tmp,
+            ))
+        }
+    };
+    // The name is durable BEFORE its temp twin goes, so no ordering of the
+    // two directory updates on a power loss can lose both.
+    sync_dir(dir).map_err(|e| {
+        kept(
+            e,
+            format!(
+                "{} was written and the directory sync after it failed",
+                path.display()
+            ),
+            &tmp,
+        )
+    })?;
+    if let Err(e) = fs::remove_file(&tmp) {
+        undercroft_obs::diag_warn!(
+            "{} was written, and its temp name {} could not be removed ({e}); it holds the \
+             same secret, owner-only like it (ROADMAP O210)",
+            path.display(),
+            tmp.display()
+        );
+    }
+    // Best effort: a removal this sync does not make durable leaves the temp
+    // behind after a power loss, a leftover O413 names; the secret
+    // is durable under its name either way.
+    let _ = sync_dir(dir);
+    Ok(published)
+}
+
+/// A failure after the temp file holds the whole secret: the temp is KEPT
+/// and the error names it, beside the name that was being published.
+fn kept(e: io::Error, what: String, tmp: &Path) -> io::Error {
+    io::Error::new(
+        e.kind(),
+        format!(
+            "{what} ({e}); the whole secret is kept at {}, which nothing removes (ROADMAP O210)",
+            tmp.display()
+        ),
+    )
+}
+
+/// Whether a hard link failed because the filesystem has none (ROADMAP O210)
+/// — the only failure the in-place fallback answers. Measured on Linux 6.6:
+/// `EPERM` on vfat, the code the kernel's VFS returns for every filesystem
+/// without a link operation (its exFAT driver among them), and `ENOSYS` on a
+/// FUSE exFAT; an SMB3 mount of Samba links. `EOPNOTSUPP` is what BSD and
+/// macOS document for a filesystem without links. Windows'
+/// `ERROR_INVALID_FUNCTION` and `ERROR_NOT_SUPPORTED` are unmeasured. `EPERM`
+/// is read as unsupported because the source is a regular file this process
+/// created and owns a moment before, in the same directory.
+fn links_unsupported(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::Unsupported
+        || e.raw_os_error()
+            .is_some_and(|code| LINKS_UNSUPPORTED.contains(&code))
+}
+
+/// `EPERM`, `ENOSYS`, `EOPNOTSUPP`.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const LINKS_UNSUPPORTED: &[i32] = &[1, 38, 95];
+/// `EPERM`, `ENOTSUP`, `ENOSYS`, `EOPNOTSUPP`.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const LINKS_UNSUPPORTED: &[i32] = &[1, 45, 78, 102];
+/// `EPERM`, `EOPNOTSUPP`, `ENOSYS`.
+#[cfg(any(
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+const LINKS_UNSUPPORTED: &[i32] = &[1, 45, 78];
+/// `ERROR_INVALID_FUNCTION`, `ERROR_NOT_SUPPORTED`.
+#[cfg(windows)]
+const LINKS_UNSUPPORTED: &[i32] = &[1, 50];
+/// Nothing classified: every link error refuses.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    windows
+)))]
+const LINKS_UNSUPPORTED: &[i32] = &[];
+
+/// How the in-place fallback failed — which decides what is kept.
+enum InPlace {
+    /// The name exists: another writer's.
+    NameTaken,
+    /// Nothing was created at the name.
+    NotCreated(io::Error),
+    /// The name was created and its write or fsync failed: it may hold bytes
+    /// a concurrent start has loaded, so it stays.
+    Written(io::Error),
+}
+
+/// The fallback publish (ROADMAP O210): O204's exclusive in-place writer. It
+/// removes nothing — O204's writer never did, and a name it created may
+/// already have been loaded.
+fn write_in_place(path: &Path, data: &[u8]) -> Result<(), InPlace> {
+    use std::io::Write;
+    let mut file = open_new_private(path).map_err(|e| match e.kind() {
+        io::ErrorKind::AlreadyExists => InPlace::NameTaken,
+        _ => InPlace::NotCreated(e),
+    })?;
+    #[cfg(any(test, feature = "test-fixture"))]
+    if let Some(crash) = crate::fixture::secret_crash(crate::fixture::SecretCrash::InPlaceTorn) {
+        file.write_all(&data[..data.len() / 2])
+            .map_err(InPlace::Written)?;
+        return Err(InPlace::Written(crash));
+    }
+    file.write_all(data)
+        .and_then(|()| in_place_sync_seam())
+        .and_then(|()| file.sync_all())
+        .map_err(InPlace::Written)
+}
+
+/// The fixture seams: before the hard link, an armed `SecretLink` fails it as
+/// a filesystem without hard links does and `SecretLinkIo` as an ordinary
+/// I/O error; before the in-place fsync, `SecretInPlaceSync` fails that
+/// fsync. Nothing in production.
+#[cfg(any(test, feature = "test-fixture"))]
+fn link_seam() -> io::Result<()> {
+    use crate::fixture::{fire, Fault};
+    fire(Fault::SecretLink)
+        .map_err(|e| io::Error::new(io::ErrorKind::Unsupported, e.to_string()))?;
+    fire(Fault::SecretLinkIo)
+}
+
+#[cfg(not(any(test, feature = "test-fixture")))]
+fn link_seam() -> io::Result<()> {
     Ok(())
+}
+
+#[cfg(any(test, feature = "test-fixture"))]
+fn in_place_sync_seam() -> io::Result<()> {
+    crate::fixture::fire(crate::fixture::Fault::SecretInPlaceSync)
+}
+
+#[cfg(not(any(test, feature = "test-fixture")))]
+fn in_place_sync_seam() -> io::Result<()> {
+    Ok(())
+}
+
+/// `create_new`, owner-only from the open on Unix.
+fn open_new_private(path: &Path) -> io::Result<fs::File> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
+fn already_exists(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "{} already exists (a link counts, followed or not); nothing was written",
+            path.display()
+        ),
+    )
 }
 
 /// fsync a directory so a just-created or just-renamed entry inside it
@@ -812,7 +1393,7 @@ mod tests {
         let witness = CreateWitness {
             source: KeySource::KeyFile,
         };
-        let err = create_master(dir.path(), None, witness)
+        let err = create_master(dir.path(), None, witness, &KeyCache::new())
             .expect_err("create_new must refuse an existing file");
         assert!(
             matches!(&err, KeyError::Io(e) if e.kind() == io::ErrorKind::AlreadyExists),
@@ -823,7 +1404,7 @@ mod tests {
         let witness = CreateWitness {
             source: KeySource::Passphrase,
         };
-        assert!(create_master(dir.path(), None, witness).is_err());
+        assert!(create_master(dir.path(), None, witness, &KeyCache::new()).is_err());
         assert!(!dir.path().join(KDF_SALT_FILE).exists());
     }
 
@@ -871,6 +1452,21 @@ mod tests {
         assert!(msgs[0].contains("If it was set up WITH one"), "{}", msgs[0]);
         assert!(msgs[0].contains("nothing was written"), "{}", msgs[0]);
         assert!(msgs[2].contains("none was created"), "{}", msgs[2]);
+        // ROADMAP O210: a torn key file is refused by name, the same way.
+        for (file, len, references) in [(MASTER_KEY_FILE, 0, 0), (KDF_SALT_FILE, 9, 3)] {
+            let m = KeyError::CorruptKeyFile {
+                file,
+                len,
+                references,
+            }
+            .to_string();
+            assert!(m.contains("O210") && m.contains(file), "{m}");
+            assert!(m.contains("nothing was written"), "{m}");
+            assert!(
+                !m.to_lowercase().contains("delete") && !m.contains("remove"),
+                "never advise deleting key material: {m}"
+            );
+        }
     }
 
     /// The one writer stays one (ROADMAP O204): a source count over this
@@ -883,11 +1479,35 @@ mod tests {
             .expect("premise: the test module marker");
         let body = &src[..end];
         let count = |needle: &str| body.matches(needle).count();
+        // ROADMAP O210: the one publisher, PRIVATE, called by the key
+        // writer's two arms and the identity door (whose one caller, the
+        // CLI's `write_identity`, is gated there).
         assert_eq!(
-            count(concat!("write_new_", "private(")),
-            3,
-            "definition + two calls"
+            count(concat!("publish_new_", "secret(")),
+            4,
+            "definition + two key-writer calls + the identity door"
         );
+        assert_eq!(
+            count(concat!("pub fn publish_new_", "secret")),
+            0,
+            "the publisher takes no witness, so it stays private"
+        );
+        assert_eq!(
+            count(concat!("write_new_", "identity(")),
+            1,
+            "the identity door: its definition, and no caller in this file"
+        );
+        // A name the fallback created may already have been loaded, so it
+        // removes nothing (the review of O210's first build).
+        let in_place = &body[body
+            .find(concat!("fn write_", "in_place("))
+            .expect("premise: the fallback")..];
+        let in_place = &in_place[..in_place.find("\n}\n").expect("premise: it closes")];
+        assert!(
+            !in_place.contains(concat!("remove_", "file(")),
+            "the fallback removes nothing"
+        );
+        assert_eq!(count(concat!("write_new_", "private(")), 0, "retired");
         assert_eq!(
             count(concat!("create_", "master(")),
             2,
@@ -905,5 +1525,670 @@ mod tests {
             "no truncating create"
         );
         assert_eq!(count(concat!("fs::", "write(")), 0);
+        // ROADMAP O211: Argon2id has one caller, the cache, so every run is
+        // counted and none can go around the held key.
+        assert_eq!(
+            count(concat!("derive_from_", "passphrase(")),
+            2,
+            "definition + the cache's one call"
+        );
+        assert_eq!(
+            count(concat!("cache.", "derive(")),
+            2,
+            "the load and the create, both through the cache"
+        );
+        // Every file it creates is `create_new` with the mode at the open:
+        // the temp, and the in-place fallback's final name.
+        assert_eq!(
+            count(concat!("open_new_", "private(")),
+            3,
+            "definition + the temp + the fallback"
+        );
+        assert_eq!(count(concat!(".create_", "new(true)")), 1, "one open");
+        assert_eq!(count(concat!("fs::hard_", "link(")), 1, "one publish");
+        assert_eq!(
+            count(concat!("fs::", "rename(")),
+            0,
+            "a rename replaces an existing secret"
+        );
+        assert_eq!(
+            count(concat!("set_", "permissions(")),
+            0,
+            "no mode narrowed after the bytes exist"
+        );
+    }
+
+    /// The temp files a publish of `file` left in `dir`: exactly the
+    /// `<file>.tmp.<32 lowercase hex>` shape.
+    fn temps_of(dir: &Path, file: &str) -> Vec<std::path::PathBuf> {
+        let prefix = format!("{file}{SECRET_TEMP_INFIX}");
+        let mut found: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap())
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .and_then(|n| n.strip_prefix(&prefix))
+                    .is_some_and(|nonce| {
+                        nonce.len() == 32
+                            && nonce
+                                .bytes()
+                                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+                    })
+            })
+            .map(|e| e.path())
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// **ROADMAP O210's gate.** A process killed at each step of a key-file
+    /// write, then started again: the next start loads a WHOLE key, and a
+    /// short file is never published under the key's name. Each step is
+    /// asserted REACHED — the temp file holds exactly the bytes that step
+    /// leaves — so the crash cannot have fired somewhere else. The writer
+    /// before O210 created `master.key` itself, so a crash after its create
+    /// left a short `master.key` and every later start refused
+    /// `CorruptKeyFile`.
+    #[test]
+    fn o210_a_crash_inside_a_key_write_never_publishes_a_short_key() {
+        use crate::fixture::{crash_secret_write_at, SecretCrash};
+        for pw in [None, Some("correct horse")] {
+            let file = KeySource::declared(pw).file();
+            let whole = if pw.is_some() { SALT_LEN } else { KEY_LEN };
+            for (step, temp_len) in [
+                (SecretCrash::Created, 0),
+                (SecretCrash::Torn, whole / 2),
+                (SecretCrash::Synced, whole),
+                (SecretCrash::Published, whole),
+            ] {
+                let dir = tempdir().unwrap();
+                let at = dir.path().join(file);
+                crash_secret_write_at(step);
+                let err = master_key(dir.path(), pw, Access::ReadWrite)
+                    .err()
+                    .expect("the armed crash fires");
+                assert!(err.to_string().contains(&format!("{step:?}")), "{err}");
+                // The property: the key's NAME never holds a short file —
+                // absent before the link, whole after it.
+                match fs::read(&at) {
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Ok(bytes) => assert_eq!(bytes.len(), whole, "{file} {step:?}: short"),
+                    Err(e) => panic!("{e}"),
+                }
+                let temps = temps_of(dir.path(), file);
+                assert_eq!(temps.len(), 1, "{file} {step:?}: one temp file");
+                let temp = fs::read(&temps[0]).unwrap();
+                assert_eq!(temp.len(), temp_len, "{file} {step:?}: REACHED");
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = fs::metadata(&temps[0]).unwrap().permissions().mode();
+                    assert_eq!(mode & 0o777, 0o600, "{file} {step:?}: owner-only");
+                }
+                if step == SecretCrash::Published {
+                    assert_eq!(fs::read(&at).unwrap(), temp, "the link published it");
+                } else {
+                    assert!(!entry_present(&at).unwrap(), "{file} {step:?}: unpublished");
+                }
+                // The next start: a whole file under the name, and the key
+                // it holds is the key the start returned — after a crash past
+                // the link, the very one that was published.
+                let next = key(dir.path(), pw);
+                let published = fs::read(&at).unwrap();
+                assert_eq!(published.len(), whole, "{file} {step:?}: a whole file");
+                let expected = match pw {
+                    Some(pw) => derive_from_passphrase(pw, &published).unwrap(),
+                    None => SecretKey(published.as_slice().try_into().unwrap()),
+                };
+                assert_eq!(next.as_bytes(), expected.as_bytes(), "{file} {step:?}");
+                if step == SecretCrash::Published {
+                    assert_eq!(published, temp, "the published key was kept");
+                }
+                // The crash's temp file is left, never swept: stated.
+                assert_eq!(temps_of(dir.path(), file), temps, "{file} {step:?}");
+            }
+        }
+    }
+
+    /// The second arm of O210's gate: a short key file already there — left
+    /// by a crash under an earlier release, or by the fallback below — is
+    /// refused NAMING the file and its length, on both postures, and never
+    /// rewritten.
+    #[test]
+    fn o210_a_short_key_file_is_refused_by_name_and_never_rewritten() {
+        for (pw, file, whole) in [
+            (None, MASTER_KEY_FILE, KEY_LEN),
+            (Some("correct horse"), KDF_SALT_FILE, SALT_LEN),
+        ] {
+            for refs in [0, 1] {
+                let dir = tempdir().unwrap();
+                if refs == 1 {
+                    with_a_vault(dir.path());
+                }
+                let short = vec![7u8; whole / 2];
+                fs::write(dir.path().join(file), &short).unwrap();
+                for access in [Access::ReadWrite, Access::ReadOnly] {
+                    let err = master_key(dir.path(), pw, access)
+                        .err()
+                        .expect("a short key file refuses");
+                    match &err {
+                        KeyError::CorruptKeyFile {
+                            file: f,
+                            len,
+                            references,
+                        } => assert_eq!((*f, *len, *references), (file, whole / 2, refs)),
+                        other => panic!("{other}"),
+                    }
+                    let m = err.to_string();
+                    assert!(
+                        m.contains(&format!("{file} is {} bytes where {whole}", whole / 2)),
+                        "{m}"
+                    );
+                    assert_eq!(fs::read(dir.path().join(file)).unwrap(), short);
+                    assert!(temps_of(dir.path(), file).is_empty(), "nothing was written");
+                }
+            }
+        }
+    }
+
+    /// **The fallback** (ROADMAP O210): a filesystem that refuses the hard
+    /// link gets O204's exclusive in-place writer, never a rename — still
+    /// owner-only from the open, still refusing an existing name, the temp
+    /// removed — and its residual, a crash inside the in-place write, leaves a
+    /// torn key that the next start refuses by name.
+    #[test]
+    fn o210_without_hard_links_the_writer_falls_back_to_an_exclusive_in_place_write() {
+        use crate::fixture::{crash_secret_write_at, fail_next, fail_times, Fault, SecretCrash};
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("identity.key");
+        fail_next(Fault::SecretLink);
+        assert_eq!(
+            publish_new_secret(&path, b"0123456789abcdef").unwrap(),
+            Published::InPlace
+        );
+        assert_eq!(
+            crate::fixture::armed(),
+            None,
+            "REACHED: the link was refused"
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"0123456789abcdef");
+        assert!(temps_of(dir.path(), "identity.key").is_empty());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        // Premise: without the fault the same call links.
+        let linked = dir.path().join("linked.key");
+        assert_eq!(
+            publish_new_secret(&linked, b"x").unwrap(),
+            Published::Linked
+        );
+        // Still exclusive: an existing name is refused and kept, the fault
+        // never reached because the refusal comes first.
+        fail_next(Fault::SecretLink);
+        let err = publish_new_secret(&path, b"replacement").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists, "{err}");
+        assert_eq!(fs::read(&path).unwrap(), b"0123456789abcdef");
+        fail_times(Fault::SecretLink, 0);
+
+        // The residual, through the key writer: torn in place, refused next.
+        let root = tempdir().unwrap();
+        fail_next(Fault::SecretLink);
+        crash_secret_write_at(SecretCrash::InPlaceTorn);
+        assert!(master_key(root.path(), None, Access::ReadWrite).is_err());
+        assert_eq!(
+            fs::metadata(root.path().join(MASTER_KEY_FILE))
+                .unwrap()
+                .len() as usize,
+            KEY_LEN / 2,
+            "REACHED: the in-place write was torn"
+        );
+        let err = master_key(root.path(), None, Access::ReadWrite)
+            .err()
+            .expect("the torn key refuses");
+        assert!(
+            matches!(
+                err,
+                KeyError::CorruptKeyFile {
+                    file: MASTER_KEY_FILE,
+                    len: 16,
+                    references: 0
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    /// **A failed in-place write keeps BOTH files** (the review of O210's
+    /// first build). Without hard links the name is visible from its
+    /// `create_new`, so a concurrent first start can load all 32 bytes and
+    /// seal a vault while the fsync is still to come. The first build removed
+    /// the name when that fsync failed and the caller then removed the
+    /// fsynced temp, leaving no copy of a key a vault may be sealed under —
+    /// every later start `MaterialMissing`. Now both stay and the error names
+    /// both, and the next start loads the key the name holds.
+    #[test]
+    fn o210_a_failed_in_place_write_keeps_the_name_and_the_temp() {
+        use crate::fixture::{fail_in_turn, Fault};
+        let root = tempdir().unwrap();
+        // The link fails as on vfat, then the in-place fsync fails.
+        fail_in_turn(Fault::SecretLink, Fault::SecretInPlaceSync);
+        let err = master_key(root.path(), None, Access::ReadWrite)
+            .err()
+            .expect("the in-place fsync fails");
+        assert_eq!(crate::fixture::armed(), None, "REACHED: both faults fired");
+        let at = root.path().join(MASTER_KEY_FILE);
+        let named = fs::read(&at).expect("the name the fallback created is kept");
+        assert_eq!(
+            named.len(),
+            KEY_LEN,
+            "its whole write landed before the fsync"
+        );
+        let temps = temps_of(root.path(), MASTER_KEY_FILE);
+        assert_eq!(temps.len(), 1, "the fsynced temp is kept");
+        assert_eq!(fs::read(&temps[0]).unwrap(), named, "the same secret");
+        let m = err.to_string();
+        assert!(
+            m.contains(&at.display().to_string()) && m.contains(&temps[0].display().to_string()),
+            "the error names both: {m}"
+        );
+        // A start that came in the window, or after: the key under the name.
+        assert_eq!(
+            key(root.path(), None).as_bytes().as_slice(),
+            named.as_slice()
+        );
+    }
+
+    /// **The fallback answers only a filesystem without links** (the review
+    /// of O210's first build): any other link error — a full disk, an I/O
+    /// error, a vanished temp — refuses, nothing is written at the name, and
+    /// the whole temp is kept and named. The first build fell back on every
+    /// error but "exists", opening the torn-key window on filesystems that
+    /// link. The next start, with the fault gone, links a whole key.
+    #[test]
+    fn o210_a_link_error_that_is_not_unsupported_refuses_and_keeps_the_temp() {
+        use crate::fixture::{fail_next, Fault};
+        let root = tempdir().unwrap();
+        fail_next(Fault::SecretLinkIo);
+        let err = master_key(root.path(), None, Access::ReadWrite)
+            .err()
+            .expect("an ordinary link error refuses");
+        assert_eq!(crate::fixture::armed(), None, "REACHED: the link failed");
+        assert!(
+            !entry_present(&root.path().join(MASTER_KEY_FILE)).unwrap(),
+            "nothing was written at the name: {err}"
+        );
+        let temps = temps_of(root.path(), MASTER_KEY_FILE);
+        assert_eq!(temps.len(), 1, "the temp is kept");
+        assert_eq!(fs::read(&temps[0]).unwrap().len(), KEY_LEN);
+        assert!(
+            err.to_string().contains(&temps[0].display().to_string()),
+            "{err}"
+        );
+        let next = key(root.path(), None);
+        assert_eq!(
+            fs::read(root.path().join(MASTER_KEY_FILE)).unwrap(),
+            next.as_bytes()
+        );
+    }
+
+    /// Which link errors read as "this filesystem has no hard links": the
+    /// codes measured (EPERM on vfat, ENOSYS on a FUSE exFAT) and the ones
+    /// documented, and never an ordinary I/O error. On Linux the table's
+    /// numbers are checked against the platform's own names for them.
+    #[test]
+    fn o210_only_an_unsupported_link_takes_the_fallback() {
+        let raw = io::Error::from_raw_os_error;
+        assert!(links_unsupported(&io::Error::new(
+            io::ErrorKind::Unsupported,
+            "x"
+        )));
+        for code in LINKS_UNSUPPORTED {
+            assert!(links_unsupported(&raw(*code)), "{code}");
+        }
+        assert!(!links_unsupported(&io::Error::other("x")));
+        assert!(!links_unsupported(&io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "x"
+        )));
+        #[cfg(target_os = "linux")]
+        {
+            for (code, name) in [
+                (1, "Operation not permitted"),
+                (38, "Function not implemented"),
+                (95, "Operation not supported"),
+            ] {
+                assert!(
+                    raw(code).to_string().contains(name),
+                    "{code}: {}",
+                    raw(code)
+                );
+            }
+            // ENOENT, EIO, EACCES, ENOSPC, EROFS, EXDEV, EMLINK refuse.
+            for code in [2, 5, 13, 28, 30, 18, 31] {
+                assert!(!links_unsupported(&raw(code)), "{code}: {}", raw(code));
+            }
+        }
+    }
+
+    /// The temp name is 37 bytes longer than the target's, so on a 255-byte
+    /// name limit a target name of 218 bytes publishes and one of 219 is
+    /// refused, naming the temp it could not create and writing nothing.
+    #[cfg(unix)]
+    #[test]
+    fn o210_a_name_too_long_for_its_temp_is_refused_naming_the_temp() {
+        let dir = tempdir().unwrap();
+        let fits = dir.path().join("k".repeat(218));
+        assert_eq!(write_new_identity(&fits, b"x").unwrap(), Published::Linked);
+        let long = dir.path().join("k".repeat(219));
+        let err = write_new_identity(&long, b"x").unwrap_err();
+        let m = err.to_string();
+        assert!(m.contains("temp file") && m.contains(".tmp."), "{m}");
+        assert!(!entry_present(&long).unwrap());
+    }
+
+    /// **ROADMAP O321, at the publisher.** A link at the name — dangling,
+    /// or to a file that exists — is refused before a byte is written: the
+    /// link's target is neither created nor changed, and no temp is left.
+    #[cfg(unix)]
+    #[test]
+    fn o321_a_link_at_the_name_is_refused_and_never_followed() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bundle.key");
+        let target = dir.path().join("where-the-link-points");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        let err = publish_new_secret(&path, b"secret").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists, "{err}");
+        assert!(!target.exists(), "nothing was written through the link");
+        fs::write(&target, b"someone else's").unwrap();
+        let err = publish_new_secret(&path, b"secret").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists, "{err}");
+        assert_eq!(fs::read(&target).unwrap(), b"someone else's");
+        assert!(temps_of(dir.path(), "bundle.key").is_empty());
+        // A link appearing after the check is refused by the link itself:
+        // `hard_link` onto an existing name fails rather than replacing it.
+        let late = dir.path().join("late.key");
+        let tmp = dir.path().join("late.key.source");
+        fs::write(&tmp, b"x").unwrap();
+        std::os::unix::fs::symlink(&target, &late).unwrap();
+        assert_eq!(
+            fs::hard_link(&tmp, &late).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"someone else's");
+    }
+
+    /// Two first starts racing on a fresh installation get ONE key: the
+    /// publish that loses the link re-classifies and loads the winner's.
+    #[test]
+    fn o210_racing_first_starts_hold_one_key() {
+        for round in 0..20 {
+            let dir = tempdir().unwrap();
+            let root = dir.path().to_path_buf();
+            let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let keys: Vec<[u8; KEY_LEN]> = (0..2)
+                .map(|_| {
+                    let (root, gate) = (root.clone(), gate.clone());
+                    std::thread::spawn(move || {
+                        gate.wait();
+                        *key(&root, None).as_bytes()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect();
+            assert_eq!(keys[0], keys[1], "round {round}");
+            assert_eq!(fs::read(root.join(MASTER_KEY_FILE)).unwrap(), keys[0]);
+            assert!(temps_of(&root, MASTER_KEY_FILE).is_empty(), "round {round}");
+        }
+    }
+
+    // ---- ROADMAP O211: one derivation per process ---------------------------
+
+    fn cached(root: &Path, pw: Option<&str>, access: Access, cache: &KeyCache) -> SecretKey {
+        master_key_cached(root, pw, access, cache)
+            .unwrap()
+            .key
+            .expect("an installation with key material holds a key")
+    }
+
+    /// The gate's shape: one cache, every open a command makes. `vault list`
+    /// over three vaults opened the manager four times and `serve-http` twice;
+    /// each open now classifies and reads the salt, and derives nothing after
+    /// the first. The held key is the key a fresh derivation gives.
+    #[test]
+    fn a_cache_derives_a_passphrase_key_once_across_every_open() {
+        let dir = tempdir().unwrap();
+        let cache = KeyCache::new();
+        let _held = cache.hold();
+        // The create derives through the cache too: `init` then reopens.
+        let created = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        assert_eq!(cache.derivations(), 1);
+        with_a_vault(dir.path());
+        for access in [
+            Access::ReadWrite,
+            Access::ReadOnly,
+            Access::ReadWrite,
+            Access::ReadWrite,
+        ] {
+            let k = cached(dir.path(), Some("correct horse"), access, &cache);
+            assert_eq!(k.as_bytes(), created.as_bytes());
+        }
+        assert_eq!(cache.derivations(), 1, "one Argon2id run for five opens");
+        // Premise: the uncached door derives every time and agrees.
+        assert_eq!(
+            key(dir.path(), Some("correct horse")).as_bytes(),
+            created.as_bytes()
+        );
+    }
+
+    /// The cache is keyed on BOTH inputs Argon2id takes. A held key never
+    /// answers for another passphrase — a wrong one still derives its own
+    /// wrong key, which the manifest MAC refuses — nor for a salt that changed
+    /// on disk under it.
+    #[test]
+    fn a_held_key_never_answers_for_another_passphrase_or_salt() {
+        let dir = tempdir().unwrap();
+        let cache = KeyCache::new();
+        let _held = cache.hold();
+        let right = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        with_a_vault(dir.path());
+        for (pw, runs) in [
+            ("wrong staple", 2),
+            ("correct hors", 3),
+            ("correct horse ", 4),
+        ] {
+            let k = cached(dir.path(), Some(pw), Access::ReadWrite, &cache);
+            assert_ne!(k.as_bytes(), right.as_bytes(), "{pw:?} met the held key");
+            assert_eq!(cache.derivations(), runs, "{pw:?} derived its own");
+        }
+        // One entry: the right passphrase derives again, to the same key.
+        let again = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        assert_eq!(again.as_bytes(), right.as_bytes());
+        assert_eq!(cache.derivations(), 5);
+        // A salt replaced on disk is a different input, so a different key.
+        fs::remove_file(dir.path().join(KDF_SALT_FILE)).unwrap();
+        let mut other = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.path().join(KDF_SALT_FILE))
+            .unwrap();
+        std::io::Write::write_all(&mut other, &[0x5a; SALT_LEN]).unwrap();
+        drop(other);
+        let moved = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        assert_ne!(moved.as_bytes(), right.as_bytes());
+        assert_eq!(cache.derivations(), 6);
+    }
+
+    /// **Only the derivation is cached, never the decision** (ROADMAP O204's
+    /// classifier, under O211). With a key held, every open still surveys and
+    /// classifies: a deleted salt is refused, a planted key file beside a
+    /// missing salt is refused, and nothing is written — the held key is
+    /// never served in place of the files the installation holds.
+    #[test]
+    fn the_classification_runs_on_every_open_while_a_key_is_held() {
+        let dir = tempdir().unwrap();
+        let cache = KeyCache::new();
+        let _hold = cache.hold();
+        let held = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        with_a_vault(dir.path());
+        let salt = fs::read(dir.path().join(KDF_SALT_FILE)).unwrap();
+        fs::remove_file(dir.path().join(KDF_SALT_FILE)).unwrap();
+        for access in [Access::ReadWrite, Access::ReadOnly] {
+            let err = master_key_cached(dir.path(), Some("correct horse"), access, &cache)
+                .err()
+                .expect("a deleted salt refuses with a key held");
+            assert!(matches!(err, KeyError::MaterialMissing { .. }), "{err}");
+            assert_eq!(files(dir.path()), (false, false), "nothing created");
+        }
+        // A key file planted where the salt was: the other source's file.
+        let mut planted = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.path().join(MASTER_KEY_FILE))
+            .unwrap();
+        std::io::Write::write_all(&mut planted, &[7u8; KEY_LEN]).unwrap();
+        drop(planted);
+        let err = master_key_cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache)
+            .err()
+            .expect("a contradicting installation refuses with a key held");
+        assert!(matches!(err, KeyError::SourceMismatch { .. }), "{err}");
+        assert_eq!(files(dir.path()), (true, false), "no salt written");
+        // The salt put back beside the planted file: loaded, with the
+        // both-present flag the classifier raises, from the held key.
+        let mut back = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.path().join(KDF_SALT_FILE))
+            .unwrap();
+        std::io::Write::write_all(&mut back, &salt).unwrap();
+        drop(back);
+        let m = master_key_cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache)
+            .unwrap();
+        assert!(m.both_present, "the classifier still ran");
+        assert_eq!(m.key.unwrap().as_bytes(), held.as_bytes());
+        assert_eq!(cache.derivations(), 1, "refusals derive nothing");
+        // A corrupt salt is refused before the cache is asked.
+        fs::remove_file(dir.path().join(KDF_SALT_FILE)).unwrap();
+        let mut short = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.path().join(KDF_SALT_FILE))
+            .unwrap();
+        std::io::Write::write_all(&mut short, &salt[..SALT_LEN - 1]).unwrap();
+        drop(short);
+        assert!(matches!(
+            master_key_cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache),
+            Err(KeyError::CorruptKeyFile { .. })
+        ));
+    }
+
+    /// The key-file source never reaches the cache: `master.key` is read on
+    /// every open, so a replaced file is what the next open loads.
+    #[test]
+    fn the_key_file_source_never_reaches_the_cache() {
+        let dir = tempdir().unwrap();
+        let cache = KeyCache::new();
+        let _held = cache.hold();
+        let first = cached(dir.path(), None, Access::ReadWrite, &cache);
+        let _ = cached(dir.path(), None, Access::ReadOnly, &cache);
+        assert_eq!(cache.derivations(), 0);
+        fs::remove_file(dir.path().join(MASTER_KEY_FILE)).unwrap();
+        let mut replaced = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.path().join(MASTER_KEY_FILE))
+            .unwrap();
+        std::io::Write::write_all(&mut replaced, &[3u8; KEY_LEN]).unwrap();
+        drop(replaced);
+        let now = cached(dir.path(), None, Access::ReadWrite, &cache);
+        assert_ne!(now.as_bytes(), first.as_bytes());
+        assert_eq!(now.as_bytes(), &[3u8; KEY_LEN]);
+        assert_eq!(cache.derivations(), 0);
+        assert!(!cache.is_holding());
+    }
+
+    /// **A key is kept only while a hold is alive** (the independent review of
+    /// O211's first build: a `serve-mcp`, `mine` or `refine` process kept the
+    /// master key and a copy of the passphrase in the process cache for its
+    /// whole life, where before the key went with the manager after its one
+    /// open). An open with no hold keeps nothing; holds nest, and the last one
+    /// dropped zeroizes the key.
+    #[test]
+    fn a_cache_keeps_nothing_outside_a_hold() {
+        let dir = tempdir().unwrap();
+        let cache = KeyCache::new();
+        let k = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        assert!(!cache.is_holding(), "a one-open command keeps nothing");
+        let again = cached(dir.path(), Some("correct horse"), Access::ReadOnly, &cache);
+        assert_eq!(again.as_bytes(), k.as_bytes());
+        assert_eq!(cache.derivations(), 2, "nothing was held to reuse");
+        assert!(!cache.is_holding());
+
+        let outer = cache.hold();
+        let _ = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        assert!(cache.is_holding());
+        {
+            let _inner = cache.hold();
+            let _ = cached(dir.path(), Some("correct horse"), Access::ReadOnly, &cache);
+        }
+        assert!(
+            cache.is_holding(),
+            "an inner hold leaves the outer one's key"
+        );
+        let _ = cached(dir.path(), Some("correct horse"), Access::ReadOnly, &cache);
+        assert_eq!(cache.derivations(), 3, "one run for the three held opens");
+        drop(outer);
+        assert!(!cache.is_holding(), "the last hold zeroizes the key");
+        let _ = cached(dir.path(), Some("correct horse"), Access::ReadOnly, &cache);
+        assert_eq!(cache.derivations(), 4);
+        assert!(!cache.is_holding());
+    }
+
+    /// `forget` drops the held key, so the next open derives again; `Debug`
+    /// shows the counts and nothing else.
+    #[test]
+    fn a_forgotten_key_is_derived_again_and_debug_shows_only_the_count() {
+        let dir = tempdir().unwrap();
+        let cache = KeyCache::new();
+        let _held = cache.hold();
+        let k = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        let shown = format!("{cache:?}");
+        assert!(shown.contains("derivations: 1"), "{shown}");
+        assert!(shown.contains("holds: 1"), "{shown}");
+        assert!(!shown.contains("correct horse"), "{shown}");
+        assert!(!shown.contains(&hex::encode(k.as_bytes())), "{shown}");
+        cache.forget();
+        let again = cached(dir.path(), Some("correct horse"), Access::ReadWrite, &cache);
+        assert_eq!(again.as_bytes(), k.as_bytes());
+        assert_eq!(cache.derivations(), 2);
+    }
+
+    /// The lock is held across the derivation: opens racing on a cold cache
+    /// run Argon2id once between them.
+    #[test]
+    fn racing_opens_on_a_cold_cache_derive_once() {
+        let dir = tempdir().unwrap();
+        let _ = key(dir.path(), Some("correct horse"));
+        with_a_vault(dir.path());
+        let cache = KeyCache::new();
+        let _held = cache.hold();
+        let keys: Vec<[u8; KEY_LEN]> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    s.spawn(|| {
+                        *cached(dir.path(), Some("correct horse"), Access::ReadOnly, &cache)
+                            .as_bytes()
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert!(keys.windows(2).all(|w| w[0] == w[1]));
+        assert_eq!(cache.derivations(), 1);
     }
 }

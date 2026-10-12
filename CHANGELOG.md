@@ -2,9 +2,9 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and thirty-three fixes. The witness
+MINOR: one new capability, backward compatible, and forty-seven fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Seven fixes change what a deployment must do: every process writing a
+start-up. Fourteen fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
@@ -13,12 +13,30 @@ vault's embedder environment and refuses under `--read-only` (O268); a
 restore refuses over a symbolic link (O283); a vault delete refuses while
 any other process has the vault open, a replica included (O291);
 `--read-only backup create`, `bundle keygen` and `bundle sign-keygen` exit 1
-instead of writing (O212); and a command whose stdout reader leaves early
-exits 141 where it panicked with 101 (O287) — all in `UPGRADING.md`, beside
-O279's note that a filesystem whose inode numbers are not stable now refuses
-every open (which `config check` pre-flights), O255's note that a destruction now
-holds the write lock for as long as it runs and O256's that an archive taken by an
-older release beside a writer may be torn. (This line said "one fix" while O243 and
+instead of writing (O212); a command whose stdout reader leaves early
+exits 141 where it panicked with 101 (O287); the systemd unit template runs
+`init` before it serves and waits for its data directory's mount, so a mount that
+fails at boot leaves the unit failed rather than restarting it (O200);
+`forget`, `admission deny` and `retention sweep` read `--sign` before they
+destroy, so a bad identity exits 1 even where nothing would be destroyed, and a
+sweep that is not clean and cannot write `--out` exits 2 (O262); `verify`,
+`backup create` and `backup restore` refuse a drawer whose HMAC verifies over covered
+meta that does not parse, so a backup can refuse a vault the previous binary archived,
+and `verify --read-only` is the pre-flight before the upgrade (O231); `backup create`
+refuses a `backups/.staging` that is a link or anything but a directory (O273), and a
+restore refuses a live vault holding any entry that is not a regular file (O301);
+`bundle keygen` and `bundle sign-keygen` refuse a link at the identity's path, a dangling
+one included (O321); and a key file is published whole by a hard link of a fsynced temp,
+so a first start whose link fails for any reason but a filesystem without hard links exits
+1 naming the temp that holds the key (O210) — all in
+`UPGRADING.md`, beside O279's note that a filesystem whose inode numbers are not
+stable now refuses every open (which `config check` pre-flights), O255's note that
+a destruction now holds the write lock for as long as it runs, O256's that an
+archive taken by an older release beside a writer may be torn, O303's that a
+vault whose `chain_meta` has lost its committed head or its height is refused
+instead of adopted, O236's that a repeated tunnel create, or an import, over a
+tunnel row edited offline exits 2, and O259's and O260's that a source delete and an
+allow now change everything or nothing, a failure part-way changing nothing. (This line said "one fix" while O243 and
 O246 were both below it; corrected with O247. It said "nine" until O268,
 "ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
 until O279, which closed four entries, "seventeen" until O281, "eighteen" until O284,
@@ -26,10 +44,16 @@ until O279, which closed four entries, "seventeen" until O281, "eighteen" until 
 "twenty-two" until O290, "twenty-three" until O291, "twenty-four" until O296,
 "twenty-five" until O304 — O303 should have made it twenty-six and did not, which O304 found
 by counting the entries — "twenty-seven" until O305, "twenty-eight" until O309, "twenty-nine"
-until O314, "thirty" until O212 and "thirty-one" until O287, which closed two entries; it said
-"Three fixes change what a deployment must do" until O283 made it four,
-"Four" until O291 made it five, "Five" until O212 made it six, and "Six"
-until O287 made it seven.)
+until O314, "thirty" until O212, "thirty-one" until O287, which closed two entries, and
+"thirty-three" until train 1's integration, which closed six — O331, O199, O200, O177,
+O236 and O262 — "thirty-nine" until O231, and "forty" until the units of O273, O211 and O210,
+which closed five — O273, O301, O211, O210 and O321, and "forty-five" until O259's unit closed O259 and
+O260; it said "Three fixes change what a deployment must do" until O283 made
+it four, "Four" until O291 made it five, "Five" until O212 made it six, "Six"
+until O287 made it seven, "Seven" until train 1 made it nine (O200, O262), "Nine" until O231 made it ten, and "Ten" until those units made it fourteen (O273, O301,
+O321, O210). O303's
+note was missing from it from O303 until train 1's integration, which found it by reading
+`UPGRADING.md`'s entries against this line.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -370,6 +394,50 @@ destruction), O263 (an unauthenticated schema: a planted trigger), O264.
 PATCH-class inside the unreleased 1.7.0: receipts that verify and a sweep that
 honours the declarations in force; the one behaviour a deployment can notice is
 in `UPGRADING.md`.
+
+### A source delete and an allow change everything or nothing (O259, O260)
+
+**`drawer delete-by-source` promised to refuse "before anything is deleted
+rather than half-way through", and kept that promise only for pending review
+evidence.** Each drawer of the source was deleted in its own write lock, so a
+busy lock or a failing statement at drawer k left k−1 deleted and returned an
+error; and the pending-evidence pre-flight read a FAILED fence query as "not
+pending", so the loop reached a pending drawer and the choke point refused it
+half-way through. Measured on the tree before this release's fix: a failure
+injected on the fourth of six drawers left three; a fence query made to fail
+left two of three; a second connection taking the lock at a step of the delete
+left part of the source deleted in 49 of 51 refusals. Now the whole source is
+one write lock — its members, the fence over every one of them with its error
+propagated, and the destruction — so any refusal deletes nothing, through the
+CLI, MCP's `undercroft_delete_by_source` and `/v1`'s `DELETE …/drawers?source=`
+alike. Review evidence is still refused at a door in front of the lock, so that
+refusal takes no write lock; and the fence is no longer something each
+destruction must remember to ask: the one statement that deletes a drawer takes
+a witness only the fence mints.
+
+**`admission allow` committed its re-filed drawer, its ruling and the queue
+row's removal as three transactions**, so a `deny` of the same row from another
+process could land between them: the trail then held both `allowed` and
+`denied`, and the deny's receipt attested the destruction of text that survived,
+re-filed at its destination. Measured: a deny driven at every step of an allow
+broke 14 of 143 runs that way; an allow thread and a deny thread ruling on the
+same rows, 31 to 36 rows of 96. The allow is now one write lock, as a deny has
+been since O255. Inside it the queue row is read again and must be byte for byte
+the row the allow's door judged — content and declaration, not existence alone,
+as O225's ruling asked — so a row a deny took refuses the allow with `not found`
+and nothing written, and a text that re-occupied the row in between is never
+destroyed unread under "allowed" (the tree before this fix did that in 39 of 143
+runs). The destination's precondition is still checked inside the same
+transaction (O224), and the expectation still travels on the operator's
+ruling, where a compare-and-swap (O229) would carry its own.
+
+Gated by store tests that commit from a second connection at every step of each
+door, and a real second thread, looped ten times; by e2e checks that plant a
+failure with `sqlite3` and race CLI denies against `/v1` allows; and on the
+LoCoMo feed mined into seven wings beside a `/v1` writer. The one behaviour a
+script can notice is in `UPGRADING.md`. Filed beside it: `/v1` hands most query
+values to the store still percent-encoded, so a source path a URL must encode
+answers `deleted: 0` (O415). PATCH-class inside the unreleased 1.7.0.
 
 ### A backup is exactly the state its verify judged (O256), and pruning one vault's backups never touches another's (O265)
 
@@ -1646,6 +1714,79 @@ PATCH inside the unreleased 1.7.0: the flag keeps the promise its help makes. A 
 `--read-only backup create` or a keygen under `--read-only` now exits 1, so `UPGRADING.md` carries an
 entry; `config check` cannot see it.
 
+### A tunnel create that wrote nothing no longer records a write, and every surface says it was a no-op (O236)
+
+A tunnel's id is derived from its two wings and its label, so creating a tunnel the vault already
+holds inserts nothing — the store's `ON CONFLICT DO NOTHING` — and then appended a `tunnel/{id}`
+audit-chain record anyway, tagged over a fresh `created_at` that no row carries: a record claiming a
+write that never happened. Every surface answered it as a creation — `tunnel {id} created` over MCP,
+the creation line on the CLI, the same 201 body on `/v1` — and restoring a vault's own export into it
+appended one such record per tunnel. It is why `verify`'s version leg (O234) can ask a tunnel only
+whether it was destroyed — and the record weakened even that question: once a deleted tunnel's row
+was written back offline, a repeat create appended its record ABOVE the `del/tunnel/{id}` tombstone,
+and the leg read the row as written after its destruction. Measured on a copy with the old append:
+`verify` failed with one finding before the repeat and answered OK after it, the resurrected tunnel
+still served. This fix closes that: a repeat appends nothing and the finding stands. **A vault a
+1.6.0 or 1.6.1 binary wrote may already hold such a hidden resurrection** — the records it appended
+stay, the trail being append-only — and today's `verify` does not see one; finding them is filed as
+O403, whose shape reads the laundered row's tag sitting only below its tombstone.
+
+Now the insert's own row count decides, inside the transaction that would append: a create that
+inserted nothing appends nothing and anchors nothing, and `create_tunnel` returns
+`TunnelOutcome { id, created }` so a caller can tell the two apart. MCP's `undercroft_create_tunnel`
+and `undercroft tunnel create` answer a repeat with `already exists — nothing was written` (still a
+success: exit 0, `isError: false`); `POST /v1/vaults/{id}/tunnels` adds `"created"` to its body and
+keeps its documented 201 — any other status for a repeat moves that documented answer, so it is
+filed as a 2.0.0 question, O402; and both imports say how many tunnels were new — `N
+tunnel(s) (k new, m already present)` on the CLI, an additive `tunnels_new` beside an unchanged
+`tunnels` on `/v1`, whose record count the orchestrator's migration still compares with the
+export's. "Already exists" is said only after the stored row verifies under the vault's key: a row
+edited offline is the integrity verdict (exit 2, 409 `integrity`, naming `tunnel/{id}`), with nothing
+written — never "nothing was written" over a tampered row. An import meeting one stops there; it
+does not yet repair it as it would a drawer (O404), and `tunnel delete` then the import
+again restores it. The name guard and the label screen still run first, so a repeat whose label the
+screen now flags is refused as before. The records 1.6.x appended stay where
+they are, because the trail is append-only, which is also why tunnels keep the version leg's
+destruction arm only.
+
+Gates. The store: a repeat appends nothing, moves neither the committed head nor the row, and leaves
+the tunnel's newest record carrying the row's tag (the entry's gate); a different label is a new
+tunnel, and a re-create after a delete is a real write that records — the arm a fix keyed on "a
+record already exists" fails. The version leg's tunnel test now plants a 1.6.x-shaped surplus record
+and holds the row clean over it. Through each surface: MCP and `/v1` unit tests over the chain height,
+the CLI binary over the `audit` rows, a self-restore and a fresh import, and four e2e arms (CLI, MCP,
+`history --subject` counting the tunnel's one record, `/v1`). Counterfactuals on a copy of the tree,
+each recompiled: restoring the unconditional append fails all five record-asserting tests; restoring
+an outcome that always says `created` fails the seven reply-asserting ones, the rotation gate's
+re-derived id included; the record-keyed wrong fix fails the store gate alone, at the re-create.
+**A real corpus**: the LoCoMo feed mined into 32 wings of a sealed vault (2,720 drawers), a ring of 32
+tunnels, then the whole ring again on the CLI and over one `serve-mcp`: 64 repeats, 64 replies naming
+the no-op, `tunnel/` records 32 → 32 and the `audit` table unchanged; the vault's own export restored
+into it, `32 tunnel(s) (0 new, 32 already present)` with no `tunnel/` record added; `/v1` answering
+`created: false` then `true` for a new chord; `verify` OK with `version replay: 0`. The same drive
+over a build with the old behaviour restored appended 97 records of writes that never happened
+(`tunnel/` records 32 → 130), and `verify` answered OK over every one of them.
+
+**An independent review of the build found the code correct, four things wrong in what it claimed and
+recorded and one gap, all mine, each fixed before this landed**: the security effect above, unstated, with its
+residual unfiled; "already exists" decided by the id alone — now the row check, held by a store test
+(an edited row is the integrity class, an untouched one the no-op) and a CLI arm (`tunnel create` and
+`import` exit 2 over an edited row, writing nothing); the record naming the wrong refusal class for a
+handle that no longer writes (`IntegrityFinding` for a retired-on-integrity or stale-keys handle,
+`StoreError::StaleUnlock` only for a deferred promote); the `/v1` status question filed as open work
+when a different status moves a documented answer, so it now sits under 2.0.0 beside the in-tree
+precedent `POST /v1/vaults` answering 409 for a vault that exists; and a note claiming a 1.7.0
+vault's newest tunnel record always carries the row's tag, which a key rotation's re-tag makes false.
+`o236_a_repeat_cannot_hide_a_resurrected_tunnel` holds the security half: on a recompiled copy with
+the repeat's append put back it fails with the finding gone, and with the row check removed instead
+the row-check store test and the CLI arm fail while it stays green; all GREEN here.
+
+PATCH inside the unreleased 1.7.0: the only observable change is that a defect is gone — a record of
+a write that never happened, a reply that called a no-op a creation, and a repeat that answered
+success over a tampered row. No documented contract moves (the `/v1` status is unchanged and both new
+fields are additive). A create or an import that met an edited tunnel row now exits 2 where it exited
+0, so `UPGRADING.md` carries an entry; only a vault `verify` already fails on meets it.
+
 ### A reader that leaves never turns a verdict into a panic: exit 141, an integrity verdict still exits 2, and no diagnostic can kill a server (O287, O328)
 
 Rust ignores `SIGPIPE`, so a write to a pipe whose reader has gone fails with `EPIPE`, and `println!`
@@ -1756,6 +1897,425 @@ came up on the unfixed tree), and three e2e checks across the two suites.
 PATCH inside the unreleased 1.7.0, by the 2026-09-08 versioning ruling: the defect removed is an
 undefined panic status, and the new class reports a condition that was undefined; 0, 1 and 2 keep
 their meanings. `UPGRADING.md` carries the entry; `config check` cannot detect it.
+
+### The house-figures job reads the latest release with its own token, and a failed read says why (O331)
+
+The CI job that checks the house page against this tree reads the latest published release from
+GitHub's API, and it read it unauthenticated, from a hosted runner whose IP — and with it the 60
+requests an hour GitHub gives an unauthenticated caller — is shared with every other tenant of that
+IP. Three of the job's eight red runs between 2026-08-30 and 2026-10-07 were that read alone, and
+each printed the one line written for an unreachable page: `-sS` without `-f` exits 0 on an HTTP
+error and left the cause in a body the parser emptied, `2>/dev/null` discarded the line naming a DNS
+failure or a timeout, and the pipeline lost curl's exit status. A rate limit, an API outage, a DNS
+failure and a malformed answer could not be told apart, so the likeliest cause, the rate limit, is
+still unproven.
+
+Now `tests/house-figures.sh` has one reader for both of its network reads, keeping curl's exit
+status, the HTTP status, the headers and curl's own line. A failed release read names its cause on
+the FAIL line — `HTTP 404 "Not Found" (curl exit 0, without a token)` — and every run that reaches
+the read prints the rate limit the answer carried. CI passes the job's own token as `GH_TOKEN` on that
+one step; it is the workflow's `contents: read` token, which the checkout step already leaves in the
+job's git configuration. The script sends it only to a URL beginning `https://api.github.com/`, on
+curl's stdin rather than its command line, with a caller's `~/.curlrc` ignored, and never to the
+house page. A person with no token still reads without one; inside GitHub Actions a read with no
+token fails, so a workflow that stopped passing it cannot quietly bring the shared limit back; and an
+empty `GH_TOKEN`, `HOUSE_PAGE_URL`, `HOUSE_RELEASE_URL` or `HOUSE_REPO` fails everywhere, as a failed
+interpolation, where an empty override used to read as the default. The same file's siblings are
+fixed with it: the page fetch took a 404 or a 503 as a page and failed it as "the markup moved", and
+now names the status and curl's line; `--update`'s re-check loop threw away every re-check's output,
+so its timeout said "not serving the new figures" over whatever had failed, and now prints the last
+check; its "nothing derivable" refusal now names the release read beside the tiles; and the strings
+quoted from the page go through the same log-safe filter as the API's message. O65's ruled semantics
+are unchanged: the latest PUBLISHED RELEASE is the truth, and an unreachable source is a failure,
+never a skip. A retry, a skip on a 403, reading tags instead and scraping the release page's redirect
+were rejected in the filing.
+
+Gates, executed: against the real API, a release that does not exist fails with `HTTP 404 "Not
+Found"` on the FAIL line, where the script before this printed neither (its URL made overridable,
+nothing else changed); with no token, the real read passes, on Linux and on this Windows host, there
+also under `MSYS_NO_PATHCONV=1`. A stub matrix of 27 cases a tree, run against both scripts (ad hoc,
+not in the tree), names each of the eight release causes the old script printed as the same two
+lines — a 403 rate limit, 404, 401, 301, a 200 with no tag, DNS, refused and timeout — and a page 404
+and 503 the old one read as moved markup, and shows the token sent exactly where it belongs and
+nowhere else. With the token in the environment alone, a scan of every process's command line
+through an authenticated read never saw it, six runs of six (its premise did); a hostile API answer
+and a page label carrying escape bytes, a lone carriage return and `::` workflow commands reached no
+log line; a dummy token reaches the real API as a 401 on both curls; and `--update` was driven
+through a fake `gh`, deploying, timing out and finding nothing to derive. The authenticated limit on
+a green CI run is the gate still to read, off this change's first CI run; the closure stands on it.
+An independent review of the build found ten things, all mine, each fixed before this landed; two
+more were caught by my own premises (ROADMAP O331 lists them).
+
+PATCH inside the unreleased 1.7.0: test tooling and CI only. Nothing an operator runs changes; no
+`UPGRADING.md` entry. What a contributor runs changes: the script fails with an empty `GH_TOKEN` or
+an empty override, inside any GitHub Actions workflow that runs it without a token, and with an
+expired `GH_TOKEN` exported (a 401 where it used to pass unauthenticated) — and since `gh` already
+prefers an exported `GH_TOKEN` to its stored login, one exported for this read is also what
+`--update`'s write uses.
+
+### The observability stack and the systemd unit run `init` before they serve, and a failed init says why (O199, O200)
+
+Two of the three shipped `serve-http` recipes still carried the defect O172 fixed in the team-server
+recipe. The observability stack started its engine with `undercroft init 2>/dev/null || true; exec
+undercroft serve-http …`, so an init that failed printed nothing and the engine stopped on
+serve-http's symptom, `vault "default" not found`, instead of the cause. `deploy/undercroft-server.service`
+ran `serve-http` with no `init` at all, so a fresh install exited `vault "default" not found` and
+systemd restarted it every three seconds; the docs told operators to run `init` by hand first.
+
+Now the observability engine runs `undercroft init && exec undercroft serve-http …`, and the unit runs
+`ExecStartPre=/usr/local/bin/undercroft init`, as its own user with its data directory and environment
+file, the passphrase included. The first start creates a sealed `default` vault, later starts find it
+and `init` exits 0 writing nothing, and a failed init stops the start with its own error in the log or
+the journal. For another level, create the vault before the first start (`docs/remote-server.md`).
+The unit also declares `RequiresMountsFor=/var/lib/undercroft`: without it, a data directory that is
+its own mount and not yet up let the new init write a fresh master key and an empty `default` vault
+beneath the mount point, and the server served that second installation — the independent review's
+finding against this unit's first build, reproduced under systemd 252 and fixed.
+
+Gates. A new host-side preflight, `every shipped serve-http recipe runs init first`, judges every
+command under `deploy/` that runs `serve-http`: on a compose line, `init` joined to `serve-http` by
+`&&`, nothing that discards its failure and no `--data-dir`; a unit is read as systemd reads it
+(sections, blanks around `=`, indentation, continuations, an emptied list), and needs an unprefixed
+`ExecStartPre=` running `init` through the `ExecStart` executable in `[Service]`, its data directory
+declared in `Environment=UNDERCROFT_HOME`, and `RequiresMountsFor=` on that directory. A probe of 20
+fixtures refuses the shipped broken lines verbatim and every spelling the review named, each for the
+defect it carries, and accepts the fixed ones; a premise requires all three recipes to be selected.
+The e2e suite reads the unit's own
+`ExecStartPre=` and `ExecStart=` lines out of the file and runs them in systemd's order on a fresh
+install — init, serve, and a restart's init that changes no byte of the data directory (four checks).
+`tests/tls-pins.sh` replaces the observability engine over a volume whose `vaults/default` is a regular
+file and requires init's error in its log rather than serve-http's (one check). Counterfactuals: each
+broken shape fails the preflight by file and line, a judge broken either way fails its probe, and the e2e
+arm over the pre-O200 unit fails three of its four checks, the fourth being its premise — its first
+version passed one check over that unit, because nothing ran there at all, and was rebuilt. A real
+corpus: the LoCoMo feed mined into eight wings, 680 drawers, served through each recipe's own command,
+with a restart's init leaving the data directory hashed unchanged and `verify` OK. Under systemd 252
+as PID 1 in a container, with the data directory its own `.mount` unit: the shipped unit mounts it
+first and writes nothing beneath it, the unit without the directive leaves the second installation
+there, a failing init restarts with its own error in the journal, and a mount that fails stops the start
+as a dependency. Under a passphrase each start now derives the key twice, about 0.1 s more.
+
+PATCH inside the unreleased 1.7.0. `init` opens the installation exactly as `serve-http` does, exits 0
+writing nothing where the default vault exists, and fails only where `serve-http`'s own open would. The
+observability change therefore needs no `UPGRADING.md` entry. The unit's does, once an operator copies
+the new template: a data-directory mount that fails at boot now leaves the unit failed rather than
+looping until the directory appears. Filed from the measurement: init's error over a `vaults/default` it
+cannot create names no path (O398).
+
+### One loopback predicate for a listen host, and `--host ::1` still starts without a token (O177)
+
+`serve-http` decides whether a bind needs a bearer with its own inline comparison against
+`127.0.0.1`, `localhost` and `::1`. `undercroft_config::addr_is_loopback` held a second copy of the
+same three literals behind a `host:port` split. O160's record called the two byte-identical, and they
+were not: the address predicate reads a bare `::1` as host `":"` and port `1`. So the unification
+that record invited, the engine calling `addr_is_loopback(--host)`, would have refused a working
+`serve-http --host ::1` with no token.
+
+The literals now live once, in `undercroft_config::host_is_loopback`. `addr_is_loopback` splits the
+address and asks it. The engine's rule, now `http::refuse_to_bind`, asks it with the bare `--host`,
+through a new `undercroft-cli → undercroft-config` dependency that compiles no new crate.
+
+A source gate walks every `.rs` under `crates/`. It refuses any string literal reading exactly
+`127.0.0.1`, `localhost` or `::1` in code compiled outside tests, whatever surrounds it: `==`,
+`.eq`, `matches!`, a `const`, an `if let`, a match arm, a raw or a byte string. Test code is read
+from the module tree, never from a file name. It allows, with exact counts, three other sites:
+`"localhost"` once in each of the two outbound predicates, which compare it against a parser's
+typed host, and the `127.0.0.1` default of `serve-http --host`.
+
+The gate's first version caught only `==`, `!=` and lines naming two of the literals. O177's
+independent review got six single-literal copies past it; all six now fail it.
+
+Nothing an operator can observe moved, and that was measured: over 434 generated hosts and
+addresses, neither predicate answers differently from the two copies it replaces. `127.0.0.2` still
+needs a token, and that answer is now pinned. Through the release binary over a 340-drawer LoCoMo
+vault, a tokenless `--host ::1` server answered `/v1` search over `[::1]`, while `0.0.0.0`, `::`,
+`127.0.0.2`, `[::1]` and `127.0.0.1.example` were refused. The ruling's drop-in is a counterfactual:
+`refuse_to_bind` calling `addr_is_loopback` fails the unit test and the binary test at `::1`.
+`docs/architecture.md`'s crate graph gains the edge.
+
+PATCH inside the unreleased 1.7.0: no surface's answer changed, so `UPGRADING.md` owes nothing and
+`config check` has nothing new to detect. Three defects found on the way are filed rather than fixed:
+the banner prints `http://::1:<port>`, which no client accepts (O399); a bare `::1` passes both
+listen-address pre-flights and then dies at the orchestrator's bind (O400); and `serve-http` opens
+the vault before it applies its bind rule (O401).
+
+### A destruction's receipt survives a bad `--sign` or an unwritable `--out` (O262)
+
+**`forget`, `admission deny` and `retention sweep` lost their receipt to a typo.** All three read
+the `--sign` identity and wrote `--out` only after the store had destroyed the drawers and
+committed, each through `?`. A missing signing file, a file that was not a signing identity, or an
+output path that could not be written exited 1 over drawers already gone — and dropped the receipt,
+which can never be minted again: the unkeyed content fingerprints it carries are stored nowhere, by
+design. Measured on the unfixed tree: `forget --sign <missing>` destroyed the drawer and exited 1;
+`forget --sign <key> --out <directory>` destroyed it and printed nothing on stdout; `admission deny
+--sign <missing>` destroyed the pending row and `retention sweep --sign <missing>` both aged drawers.
+
+Now, in the order a command meets them: the identity is read and parsed BEFORE the vault is opened
+(`receipt::signing_identity` — a `SigningIdentity` exists only once `signer_of` has parsed its
+bytes), so a bad one refuses with nothing opened, sent or destroyed, `forget --backend`'s remote
+delete included; and once the drawers are gone the receipt's delivery is attempted before anything
+else is written (`receipt::deliver`) — `--out` FIRST, durably (a synced temporary renamed into
+place and its directory synced, since the destruction itself is committed with `synchronous=FULL`),
+and only then the summary lines and warnings. An `--out` that cannot be written puts the receipt's
+JSON on stdout — the bytes the file would have held — through the stdout door's flushed write
+(O287), and only then fails, exit 1, saying either *the drawers ARE destroyed, so their receipt is
+printed on stdout instead* or, when the door reports that stdout did not take it (its reader gone,
+or a write failed), that *the receipt is lost* — never claiming a copy went out that did not. A
+signing failure, unreachable once the identity was checked, delivers the receipt whole and unsigned
+and never writes it where a signed one was asked for. Without `--out`, stdout is the destination; a
+receipt it does not take is said lost on stderr and the door folds the exit (141 for a reader that
+left). A retention
+sweep that is NOT clean still exits 2 when its `--out` fails, the write error printed beside the
+verdict: exit 1 would tell a script to retry a tamper verdict. The dry-run sweep checks `--sign`
+too, so a scheduled preview meets the identity the real run will need; a sweep that destroyed
+nothing has no receipt, so its `--out` fails as an ordinary write and claims no destruction. The
+three commands' `--out` and `--sign` help says what now happens. `--out` is deliberately
+not probed ahead — a probe is a write before the destruction, the effect O212 removed from every
+read-only door, and a path writable when probed can still fail when written.
+
+`/v1` and the orchestrator carry no such flags and were read for the shape: `/v1`'s three
+destructions answer the receipt in the response body, and the orchestrator's `ops` prints the
+engine's body before any status check. One gap of that kind was found and filed rather than built
+(below).
+
+Gates. Four CLI integration tests, RED on the unfixed tree and GREEN after —
+`a_forget_whose_signing_identity_is_unusable_destroys_nothing` (a missing and a malformed identity,
+then the premise that a real one destroys and signs),
+`a_forget_whose_out_cannot_be_written_still_hands_over_the_receipt`,
+`an_admission_deny_keeps_its_receipt_through_a_bad_sign_or_out` and
+`a_retention_sweep_keeps_its_receipt_through_a_bad_sign_or_out` (a missing identity on the real
+and the dry run, a dry run's unwritable `--out` claiming nothing, a clean sweep's unwritable
+`--out` at exit 1, a sweep made not clean by a flipped mirror column at exit 2, and a sweep with
+nothing aged out and a missing identity) — each asserting the drawers' presence from the database,
+and each delivered receipt saved and verified, signature included, by `verify-forgetting`. Three
+more, from the independent review: `o262_a_sweep_writes_its_out_file_before_any_stdout_write`
+(stdout a reader that left: exit 141; stdout `/dev/full`: exit 1; a sweep not clean into a reader
+that left: exit 2 — each with the file on disk and its receipt verifying),
+`o262_a_forget_says_its_receipt_is_lost_when_stdout_did_not_take_it`, and
+`o262_a_bad_sign_refuses_before_forget_reaches_a_mirror` (a listener the test holds is contacted by
+`forget --backend` with no `--sign`, and never with a missing one). Five unit tests on the module
+and one on the door. Six checks in the e2e suite through the release binary. Counterfactuals, each
+on the fixed tree with its edit asserted present and the CLI recompiled: no stdout fallback fails
+three unit tests and the three `--out` integration tests; an unsigned receipt written to `--out`
+fails the signing unit test; the delivery error returned before the sweep's verdict fails the sweep
+test at its exit-2 arm; a dry run exempted from the check fails it at its dry-run arm; a dry run's
+report routed through the receipt delivery fails it at its dry-run `--out` arm; the first build's
+sweep — the summary through `println!` before `--out` — exits 101 into a reader that left; a
+fallback that ignores the door's answer claims a copy went out; and a check moved below
+`open_index` answers with the backend's error. Two defects of my own were caught before the first
+commit: the first precheck named the sweep's arm above the arm that projects its report, which
+`every_hand_projected_report_field_reaches_the_cli` reads from the first naming, so that gate
+failed until the identity was read through a method; and the first sweep build told a dry run whose
+`--out` failed that the drawers were destroyed. **An independent review then found five more, all
+mine**: the sweep printed its summary before writing `--out`, so a stdout on `/dev/full` panicked
+(101) after the destruction with no file (measured by the review: both drawers gone) — the same
+class as `forget`'s mirror warning and a not-clean sweep's verdict line; the fallback's "printed on
+stdout instead" did not ask whether stdout took it; a real sweep with nothing aged out and a bad
+`--sign` used to exit 0 and now exits 1, which `UPGRADING.md` understated; `--out` was written with
+no `fsync`; and the O264 relation was a note rather than a reciprocal `Relations:` line. A real
+corpus — the LoCoMo feed mined into eight wings of a sealed vault, 680 drawers: a whole-wing forget
+refused twice with all 85 drawers kept, then with `--out` a directory destroyed 85 in 68 ms and put a
+29,919-byte receipt on stdout that verifies; a deny and a 170-drawer sweep the same, both verifying;
+`VERIFY OK` on both vaults.
+
+Filed beside it: O405 — a destruction through the orchestrator whose receipt exceeds the
+256 MiB body ceiling is destroyed on the engine and its receipt refused at the control plane
+(288 to 289 bytes per drawer on `/v1`, measured in two runs, so about 930,000 drawers in one
+destruction).
+
+PATCH inside the unreleased 1.7.0: no documented contract moves; a defect is gone. Three
+observable changes are in `UPGRADING.md`: a sweep with a bad `--sign` now exits 1 when it has
+nothing to destroy — a dry run, or a real sweep with nothing aged out, both of which exited 0
+without reading the file — and a sweep that is not clean and whose `--out` fails now exits 2 where
+it exited 1. `config check` cannot see any of them.
+
+### `verify` names a drawer whose HMAC verifies over covered meta that does not parse (O231)
+
+`verify` walked such a row, counted it, and reported it in no leg — on the argument that every read
+reports it as a corrupt row — so it answered `VERIFY OK` over a drawer nothing could read, and `backup
+create`, which gates on that verdict, archived it as clean. Now it is a finding in `bad_records` with
+its own reason, and the verdict fails on every renderer: the CLI prints it under a new `unreadable:`
+line (`UNREADABLE: <id>: its HMAC verifies and its covered meta does not parse, so every read refuses
+it`) beside an `hmac failures:` count that keeps meaning a failed HMAC, MCP counts both, and `/v1`
+carries the line in `bad_records` — one string per record, a failed HMAC still a bare id byte for byte.
+`backup create` refuses such a vault and `backup restore` such an archive. A key rotation is not
+refused over it, by O232's ruling: the rotation re-tags the same bytes without parsing them, so the row
+is exactly as detectable afterwards.
+
+**The entry said the row needed the key, and it does not.** A drawer's tag covers its id, meta and
+content joined by a 0x1f separator, with no lengths, and serialized meta never holds a raw 0x1f while
+at-rest content may, so a writer without the key can move the boundary between them and the tag still
+verifies. Measured on the LoCoMo feed mined into 64 wings of a sealed vault (5,440 drawers): 19 drawers
+qualified, one SQL statement that wrote no tag made all 19 unreadable, the previous binary answered
+`VERIFY OK` and archived a backup, and this one exits 2 naming exactly those 19 and refuses the backup.
+`verify`'s time is unchanged (0.21–0.35 s either way). The ambiguity itself is filed as O406.
+
+Gates: five store tests (the entry's gate with the key, the keyless move, the backup refusal with a
+rotation that leaves the row detectable, an archive that refuses to restore, and a supersession link
+citing the row, which still makes `verify` answer the drawer's `CorruptRow` rather than a verdict —
+pinned and handed to O269's "no row aborts `verify`"), and twelve `e2e` checks through the CLI, MCP and
+`/v1` on an hmac-only vault whose 0x1f arrived by `import`. With the silent arm restored four of the
+five store tests fail; against the base binary seven of the twelve e2e checks do.
+
+PATCH inside the unreleased 1.7.0: the defect was the silence. `UPGRADING.md` carries the entry, since
+a backup or a restore can now refuse a vault the previous binary accepted; `config check` cannot see
+it, and `verify --read-only` is the pre-flight.
+
+### `backup create` refuses a linked `.staging`, and a restore refuses a live vault holding any entry that is not a regular file (O273, O301)
+
+**O273.** `backups/.staging` is where every archive is built before one rename publishes it, and
+where the sweep removes a crashed backup's stage once it is an hour old. `Stage::begin` made it with
+`create_dir_all`, which follows a symbolic link planted at that name: the stage — the copied
+database — was built and published from wherever the link pointed, and the sweep removed every
+32-hex directory older than an hour there. `.staging` is now judged by `symlink_metadata` first, as
+O268's restore area is, and a link or anything but a directory refuses the backup before the sweep
+reads it or a stage is made in it — exit 1, and on `/v1` the 500 the restore area's identical
+refusal answers (an I/O-class state of the installation, never a verdict about the vault), naming
+the entry.
+
+**O301.** O283's link check named three entries — the vault directory, its database and its
+manifest. A restore now asks the vault delete's own survey (O291) — one rule for what a vault
+directory may hold when something replaces or removes it — at the door, before anything is staged,
+and again in the swap under the hold: any entry that is not a regular file refuses as O283's link
+does, exit 1 / `/v1` 400, naming it. Measured on the unfixed tree over the LoCoMo feed mined into
+sixteen wings (1,360 drawers), the filing was half right: a linked `vault.json.next` or `-shm` was
+renamed aside with the vault and removed as a link, what it named left behind, and a subdirectory
+was removed with the aside, its file included — each at exit 0 — but a linked `-wal` never
+reached the swap: SQLite opens every file it names with `O_NOFOLLOW` (`sqlite3.c` 3.46.0, line
+44737), so the restore's hold failed with a raw "unable to open database file" (`/v1` 500) only
+after the archive had been copied, opened and verified, 85–99 ms in; refused at the door now,
+in 7–24 ms. The O273 half on the same corpus: the unfixed backup through a linked `.staging`
+published its archive from the directory the link named and swept the stage-shaped directory
+there (exit 0, 93–143 ms); now it refuses in 16–28 ms with that directory unchanged.
+
+**And `/v1` asks before it lets go of its own handle.** The restore route released the server's
+cached handle on the vault first, and that handle's close unlinks `-wal` by NAME: a link put over
+the live `-wal` of a vault the server held was removed by the close and the restore answered 200
+(measured on the same corpus). The route now asks the door's refusal first —
+`refuse_irregular_live_vault`, one store function — and answers 400 with the link kept and the
+handle not released. The delete route has the same order by O291's ruling and is filed for one.
+
+Gates: a unit test in the vault crate and store tests for each, asserting the steps REACHED (a
+backup refused at the stage fires its manifest-read pause point and never `Pinned`; a restore
+refused at the door fires none, one refused by the swap fires `Held`) — because a refusal after
+staging leaves the same end state as one before it, which is exactly how the unfixed `-wal` case
+looked; `tests/cli.rs` and in-process `/v1` arms through both surfaces; source arms holding the
+order in `Stage::begin` and the ONE survey (`irregular_target` calls `deletes::survey`, the swap
+asks it, `linked_target` is gone); and seventeen e2e checks. PATCH inside the unreleased 1.7.0:
+each change removes a defect and moves no documented contract — O283's refusal names more of what
+it always meant. `UPGRADING.md` widens O283's note and adds one for a hand-made `.staging` link;
+`config check` sees neither, both being states of the data directory.
+
+### A command derives a passphrase's key once, not once per open (O211)
+
+Under `UNDERCROFT_PASSPHRASE` every manager open ran Argon2id — 64 MiB, three passes — and nothing
+kept its output, so `vault list` derived the same key once for the list and once per vault it
+described, and `vault rotate` and a `serve-http` start derived it twice. Counted from outside the
+process (each Argon2id run faults its 64 MiB afresh, 16,384 pages, over a key-file baseline of
+about 480): `vault list` over four vaults ran it 5 times, `vault rotate` and a `serve-http` start 2.
+
+Now each of those derives it once. `KeyCache` in `undercroft-vault` keeps the derived key against a
+SHA-256 digest of the passphrase and the salt bytes that produced it, both compared in constant time
+over fixed lengths, so it never keeps the passphrase itself; the CLI holds one in a `static` that
+every manager open goes through — the binary has one, `manager_in`. **It keeps a key only while a
+hold is alive**: `vault list`, `vault rotate` and `serve-http`'s start take one across their opens,
+and the last hold to drop zeroizes the key — `serve-http`'s before it serves. An open with no hold
+keeps nothing, so a command that opens once (`serve-mcp`, `mine`, `refine`) holds the master key
+exactly as long as its manager does, as before. **Only the derivation is cached, never the
+decision**: each open still surveys and classifies the data directory (O204) and reads `kdf.salt`
+before the cache is asked, so a deleted salt is still refused, a planted key file still
+contradicts, a replaced salt derives again, and a wrong passphrase derives its own key and meets
+the manifest MAC as before. The held key is a `SecretKey`, never written anywhere, and `Debug`
+prints only counts; a `process::exit` inside a hold would skip its zeroizing drop, as it skips every
+destructor, and none of the three holds encloses one. The multi-tenant server's `/v1` opens already
+shared the one manager it holds, and still derive nothing per request; the control plane derives
+nothing at all. `VaultManager::open_as` keeps deriving per call for library callers.
+
+**The first build kept the key for the whole process**, released only at a command's exit, so
+`serve-mcp`, `mine` and `refine` held the master key and a copy of the passphrase in the cache for
+their whole run, where before the key went with the manager after the one open. An independent
+review found it before merge; the holds above are the fix, and the passphrase digest replaced the
+copy.
+
+Measured on the LoCoMo feed mined into four sealed vaults of a passphrase installation (680
+drawers), three rounds, before (`5f5fe2f`) → after: `vault list` 1.30–2.20 s → 0.34–0.45 s, 5
+derivations → 1; `vault rotate` 0.80–0.90 s → 0.41–0.49 s, 2 → 1; a `serve-http` start to its first
+`/healthz` 0.45–1.12 s → 0.31–0.42 s, 2 → 1; `search` (one open) 1 → 1, unchanged. Peak RSS barely
+moves — the derivations ran one at a time, so the peak was one derivation's either way (`vault list`
+74,640–75,276 KiB → 71,040 KiB) — and what goes is the 64 MiB touched again per extra open. Eight
+`/v1` requests across the four vaults derived nothing before or after (2,523–2,617 faults between
+them, 1.4–53 ms each).
+
+Gates: at the manager, nine opens (the list's, one per vault on each posture for three vaults,
+and a server start's two) run Argon2id once and a wrong passphrase still meets `ManifestTampered`; at the key,
+the held key never answers for another passphrase or salt, every open still refuses a deleted salt
+and a planted key file while a key is held, the key-file source never reaches the cache, racing
+opens on a cold cache derive once, nothing is kept outside a hold and the last hold zeroizes, and
+Argon2id has one caller; at the binary, `serve-mcp`'s open path leaves the cache empty, and a
+source gate (`src/` recursively, literal spellings) counts its one manager open through the
+process cache, no uncached open, exactly three holds and none in `serve-mcp`, and a control plane
+that opens no manager. `tests/cli.rs` and four e2e checks drive the multi-open commands and a `/v1`
+server under a passphrase. Counterfactuals on a copy of the fixed tree: the held key never answering
+fails four gates, a cache keyed on the salt alone or the passphrase alone fails the
+other-input arm, a held key answering before the survey fails the classification gate (and the
+replaced-salt arm), the binary's opener put back to `open_as` fails the source gate, keeping a
+derivation outside a hold fails the three no-hold arms, and a hold added to `serve-mcp` fails the
+source gate. Re-measured with the holds built, the counts above stand.
+
+PATCH inside the unreleased 1.7.0: a cost goes, no documented contract moves, and nothing can stop a
+deployment, so `UPGRADING.md` owes nothing.
+
+### A key file is never visible under its name holding fewer bytes than were written, and a keygen never writes through a link (O210, O321)
+
+The palace key writer created `master.key` (or `kdf.salt`), then wrote it, then fsynced, so a crash
+between the create and the write left a short key, and every later start refused it with a message
+naming neither the file nor its length — with no vault ever sealed under that key. `bundle keygen`
+and `bundle sign-keygen` had an older shape still: they asked `exists()`, which follows a link, then
+wrote, then narrowed the mode, so a dangling link planted at `<data_dir>/bundle.key` read as absent
+and the secret was written through it, wherever it pointed, at exit 0 (measured on the binary
+before this change), and sat under the umask's permissions until the chmod.
+
+Now ONE private publisher writes every secret file, reached by the master key's witness-taking writer
+and by `keys::write_new_identity`, the keygens' door: an existing entry — a link included, dangling or
+not — is refused before a byte is written; the bytes go to a temp file named with a random nonce,
+created exclusively and owner-only from the open, fsynced, and only then hard-linked to the name,
+which fails if the name exists, so nothing is replaced and no link is followed; the directory is
+fsynced before the temp name is removed. A crash before the link leaves no key file, so the next
+start creates a whole one; after it, a whole key is there. A short key file already there — left by a
+crash under an earlier release — is refused naming the file and both lengths, and never rewritten.
+Where the link fails because the filesystem has no hard links (measured: `EPERM` on vfat, `ENOSYS`
+on a FUSE exFAT), the publisher falls back to the exclusive in-place create every earlier release
+used, never to a rename, which would replace a concurrent first start's key, and says so in a
+warning; on such a filesystem a crash inside that write can still leave a torn file, which the next
+start refuses by name. Which writer such a filesystem should get is filed for a ruling
+(O412). Every other link error — a full disk, an I/O error — refuses, and once the temp is
+whole a failure keeps it and names it; the in-place fallback never removes the name it created,
+which a concurrent start may already have loaded. A crash can leave a `<name>.tmp.<nonce>` file
+beside the key; nothing removes it, because it may hold the only copy of a key, and nothing reports
+it yet (O413). A file name over 218 bytes is refused, naming the temp it could not create.
+
+Gated by a crash seam beside the vault crate's fault seam, which stops the writer at each step as a
+killed process would — its cleanup included: at every step, for both key sources, the name never
+holds a short file and the next start loads the key under it, RED on the pre-O210 writer. Also: a
+short key refused by name on both postures, the fallback (owner-only, exclusive, its torn residual
+refused next start), two racing first starts holding one key (200 rounds green; RED at once with the
+link replaced by a rename), source gates (one `create_new`, one hard link, no rename, no mode narrowed
+after the fact, no removal in the fallback, and the private publisher reached by the key writer and
+the identity door alone, whose one caller is `write_identity` — RED with `write_identity`'s old body
+put back), two `tests/cli.rs` tests RED on the unfixed binary, and eight e2e checks, four RED on it.
+An independent review of the first build found its in-place fallback deleting, on a failed fsync, a
+name a concurrent start may already have sealed a vault under — and the fsynced temp with it — and the
+fallback taking every link error but "exists": both mine, both fixed before this landed, each gated
+by a fault seam and RED with the first build's code put back.
+Measured on a real 32 MiB vfat filesystem in a container: `ln` refused, `init` and `bundle keygen
+--out` succeed through the fallback with its warning, and `VERIFY OK`. Filed beside it: `config check`
+reads which key files exist and not their length, so it says ok over a key the start refuses
+(O410); a wrapped error prints its message twice in the CLI's error chain (O411); and
+one refine integration test reset its connection once under the full parallel suite (O414).
+
+PATCH inside the unreleased 1.7.0: a crash no longer leaves a short key, and a keygen over a link
+exits 1 where it wrote through a dangling one. `UPGRADING.md` carries the entry; `config check`
+cannot detect it.
 
 ## 1.6.1 — 2026-09-22
 

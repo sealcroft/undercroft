@@ -87,6 +87,20 @@ pub(crate) fn live(snap: &crate::chain::Snapshot<'_>) -> Result<(), StoreError> 
     Ok(())
 }
 
+/// The ids of every drawer mined from `source_file`, in the table's order —
+/// read by `delete_by_source`'s door and again inside its lock (ROADMAP O259).
+fn source_members(
+    conn: &rusqlite::Connection,
+    source_file: &str,
+) -> Result<Vec<String>, StoreError> {
+    let mut stmt =
+        conn.prepare("SELECT id FROM drawers WHERE json_extract(meta_json, '$.source_file') = ?1")?;
+    let ids = stmt
+        .query_map(params![source_file], |r| r.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(ids)
+}
+
 /// What a destruction says when SQLite rolled its transaction back under it.
 pub(crate) fn rolled_back() -> StoreError {
     StoreError::Sqlite(rusqlite::Error::SqliteFailure(
@@ -103,15 +117,46 @@ pub(crate) fn rolled_back() -> StoreError {
 /// admission ruling. Stated by every caller of the delete choke point —
 /// a required argument cannot be forgotten the way a call-site check can,
 /// and `Ruled` is one greppable token naming the only legitimate reason.
+///
+/// It reaches the choke point through [`Fenced`]: `destroy_in` takes the
+/// witness [`VaultStore::fence`] mints, and nothing else mints one, so a new
+/// destruction does not compile until its author has asked the fence and
+/// stated which of these two it is (ROADMAP O259/O260's review).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PendingEvidence {
     /// Refuse quarantine-pending drawers: destroying evidence that has no
     /// ruling behind it leaves an audit trail that cannot tell an
     /// admission decision from routine housekeeping.
     Protect,
-    /// The caller IS the ruling path (`admission allow`/`deny`), which has
-    /// already appended its `admission/<id>/<verdict>` record.
+    /// The caller IS a ruling path — `admission deny` or `admission allow` —
+    /// which appends its `admission/<id>/<verdict>` record in the same lock.
     Ruled,
+}
+
+/// Proof that the pending-evidence fence answered for ONE drawer inside a
+/// destruction's write lock — the only thing [`VaultStore::destroy_in`]
+/// accepts in place of an id.
+///
+/// Why a witness rather than a check at each call site: the fence WAS a
+/// call-site check before O255 and again after O259/O260 first landed, and a
+/// call-site check is one swallowed `?` away from destroying review evidence
+/// (the review's counterfactual: `delete_by_source`'s fence read through
+/// `unwrap_or(false)` destroyed a pending member, `Ok(3)`). Its field is
+/// private and it is minted in one place, so the compiler holds the rule; the
+/// lifetime ties it to the borrow of the lock's snapshot it was minted under,
+/// and it is consumed by the destruction it licenses.
+#[must_use = "a fence witness licenses one destruction; drop it only by refusing"]
+pub(crate) struct Fenced<'s> {
+    id: String,
+    _lock: std::marker::PhantomData<&'s ()>,
+}
+
+/// What every door says about review evidence it will not destroy.
+pub(crate) fn pending_refusal(id: &str) -> StoreError {
+    StoreError::Invalid(format!(
+        "{id} is quarantine-pending — rule on it with `admission allow`/`deny`; \
+         pending review evidence is not deletable"
+    ))
 }
 
 /// A drawer as listed: id, place, a content preview and provenance — never the whole content.
@@ -424,6 +469,26 @@ pub struct Tunnel {
     pub created_at: String,
 }
 
+/// What a tunnel create did (ROADMAP O236).
+///
+/// A tunnel's id is a function of its three declared fields, so a second
+/// create of the same tunnel names the row the first one wrote — and writes
+/// nothing, appending no chain record. The outcome is a type rather than a
+/// bare id because a caller that cannot tell the two apart reports a write
+/// that never happened, which is what every surface did until O236.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use = "a tunnel create may have written nothing; say which"]
+pub struct TunnelOutcome {
+    /// The tunnel's id, whether this call wrote the row or found it stored.
+    pub id: String,
+    /// `true` when this call inserted the row and appended `tunnel/{id}`;
+    /// `false` when a tunnel with this id was already stored, its row verified
+    /// under the vault's key, and nothing was written — no row, no chain
+    /// record, no anchor. A stored row that fails its tag is never `false`: the
+    /// create answers [`StoreError::Integrity`] instead.
+    pub created: bool,
+}
+
 /// Two entities that co-occur across drawers, with how often.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Hallway {
@@ -614,6 +679,32 @@ pub(crate) fn tunnel_canonical(
     created: &str,
 ) -> Vec<u8> {
     format!("tunnel\x1f{id}\x1f{from}\x1f{to}\x1f{label}\x1f{created}").into_bytes()
+}
+
+/// A tunnel row's tag, verified under the handle's key — the ONE decision
+/// [`VaultStore::list_tunnels`], [`VaultStore::follow_tunnel`] and a repeated
+/// [`VaultStore::create_tunnel`] share. A row that fails it is the integrity
+/// class, counted and signalled as a tamper event on every one of the three.
+fn verify_tunnel_tag(
+    vault: &undercroft_vault::Vault,
+    id: &str,
+    from: &str,
+    to: &str,
+    label: &str,
+    created: &str,
+    tag: &[u8],
+) -> Result<(), StoreError> {
+    vault
+        .verify_tag(&tunnel_canonical(id, from, to, label, created), tag)
+        .map_err(|_| {
+            undercroft_obs::hmac_verify_failed("tunnel");
+            undercroft_obs::event_hmac_fail(
+                vault.id(),
+                "tunnel",
+                undercroft_obs::TamperSite::default(),
+            );
+            StoreError::Integrity(format!("tunnel/{id}"))
+        })
 }
 
 impl VaultStore {
@@ -991,27 +1082,34 @@ impl VaultStore {
     /// destroy pending review evidence, so a new delete path does not compile
     /// until its author decides — the same shape the write choke point uses
     /// for the admission screen. `delete_drawer` states `Protect` and inherits
-    /// the fence; `admission allow` states `Ruled` for the queue row it has
-    /// just re-filed.
+    /// the fence; the rulings destroy the queue row inside their own locks,
+    /// each stating `Ruled` to [`VaultStore::fence`] — `admission deny`
+    /// through `attest_in`, `admission allow` in its own lock (ROADMAP O260).
     ///
-    /// **One write lock, one body** (ROADMAP O255): the fence, the existence
-    /// check and the destruction run inside the lock, through
+    /// **One write lock, one body** (ROADMAP O255): the existence check, the
+    /// fence and the destruction run inside the lock, through
     /// [`VaultStore::destroy_in`], which holds the crate's only
-    /// `DELETE FROM drawers WHERE id`. The attested paths — `forget`, the
-    /// retention sweep, `admission deny` — run the same body for every drawer
-    /// of a destruction inside ONE lock (`forget.rs`).
+    /// `DELETE FROM drawers WHERE id` and takes the fence's witness. The
+    /// attested paths — `forget`, the retention sweep, `admission deny` — run
+    /// the same body for every drawer of a destruction inside ONE lock
+    /// (`forget.rs`), and so do the two unattested ones that destroy as part of
+    /// something larger: `delete_by_source`, the whole source in one lock
+    /// (ROADMAP O259), and `admission allow`, whose re-filed write, ruling and
+    /// queue-row removal are one lock (ROADMAP O260).
+    ///
+    /// Pending evidence is refused BEFORE the lock too, so a refusal neither
+    /// takes the write lock nor reaches the lock's error arm, which drops the
+    /// RAM caches; the in-lock fence is the authority, for a row that became
+    /// pending in between.
     pub(crate) fn delete_drawer_ruled(
         &mut self,
         id: &str,
         evidence: PendingEvidence,
     ) -> Result<bool, StoreError> {
+        if evidence == PendingEvidence::Protect && self.is_quarantine_pending(id)? {
+            return Err(pending_refusal(id));
+        }
         self.under_destruction_lock(|s, snap| {
-            if evidence == PendingEvidence::Protect && s.is_quarantine_pending(id)? {
-                return Err(StoreError::Invalid(format!(
-                    "{id} is quarantine-pending — rule on it with `admission \
-                     allow`/`deny`; pending review evidence is not deletable"
-                )));
-            }
             let present: bool = snap.conn().query_row(
                 "SELECT EXISTS(SELECT 1 FROM drawers WHERE id = ?1)",
                 params![id],
@@ -1020,10 +1118,41 @@ impl VaultStore {
             if !present {
                 return Ok((false, Vec::new()));
             }
+            let fenced = s.fence(snap, id, evidence)?;
             let tables = DerivedTables::read(s)?;
-            let gone = s.destroy_in(snap, &tables, id)?;
+            let gone = s.destroy_in(snap, &tables, fenced)?;
             s.settle_derived(snap, &tables, std::slice::from_ref(&gone))?;
             Ok((true, vec![gone]))
+        })
+    }
+
+    /// **The pending-evidence fence, as a witness** — the one place a
+    /// [`Fenced`] is minted, and so the one door into
+    /// [`VaultStore::destroy_in`]. Inside a write lock only, on that lock's
+    /// snapshot: under `Protect` a drawer the clear `wing` column names as
+    /// awaiting a ruling is refused (the column the reviewer's queue
+    /// enumerates on — see [`VaultStore::is_quarantine_pending`]), and any
+    /// error reading it propagates; under `Ruled` the caller is a ruling and
+    /// says so in one greppable token.
+    pub(crate) fn fence<'s>(
+        &self,
+        snap: &'s crate::chain::Snapshot<'_>,
+        id: &str,
+        evidence: PendingEvidence,
+    ) -> Result<Fenced<'s>, StoreError> {
+        if snap.origin() != crate::chain::Origin::WriteLocked {
+            return Err(StoreError::Invalid(
+                "the pending-evidence fence answers only inside a destruction's write lock \
+                 (ROADMAP O259); this is a defect in the caller, not in the vault"
+                    .into(),
+            ));
+        }
+        if evidence == PendingEvidence::Protect && self.is_quarantine_pending(id)? {
+            return Err(pending_refusal(id));
+        }
+        Ok(Fenced {
+            id: id.to_string(),
+            _lock: std::marker::PhantomData,
         })
     }
 
@@ -1047,12 +1176,18 @@ impl VaultStore {
     ///
     /// A row count other than one refuses: a drawer another handle destroyed
     /// after the caller's check is not this destruction's to attest.
-    pub(crate) fn destroy_in(
+    ///
+    /// It takes no id: it takes the [`Fenced`] witness [`VaultStore::fence`]
+    /// minted for the drawer, so the pending-evidence fence is asked by
+    /// construction rather than by each caller remembering to (O259/O260's
+    /// review).
+    pub(crate) fn destroy_in<'s>(
         &self,
-        snap: &crate::chain::Snapshot<'_>,
+        snap: &'s crate::chain::Snapshot<'_>,
         tables: &DerivedTables,
-        id: &str,
+        fenced: Fenced<'s>,
     ) -> Result<Destroyed, StoreError> {
+        let id = fenced.id.as_str();
         if snap.origin() != crate::chain::Origin::WriteLocked {
             return Err(StoreError::Invalid(
                 "a drawer is destroyed only inside a write lock (ROADMAP O255); this is a \
@@ -1212,40 +1347,74 @@ impl VaultStore {
     /// review evidence. The whole call is refused BEFORE anything is
     /// deleted rather than half-way through: failing mid-loop would destroy
     /// part of a source and then report an error, leaving the operator
-    /// unsure what survived. That holds for pending evidence only: each drawer
-    /// is still its own write lock, so a busy lock or a failing statement at
-    /// drawer k leaves k−1 deleted, and the fence query below reads a failure
-    /// as "not pending" — ROADMAP O259.
+    /// unsure what survived.
+    ///
+    /// **The whole source is ONE write lock** (ROADMAP O259, O255's body).
+    /// The promise above held for pending evidence alone: each drawer was
+    /// deleted in its own write lock, so a busy lock or a failing statement
+    /// at drawer k left k−1 deleted and returned an error, and the
+    /// pending-evidence pre-flight read a failed fence query as "not pending"
+    /// (`unwrap_or(false)`), letting the loop reach a pending drawer the
+    /// choke point then refused mid-loop. Now the destruction is one lock in
+    /// which the source's members are read again and each passes the fence
+    /// (its witness is what `destroy_in` takes), every error propagates, and a
+    /// refusal anywhere — the fence, a busy `BEGIN`, a failing statement —
+    /// deletes nothing. Unattested, as before: this path mints no receipt.
+    ///
+    /// **The door runs first, outside the lock**: the members and the fence
+    /// over every one of them, errors propagated, so the refusal names every
+    /// pending member and neither takes the write lock nor reaches the lock's
+    /// error arm, which drops the RAM caches — an agent driving
+    /// `undercroft_delete_by_source` at a source holding review evidence must
+    /// not be able to empty them at will. An empty source takes no lock. The
+    /// in-lock fence is the authority, for a member that became pending — a
+    /// flagged re-mine of the same file — between the two.
     pub fn delete_by_source(&mut self, source_file: &str) -> Result<u64, StoreError> {
-        let ids: Vec<String> = self
-            .conn
-            .prepare("SELECT id FROM drawers WHERE json_extract(meta_json, '$.source_file') = ?1")?
-            .query_map(params![source_file], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
-        let pending: Vec<&String> = ids
-            .iter()
-            .filter(|id| self.is_quarantine_pending(id).unwrap_or(false))
-            .collect();
+        let ids = source_members(&self.conn, source_file)?;
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut pending: Vec<&str> = Vec::new();
+        for id in &ids {
+            if self.is_quarantine_pending(id)? {
+                pending.push(id);
+            }
+        }
         if !pending.is_empty() {
             return Err(StoreError::Invalid(format!(
                 "{source_file} has {} drawer(s) awaiting admission review \
                  ({}) — rule on them with `admission allow`/`deny` first; \
                  nothing was deleted",
                 pending.len(),
-                pending
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                pending.join(", ")
             )));
         }
-        let mut count = 0u64;
-        for id in ids {
-            if self.delete_drawer(&id)? {
-                count += 1;
-            }
+        self.under_destruction_lock(|s, snap| s.delete_source_in(snap, source_file))
+    }
+
+    /// `delete_by_source`'s body inside its write lock: the members read
+    /// again on the lock's snapshot, the fence over every one before any is
+    /// destroyed, then the destruction.
+    fn delete_source_in(
+        &self,
+        snap: &crate::chain::Snapshot<'_>,
+        source_file: &str,
+    ) -> Result<(u64, Vec<Destroyed>), StoreError> {
+        let ids = source_members(snap.conn(), source_file)?;
+        if ids.is_empty() {
+            return Ok((0, Vec::new()));
         }
-        Ok(count)
+        let mut fenced = Vec::with_capacity(ids.len());
+        for id in &ids {
+            fenced.push(self.fence(snap, id, PendingEvidence::Protect)?);
+        }
+        let tables = DerivedTables::read(self)?;
+        let mut gone = Vec::with_capacity(fenced.len());
+        for f in fenced {
+            gone.push(self.destroy_in(snap, &tables, f)?);
+        }
+        self.settle_derived(snap, &tables, &gone)?;
+        Ok((gone.len() as u64, gone))
     }
 
     /// Whether `id` names a drawer currently awaiting an admission ruling.
@@ -1981,13 +2150,18 @@ impl VaultStore {
     // Tunnels — cross-wing connections
     // ------------------------------------------------------------------
 
-    /// Declare a tunnel between two wings — both names validated, the label screened — appended to the chain as `tunnel/{id}` and anchored.
+    /// Declare a tunnel between two wings — both names validated, the label
+    /// screened — appended to the chain as `tunnel/{id}` and anchored when
+    /// this call wrote it. A tunnel already stored under the same id is a
+    /// no-op that appends nothing, and [`TunnelOutcome::created`] says which —
+    /// once the stored row verifies; one that fails its tag is
+    /// [`StoreError::Integrity`], with nothing written.
     pub fn create_tunnel(
         &mut self,
         from_wing: &str,
         to_wing: &str,
         label: &str,
-    ) -> Result<String, StoreError> {
+    ) -> Result<TunnelOutcome, StoreError> {
         // Wing names go through the traversal guard here, at the tunnel's own
         // choke point — CLAUDE.md states that as an invariant and this path
         // honoured none of it, on any surface (`/v1` import, CLI import and
@@ -2061,16 +2235,50 @@ impl VaultStore {
             .vault
             .tag(&tunnel_canonical(&id, from_wing, to_wing, label, &created));
         let tx = self.conn.transaction()?;
-        tx.execute(
+        // **A create that inserted nothing records nothing** (ROADMAP O236).
+        // The id is a function of the three declared fields, so a repeated
+        // create — an agent calling `undercroft_create_tunnel` twice, an
+        // import restoring a vault's own export — conflicts and writes no
+        // row. This appended `tunnel/{id}` regardless, with a tag computed
+        // over a fresh `created_at` that no row carries: a record claiming a
+        // write that never happened, which is why O234's version check can
+        // ask a tunnel only whether it was destroyed (`replay.rs`). The
+        // insert's own row count decides, inside the transaction that would
+        // append, so two creates racing for one id cannot both say they wrote
+        // it — `delete_tunnel` below has always had this shape.
+        let inserted = tx.execute(
             "INSERT INTO tunnels (id, from_wing, to_wing, label, tag, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO NOTHING",
             params![id, from_wing, to_wing, label, tag.as_slice(), created],
-        )?;
-        chain_append(&tx, &self.vault, Namespace::Tunnel, &id, &tag, &created)?;
+        )? > 0;
+        if inserted {
+            chain_append(&tx, &self.vault, Namespace::Tunnel, &id, &tag, &created)?;
+        } else {
+            // **"It already exists" is a claim about the row the id names, so
+            // that row is read and its tag verified before the claim is made**
+            // (O236's review). Decided by the id alone, a row whose `to_wing`
+            // was edited offline answered "nothing was written" to the agent
+            // and "already present" to an import, while every read of it
+            // refused as tampered. The read is inside the transaction that
+            // found the conflict, so the row judged is the row that blocked the
+            // insert; a failure is the integrity class, with nothing written.
+            let (from, to, lbl, stored, at): (String, String, String, Vec<u8>, String) = tx
+                .query_row(
+                    "SELECT from_wing, to_wing, label, tag, created_at FROM tunnels WHERE id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )?;
+            verify_tunnel_tag(&self.vault, &id, &from, &to, &lbl, &at, &stored)?;
+        }
         tx.commit()?;
-        self.anchor()?;
-        Ok(id)
+        if inserted {
+            self.anchor()?;
+        }
+        Ok(TunnelOutcome {
+            id,
+            created: inserted,
+        })
     }
 
     /// Every tunnel, or those touching one wing, tag-verified on the way out.
@@ -2092,17 +2300,7 @@ impl VaultStore {
             .collect::<Result<_, _>>()?;
         let mut out = Vec::new();
         for (id, from, to, label, tag, created) in rows {
-            self.vault
-                .verify_tag(&tunnel_canonical(&id, &from, &to, &label, &created), &tag)
-                .map_err(|_| {
-                    undercroft_obs::hmac_verify_failed("tunnel");
-                    undercroft_obs::event_hmac_fail(
-                        self.vault.id(),
-                        "tunnel",
-                        undercroft_obs::TamperSite::default(),
-                    );
-                    StoreError::Integrity(format!("tunnel/{id}"))
-                })?;
+            verify_tunnel_tag(&self.vault, &id, &from, &to, &label, &created, &tag)?;
             if wing.map(|w| from == w || to == w).unwrap_or(true) {
                 out.push(Tunnel {
                     id,
@@ -2163,17 +2361,7 @@ impl VaultStore {
         let to = match row {
             None => None,
             Some((from, to, label, tag, created)) => {
-                self.vault
-                    .verify_tag(&tunnel_canonical(id, &from, &to, &label, &created), &tag)
-                    .map_err(|_| {
-                        undercroft_obs::hmac_verify_failed("tunnel");
-                        undercroft_obs::event_hmac_fail(
-                            self.vault.id(),
-                            "tunnel",
-                            undercroft_obs::TamperSite::default(),
-                        );
-                        StoreError::Integrity(format!("tunnel/{id}"))
-                    })?;
+                verify_tunnel_tag(&self.vault, id, &from, &to, &label, &created, &tag)?;
                 Some(to)
             }
         };
@@ -2771,7 +2959,8 @@ impl Namespace {
     pub const fn is_destruction(self) -> bool {
         match self {
             // `destroy_in` (the crate's one `DELETE FROM drawers WHERE id`,
-            // ROADMAP O255, inherited by the public delete and by the attested
+            // ROADMAP O255, inherited by the public delete, the whole-source
+            // delete, the allow's removal of its queue row and the attested
             // destruction `forget`, the retention sweep and admission deny
             // share) and `delete_tunnel`.
             Namespace::Del => true,
@@ -3052,7 +3241,8 @@ mod history_tests {
             .unwrap();
         let tunnel = s
             .create_tunnel("notes", "field", "both about the marsh")
-            .unwrap();
+            .unwrap()
+            .id;
         s.set_wing_trust("notes", "trusted").unwrap();
         s.set_retention("notes", None, 3650).unwrap();
         s.clear_retention("notes", None).unwrap();
@@ -3831,7 +4021,7 @@ mod tests {
         // PREMISE 1: a clean label still works, and the READ hands it back
         // verbatim. Without this the refusals below could be a tunnel path
         // that simply stopped working.
-        let id = s.create_tunnel("notes", "archive", "see also").unwrap();
+        let id = s.create_tunnel("notes", "archive", "see also").unwrap().id;
         let listed = s.list_tunnels(None).unwrap();
         assert!(
             listed.iter().any(|t| t.id == id && t.label == "see also"),
@@ -3897,7 +4087,7 @@ mod tests {
         let (_d, mut s) = store();
         s.upsert(&drawer("notes", "r", "an ordinary drawer", 0))
             .unwrap();
-        let good = s.create_tunnel("notes", "archive", "see also").unwrap();
+        let good = s.create_tunnel("notes", "archive", "see also").unwrap().id;
         assert!(
             s.follow_tunnel(&good, 5).is_ok(),
             "premise: an honest tunnel follows"
@@ -5291,15 +5481,238 @@ mod tests {
         let (_d, mut s) = store();
         s.upsert(&drawer("wing-b", "r", "destination memory", 0))
             .unwrap();
-        let id = s.create_tunnel("wing-a", "wing-b", "related work").unwrap();
+        let id = s
+            .create_tunnel("wing-a", "wing-b", "related work")
+            .unwrap()
+            .id;
         assert_eq!(s.list_tunnels(Some("wing-a")).unwrap().len(), 1);
         let dest = s.follow_tunnel(&id, 5).unwrap();
         assert_eq!(dest.len(), 1);
-        s.create_tunnel("wing-b", "wing-c", "next hop").unwrap();
+        assert!(
+            s.create_tunnel("wing-b", "wing-c", "next hop")
+                .unwrap()
+                .created
+        );
         let reach = s.traverse("wing-a", 3).unwrap();
         assert!(reach.iter().any(|(w, d)| w == "wing-c" && *d == 2));
         assert!(s.delete_tunnel(&id).unwrap());
         assert!(s.verify().unwrap().ok());
+    }
+
+    /// **ROADMAP O236: a create that wrote nothing appends nothing, and says
+    /// so.** `create_tunnel` inserted with `ON CONFLICT DO NOTHING` and then
+    /// appended `tunnel/{id}` unconditionally, with a tag over a fresh
+    /// `created_at` that no row carries — so a repeated create left a record
+    /// claiming a write that never happened, and every surface reported it as
+    /// a creation.
+    ///
+    /// The fix's own behaviour is counterfactualled too, not only the
+    /// defect's: a re-create AFTER a delete is a real write and must still
+    /// append (a fix keyed on "a `tunnel/{id}` record exists" would refuse
+    /// it), and a different label is a different tunnel (a fix keyed on the
+    /// two wings alone would swallow it).
+    #[test]
+    fn o236_a_repeated_tunnel_create_appends_nothing_and_says_so() {
+        let (_d, mut s) = store();
+        let records = |s: &VaultStore, id: &str| -> i64 {
+            s.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM audit WHERE record_id = ?1",
+                    params![format!("tunnel/{id}")],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let all_records = |s: &VaultStore| -> i64 {
+            s.conn
+                .query_row("SELECT COUNT(*) FROM audit", [], |r| r.get(0))
+                .unwrap()
+        };
+        let row = |s: &VaultStore, id: &str| -> (Vec<u8>, String) {
+            s.conn
+                .query_row(
+                    "SELECT tag, created_at FROM tunnels WHERE id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+        };
+        // The gate the entry names: the tunnel's NEWEST record carries the
+        // tag the row holds.
+        let newest_tag = |s: &VaultStore, id: &str| -> Vec<u8> {
+            s.conn
+                .query_row(
+                    "SELECT tag FROM audit WHERE record_id = ?1 ORDER BY seq DESC LIMIT 1",
+                    params![format!("tunnel/{id}")],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+
+        let first = s.create_tunnel("notes", "archive", "see also").unwrap();
+        assert!(first.created, "premise: the first create writes the row");
+        assert_eq!(records(&s, &first.id), 1, "premise: and records it once");
+        let (tag, created_at) = row(&s, &first.id);
+        assert_eq!(newest_tag(&s, &first.id), tag);
+        let height = all_records(&s);
+        let chain = s.chain_state().unwrap();
+
+        let again = s.create_tunnel("notes", "archive", "see also").unwrap();
+        assert_eq!(
+            again,
+            TunnelOutcome {
+                id: first.id.clone(),
+                created: false
+            },
+            "the same tunnel, and the reply says nothing was written"
+        );
+        assert_eq!(
+            records(&s, &first.id),
+            1,
+            "a repeated create appended a record for a write that never happened"
+        );
+        assert_eq!(all_records(&s), height, "nothing else was appended");
+        assert_eq!(
+            s.chain_state().unwrap(),
+            chain,
+            "the committed head and height did not move"
+        );
+        assert_eq!(
+            row(&s, &first.id),
+            (tag.clone(), created_at),
+            "the row is untouched"
+        );
+        assert_eq!(
+            newest_tag(&s, &first.id),
+            tag,
+            "the newest record carries the row's tag"
+        );
+
+        // A different label is a different tunnel, and a real write.
+        let other = s.create_tunnel("notes", "archive", "contrast").unwrap();
+        assert!(other.created && other.id != first.id);
+        assert_eq!(records(&s, &other.id), 1);
+
+        // Destroy, then create again: a real write above the tombstone, so it
+        // records — and its record is the one carrying the NEW row's tag.
+        assert!(s.delete_tunnel(&first.id).unwrap());
+        let back = s.create_tunnel("notes", "archive", "see also").unwrap();
+        assert_eq!(back.id, first.id);
+        assert!(back.created, "a re-create after a delete is a write");
+        assert_eq!(records(&s, &first.id), 2);
+        let (tag_back, _) = row(&s, &first.id);
+        assert_eq!(newest_tag(&s, &first.id), tag_back);
+
+        let r = s.verify().unwrap();
+        assert!(r.ok() && r.version_replay.is_empty(), "{r:?}");
+    }
+
+    /// **ROADMAP O236's security half, found by its independent review: a
+    /// repeated create used to SILENCE O234's destruction check.** A tunnel
+    /// deleted and written back offline is a resurrection `verify` reports
+    /// (arm 3: the row is present after its `del/tunnel/{id}` record). A 1.6.x
+    /// repeat then appended a `tunnel/{id}` record ABOVE that tombstone, and
+    /// arm 3 read it as a newer write — `verify` went from failed to OK, with
+    /// the resurrected row still served. Measured by the review on a copy with
+    /// the old append: `ok=false replay=1` before the repeat, `ok=true
+    /// replay=0` after. Now the repeat appends nothing and the finding stands.
+    #[test]
+    fn o236_a_repeat_cannot_hide_a_resurrected_tunnel() {
+        let (_d, mut s) = store();
+        let first = s.create_tunnel("notes", "archive", "see also").unwrap();
+        let (from, to, label, tag, at): (String, String, String, Vec<u8>, String) = s
+            .conn
+            .query_row(
+                "SELECT from_wing, to_wing, label, tag, created_at FROM tunnels WHERE id = ?1",
+                params![first.id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert!(s.delete_tunnel(&first.id).unwrap());
+        // The offline writer: the genuine row, bytes as they were, put back.
+        s.conn
+            .execute(
+                "INSERT INTO tunnels (id, from_wing, to_wing, label, tag, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![first.id, from, to, label, tag, at],
+            )
+            .unwrap();
+        let before = s.verify().unwrap();
+        assert!(
+            !before.ok() && before.version_replay.len() == 1,
+            "premise: the resurrection is found before any repeat: {:?}",
+            before.version_replay
+        );
+        // The row is genuine, so its tag verifies and the repeat is a no-op —
+        // which is exactly why it must not append.
+        let again = s.create_tunnel("notes", "archive", "see also").unwrap();
+        assert!(
+            !again.created,
+            "premise: the repeat met the written-back row"
+        );
+        let after = s.verify().unwrap();
+        assert!(
+            !after.ok() && after.version_replay.len() == 1,
+            "a repeated create laundered a resurrected tunnel: {:?}",
+            after.version_replay
+        );
+    }
+
+    /// **ROADMAP O236's review, the gap: "already exists" was decided by the
+    /// id alone.** A row whose `to_wing` was edited offline still answered
+    /// `created: false` — "nothing was written" on MCP and the CLI, "already
+    /// present" on an import — while `list_tunnels` refused it and `verify`
+    /// failed. The no-op now verifies the row that blocked the insert and
+    /// answers the integrity class, writing nothing; an untouched tunnel's
+    /// repeat is the control.
+    #[test]
+    fn o236_a_repeat_over_a_tampered_tunnel_row_is_the_integrity_class() {
+        let (_d, mut s) = store();
+        let clean = s.create_tunnel("notes", "field", "control").unwrap();
+        let first = s.create_tunnel("notes", "archive", "see also").unwrap();
+        s.conn
+            .execute(
+                "UPDATE tunnels SET to_wing = 'elsewhere' WHERE id = ?1",
+                params![first.id],
+            )
+            .unwrap();
+        assert!(
+            matches!(s.list_tunnels(None), Err(StoreError::Integrity(_))),
+            "premise: every read of the edited row refuses"
+        );
+        let audit_rows = |s: &VaultStore| -> i64 {
+            s.conn
+                .query_row("SELECT COUNT(*) FROM audit", [], |r| r.get(0))
+                .unwrap()
+        };
+        let height = audit_rows(&s);
+
+        let again = s.create_tunnel("notes", "archive", "see also");
+        assert!(
+            matches!(&again, Err(StoreError::Integrity(id)) if id == &format!("tunnel/{}", first.id)),
+            "a repeat over a tampered row must not answer 'already exists': {again:?}"
+        );
+        assert_eq!(audit_rows(&s), height, "and it wrote nothing");
+        let to: String = s
+            .conn
+            .query_row(
+                "SELECT to_wing FROM tunnels WHERE id = ?1",
+                params![first.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(to, "elsewhere", "the evidence is left as found");
+
+        // The control: a row that verifies is still the plain no-op.
+        let control = s.create_tunnel("notes", "field", "control").unwrap();
+        assert_eq!(
+            control,
+            TunnelOutcome {
+                id: clean.id,
+                created: false
+            }
+        );
+        assert!(!s.verify().unwrap().ok(), "verify still reports the edit");
     }
 
     #[test]

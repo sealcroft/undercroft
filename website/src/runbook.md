@@ -59,6 +59,7 @@ undercroft verify --vault <vault>
 # records checked: 1284
 # hmac failures:   1
 #   TAMPERED: 5a2fc91d…
+# unreadable:      0
 # audit chain:     ok
 # orphan labels:   0
 # mirror drift:    0
@@ -73,6 +74,14 @@ tags against the committed head and the manifest anchor, so editing the
 tampered record's bytes does not move it. `audit chain: BROKEN` is a separate
 finding — the audit trail itself was edited or truncated, or the database was
 rolled back relative to the anchor.
+
+`unreadable:` counts drawers whose HMAC VERIFIES while their covered meta does
+not parse (ROADMAP O231), each named `UNREADABLE: <id>: …`. No read can return
+one, it fails the verdict, and `backup create` refuses while it stands — but a
+key rotation is not refused over it, since a rotation cannot launder it. It can
+be made without the key (ROADMAP O406), so treat it as evidence:
+preserve the directory first, then restore an archive that holds the drawer
+intact, or `drawer delete` it if its content is not needed.
 
 **A broken chain also stops work before you get here, and that is deliberate
 (ROADMAP O237).** Every read that DECIDES from an audit label — a
@@ -264,7 +273,11 @@ restore**, not a repair-in-place of forged bytes:
    that rotation answered a compromise). Emit a new external witness afterwards;
    an older one reads the restored vault as rolled back, which it is. If the live
    vault's directory holds a manifest and **no database**, restore refuses (O270):
-   stop every process, move that directory aside, then restore. If a restore is
+   stop every process, move that directory aside, then restore. If it holds a
+   symbolic link or anything but regular files — a link planted at its `-wal` or
+   `vault.json.next` included — or is a link itself, restore refuses and names the
+   entry (O283, O301): move the entry out, keeping it with your evidence, then
+   restore. If a restore is
    interrupted between its two renames, `vault create`, `init` and another
    restore refuse and print the `mv` that puts the replaced vault back.
 2. **If a single *mined* record was hit and you have the source document**,
