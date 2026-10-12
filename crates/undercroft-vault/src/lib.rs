@@ -968,6 +968,12 @@ pub mod fixture {
         /// A secret file's hard link fails as on a filesystem without hard
         /// links (ROADMAP O210), so the publish takes its in-place fallback.
         SecretLink,
+        /// A secret file's hard link fails with an ordinary I/O error, which
+        /// the publish refuses, keeping its temp (ROADMAP O210).
+        SecretLinkIo,
+        /// The in-place fallback's fsync fails after its bytes were written
+        /// (ROADMAP O210): the name it created is kept, and so is the temp.
+        SecretInPlaceSync,
     }
 
     /// Where a secret-file write stops as a process killed at that point

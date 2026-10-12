@@ -1767,19 +1767,24 @@ wrote, then narrowed the mode, so a dangling link planted at `<data_dir>/bundle.
 and the secret was written through it, wherever it pointed, at exit 0 (measured on the binary
 before this change), and sat under the umask's permissions until the chmod.
 
-Now ONE publisher writes every secret file, `keys::publish_new_secret`: an existing entry — a link
-included, dangling or not — is refused before a byte is written; the bytes go to a temp file named
-with a random nonce, created exclusively and owner-only from the open, fsynced, and only then
-hard-linked to the name, which fails if the name exists, so nothing is replaced and no link is
-followed; then the temp name is removed and the directory fsynced. A crash before the link leaves no
-key file, so the next start creates a whole one; after it, a whole key is there. A short key file
-already there — left by a crash under an earlier release — is refused naming the file and both
-lengths, and never rewritten. Where a filesystem has no hard links (FAT, exFAT), the publisher falls
-back to the exclusive in-place create every earlier release used, never to a rename, which would
-replace a concurrent first start's key, and says so in a warning; on such a filesystem a crash
-inside that write can still leave a torn file, which the next start refuses by name. A crash can
-leave a `<name>.tmp.<nonce>` file beside the key; nothing removes it, because it may hold the only
-copy of a key.
+Now ONE private publisher writes every secret file, reached by the master key's witness-taking writer
+and by `keys::write_new_identity`, the keygens' door: an existing entry — a link included, dangling or
+not — is refused before a byte is written; the bytes go to a temp file named with a random nonce,
+created exclusively and owner-only from the open, fsynced, and only then hard-linked to the name,
+which fails if the name exists, so nothing is replaced and no link is followed; the directory is
+fsynced before the temp name is removed. A crash before the link leaves no key file, so the next
+start creates a whole one; after it, a whole key is there. A short key file already there — left by a
+crash under an earlier release — is refused naming the file and both lengths, and never rewritten.
+Where the link fails because the filesystem has no hard links (measured: `EPERM` on vfat, `ENOSYS`
+on a FUSE exFAT), the publisher falls back to the exclusive in-place create every earlier release
+used, never to a rename, which would replace a concurrent first start's key, and says so in a
+warning; on such a filesystem a crash inside that write can still leave a torn file, which the next
+start refuses by name. Which writer such a filesystem should get is filed for a ruling
+(O-NEW-O210-3). Every other link error — a full disk, an I/O error — refuses, and once the temp is
+whole a failure keeps it and names it; the in-place fallback never removes the name it created,
+which a concurrent start may already have loaded. A crash can leave a `<name>.tmp.<nonce>` file
+beside the key; nothing removes it, because it may hold the only copy of a key, and nothing reports
+it yet (O-NEW-O210-4). A file name over 218 bytes is refused, naming the temp it could not create.
 
 Gated by a crash seam beside the vault crate's fault seam, which stops the writer at each step as a
 killed process would — its cleanup included: at every step, for both key sources, the name never
@@ -1787,13 +1792,18 @@ holds a short file and the next start loads the key under it, RED on the pre-O21
 short key refused by name on both postures, the fallback (owner-only, exclusive, its torn residual
 refused next start), two racing first starts holding one key (200 rounds green; RED at once with the
 link replaced by a rename), source gates (one `create_new`, one hard link, no rename, no mode narrowed
-after the fact, and the publisher called by the key writer and `write_identity` alone, across every
-crate — RED with `write_identity`'s old body put back), two `tests/cli.rs` tests RED on the unfixed
-binary, and eight e2e checks, four RED on it.
+after the fact, no removal in the fallback, and the private publisher reached by the key writer and
+the identity door alone, whose one caller is `write_identity` — RED with `write_identity`'s old body
+put back), two `tests/cli.rs` tests RED on the unfixed binary, and eight e2e checks, four RED on it.
+An independent review of the first build found its in-place fallback deleting, on a failed fsync, a
+name a concurrent start may already have sealed a vault under — and the fsynced temp with it — and the
+fallback taking every link error but "exists": both mine, both fixed before this landed, each gated
+by a fault seam and RED with the first build's code put back.
 Measured on a real 32 MiB vfat filesystem in a container: `ln` refused, `init` and `bundle keygen
 --out` succeed through the fallback with its warning, and `VERIFY OK`. Filed beside it: `config check`
 reads which key files exist and not their length, so it says ok over a key the start refuses
-(O-NEW-O210-1), and a wrapped error prints its message twice in the CLI's error chain (O-NEW-O210-2).
+(O-NEW-O210-1); a wrapped error prints its message twice in the CLI's error chain (O-NEW-O210-2); and
+one refine integration test reset its connection once under the full parallel suite (O-NEW-O210-5).
 
 PATCH inside the unreleased 1.7.0: a crash no longer leaves a short key, and a keygen over a link
 exits 1 where it wrote through a dangling one. `UPGRADING.md` carries the entry; `config check`

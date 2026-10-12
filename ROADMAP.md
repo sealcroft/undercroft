@@ -14449,6 +14449,18 @@ disk, a vanished temp) it costs that one write its crash protection and nothing 
 stated**: on such a filesystem a crash inside the in-place write leaves a torn file, which the next start
 refuses by name.
 
+**Corrected 2026-10-12, beside the paragraph above, by the independent review recorded below.** "Settled
+by the tree" overstated it. What the tree settles is narrower: never a rename that replaces (O204), and
+never the in-place fallback where the filesystem DOES link — so the fallback now answers only a link
+error that reads as "unsupported", and every other link error refuses. The "never a refusal" bullet's
+argument was false: no document named FAT, exFAT or removable media as a destination before this unit,
+so refusing there would not have stopped a documented destination being accepted. Which writer a
+filesystem without links should get — the in-place create as built, a no-replace rename, or a refusal —
+is not settled by the tree, and is O-NEW-O210-3's question for a ruling and the maintainer. And "costs
+that one write its crash protection and nothing else" was wrong twice over: on a filesystem that links,
+the fallback opened the torn-key window for a full disk or an I/O error, and its own error path deleted
+a name a concurrent start may already have loaded.
+
 **What a crash leaves, and why nothing sweeps it.** Before the link, the temp holds bytes nothing was
 ever sealed under; after it and before the temp name is removed, the temp is a second name for the
 published key, owner-only like it. A sweep on O254's manifest-temp precedent was considered and not
@@ -14501,6 +14513,49 @@ like every `KeyError`, prints twice in the CLI's error chain — filed as O-NEW-
 PATCH inside the unreleased 1.7.0: a key file's write stops leaving a short key, and the refusal of one
 names it. `UPGRADING.md` carries one entry with O321's; `config check` cannot detect it.
 
+#### REVISED 2026-10-12 after an independent review of the first build — five findings, all mine
+
+1. **A DEFECT the first build introduced.** When the in-place fallback's fsync failed after its write
+   had landed, `write_in_place` removed the name and the publisher then removed the fsynced temp. On a
+   filesystem without links the name is visible from its `create_new`, so a concurrent first start —
+   O204's own race model — could load all 32 bytes and seal a vault in that window; with both copies
+   gone every later start answered `MaterialMissing`. O204's writer never deleted anything. Now the
+   fallback removes nothing (`InPlace::{NameTaken, NotCreated, Written}` decides what is kept), a failure
+   once the temp is whole keeps the temp and names both paths, and the directory is fsynced BEFORE the
+   temp twin is removed. Gate: `o210_a_failed_in_place_write_keeps_the_name_and_the_temp` through a new
+   fault, `Fault::SecretInPlaceSync` — RED with the first build's two removals put back (the name gone).
+2. **The fallback answers only a filesystem without links.** Measured on Linux 6.6 in a privileged
+   container: `link()` gets `EPERM` on vfat (the kernel VFS's code for any filesystem with no link
+   operation, its exFAT driver included — by reading `vfs_link`; that driver is not in this kernel),
+   `ENOSYS` on a FUSE exFAT, and an SMB3 mount of Samba LINKS. `links_unsupported` reads `EPERM`,
+   `ENOSYS`, `EOPNOTSUPP` (and `ErrorKind::Unsupported`); BSD and macOS by their documented codes;
+   Windows' `ERROR_INVALID_FUNCTION`/`ERROR_NOT_SUPPORTED` UNMEASURED — no FAT volume could be made here
+   without changing the host. Every other link error refuses with the temp kept and named. Gates:
+   `o210_a_link_error_that_is_not_unsupported_refuses_and_keeps_the_temp` (`Fault::SecretLinkIo`; RED
+   with the fallback put back on every error) and `o210_only_an_unsupported_link_takes_the_fallback`
+   (the table, Linux's names for its numbers, and ENOENT, EIO, EACCES, ENOSPC, EROFS, EXDEV, EMLINK
+   refusing). The record above is corrected beside; the rest of the question is O-NEW-O210-3.
+3. **LOW: the publisher was `pub` and took no witness**, so it could write `<root>/master.key` past
+   O204's classifier, held only by a basename-keyed source count. It is private now; its doors are the
+   witness-taking `create_master` and `keys::write_new_identity`, the keygens' door, which writes an
+   identity and refuses an existing entry and nothing else, as `write_identity` never did either. The
+   `CreateWitness` doc is true again. Gates: `key_material_has_exactly_one_writer` (four publisher
+   references in `keys.rs`, no `pub fn`, no removal in the fallback) and the CLI's
+   `o321_every_secret_file_is_written_by_the_one_publisher` (the publisher in `keys.rs` alone, the
+   identity door called once, from `write_identity`).
+4. **Never-sweep stands (O204)**, and that nothing REPORTS a leftover `<name>.tmp.<32 hex>` — one left
+   just after the publish is a second hard link to the live key — is filed as O-NEW-O210-4.
+5. **Trivial: the temp name is 37 bytes longer than the target's**, so an `--out` file name over 218
+   bytes (on a 255-byte limit) failed with a bare ENAMETOOLONG. Stated in the publisher's doc, and the
+   error now names the temp it could not create: `o210_a_name_too_long_for_its_temp_is_refused_naming_the_temp`.
+
+Re-run on the merged tree (`main` at `5108dfa` merged in): the vault crate 96 lib tests, the CLI's 127
+unit and 49 integration tests, clippy on the default and telemetry builds, rustfmt, and a Windows
+cross-check of both crates. One CLI integration test,
+`a_partial_refine_is_recorded_on_the_cli_and_over_v1_and_an_empty_one_is_not`, failed once inside the
+full parallel run with `ConnectionReset` in its `raw_http` helper and passed 20 of 20 alone; it touches
+no key path, and is filed as O-NEW-O210-5.
+
 ### O321 — CLOSED 2026-10-08: `bundle keygen` and `bundle sign-keygen` refuse an existing path, a link included, before a byte is written, and write the secret owner-only from its creation
 
 **Filed 2026-10-06 by O212's ruling (its refuter).** `write_identity`
@@ -14521,6 +14576,10 @@ existing name and follows no link. The refusal keeps its words (`refusing to ove
 key`, which `tests/e2e.sh` already matched) and adds that a link counts and nothing was written. The
 filing's shape (`create_new` of the final name) is the publisher's fallback; the temp-and-link
 publish is O210's, which the filing named as the same step.
+
+**Revised 2026-10-12 (O210's REVISED record, item 3):** the publisher is private now, and
+`write_identity` reaches it through `keys::write_new_identity`, the identity door; the gate below counts
+that door's one caller.
 
 **P-Q3e, measured.** On `5f5fe2f`'s binary `bundle keygen` over a dangling link at
 `<data_dir>/bundle.key` exits 0 and writes the identity through it. On this tree both keygens exit 1,
@@ -48739,6 +48798,60 @@ twice; O204's refusals and every `KeyError` read the same way since they were wr
 wrapping variants become `#[error(transparent)]` or carry a context phrase without `{0}`, or the CLI
 prints the head alone where a link repeats the next. **Gate**: the torn-key refusal and an O204
 refusal each print their sentence once, and every e2e check matching on a refusal's words still passes.
+
+### O-NEW-O210-3 — which writer a filesystem without hard links gets for a key: in-place create, a no-replace rename, or a refusal
+
+**Filed 2026-10-12 by the independent review of O210's build; for a ruling panel, and the maintainer.**
+O210 publishes a key file by hard-linking a fsynced temp, so its name never holds a short key. Where
+`link()` answers "unsupported" (measured: `EPERM` on vfat, `ENOSYS` on a FUSE exFAT, Linux 6.6) it falls
+back to O204's exclusive in-place create, as built and as every release before 1.7.0 wrote, and warns —
+which keeps the torn-key window there: a crash inside that write leaves a short `master.key` that every
+later start refuses (by name since O210). The tree settles that the fallback is never a rename that
+REPLACES (O204) and never runs where the filesystem links (O210's revision). It does not settle which of
+three a linkless filesystem gets:
+- **the in-place create, as built** — first starts and `bundle keygen --out` onto FAT keep working; the
+  window stays, stated;
+- **a no-replace rename** (`renameat2(RENAME_NOREPLACE)` on Linux, `renamex_np(RENAME_EXCL)` on macOS,
+  `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING` on Windows) — the reviewer measured the Linux call
+  publishing a fresh name on vfat and refusing an existing one, which closes the window; it costs a
+  second `unsafe` block or a new dependency (`rustix`, `windows-sys`), and `CLAUDE.md` makes a second
+  `unsafe` the maintainer's decision;
+- **a refusal** — no key is ever created in place; a first start or a keygen onto such a filesystem stops,
+  which no document promised would work (none named FAT or removable media before O210) but which works
+  today.
+
+**Gate, once ruled**: through the fixture's link fault, the ruled writer's crash at every step leaves
+either no file at the name or a whole one (or the refusal, writing nothing); on a real vfat mount the
+same. Windows' link error on FAT is unmeasured and owed by whichever option is ruled.
+
+### O-NEW-O210-4 — nothing reports a secret file's leftover temp, including one that is a second hard link to the live key
+
+**Filed 2026-10-12 by the independent review of O210's build.** O210's publisher leaves a
+`<name>.tmp.<32 hex digits>` file beside a key or an identity when a crash interrupts it, and nothing
+removes one — a decision O204 settles: a file that may hold the only copy of a key is never deleted on a
+guess. But nothing REPORTS one either, in the data directory's root or beside an `--out` path: neither
+`config check` nor a start. One left by a crash just after the hard link is a second name for the live
+`master.key`, owner-only like it, so an operator retiring or moving the key leaves a copy behind without
+being told.
+
+**Shape**: `config check`'s data-directory arm (a stat, so it opens nothing) and a writable start warn
+naming each leftover temp of `master.key` or `kdf.salt` — and say whether it is the same file as the key
+(a hard link, by device and inode where the platform gives them) or a separate copy — never removing it.
+**Gate**: a planted leftover of each kind is named by both, the files byte-identical afterwards.
+
+### O-NEW-O210-5 — `a_partial_refine_is_recorded_on_the_cli_and_over_v1_and_an_empty_one_is_not` failed once with a reset connection
+
+**Filed 2026-10-12 by O210's revision; measured once, the mechanism unmeasured.** In one full run of the
+CLI's integration tests (in parallel with the other tests) this test failed at its `raw_http` helper
+(`tests/cli.rs`): `read_to_string` answered `ConnectionReset` (`os error 104`) from the server it drives.
+Alone it passed 20 runs of 20. It touches refine and `/v1`, nothing O210 changed. A server that closes a
+connection while request bytes remain unread makes the peer's read see a reset, which the vendored
+`tiny_http`'s ending of a connection behind an unread body (O114) would produce; whether that is what
+fired here is unmeasured.
+
+**Shape**: measure first — loop the test 200 times under the full parallel suite and capture which
+request reset — then make the helper's request one the server reads whole, or read the reply before the
+close. **Gate**: 200 looped runs under load with no reset.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

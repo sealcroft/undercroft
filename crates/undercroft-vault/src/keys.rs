@@ -332,7 +332,9 @@ pub enum KeyPlan {
 
 /// Proof that [`plan`] classified an installation as fresh under a writable
 /// posture. Its field is private, so nothing outside this module can make
-/// one, and the one function that writes key material takes it.
+/// one, and the one function that writes key material takes it — the
+/// publisher beneath it is private too, and its only other door,
+/// [`write_new_identity`], writes an identity (ROADMAP O210, O321).
 #[derive(Debug)]
 pub struct CreateWitness {
     source: KeySource,
@@ -544,16 +546,17 @@ pub fn new_vault_salt() -> [u8; SALT_LEN] {
     salt
 }
 
-/// How [`publish_new_secret`] gave a secret its final name (ROADMAP O210).
+/// How a secret file got its final name (ROADMAP O210).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Published {
     /// A whole, fsynced temp file was hard-linked to the final name, so the
     /// name never held fewer bytes than were written.
     Linked,
-    /// The filesystem refused the hard link, so the final name was created
+    /// The filesystem has no hard links, so the final name was created
     /// exclusively and written in place — O204's writer, kept as the
-    /// fallback. A crash inside that write leaves a torn file, which the next
-    /// load refuses by name; a warning says so when this happens.
+    /// fallback until O-NEW-O210-3 is ruled. A crash inside that write leaves
+    /// a torn file, which the next load refuses by name; a warning says so
+    /// when this happens.
     InPlace,
 }
 
@@ -561,10 +564,20 @@ pub enum Published {
 /// nonce — the manifest writer's (`lib.rs`), so one shape names both.
 const SECRET_TEMP_INFIX: &str = ".tmp.";
 
-/// Write `data` as a NEW secret file at `path` — key material or an identity
-/// — and never anything else there (ROADMAP O210, O321). The ONE way this
-/// workspace writes a secret file: the master key and the KDF salt through
-/// [`master_key`]'s private writer, an identity through the CLI's keygens.
+/// Write a bundle identity NEW at `path` — the door `bundle keygen` and
+/// `bundle sign-keygen` use (ROADMAP O321). It is the master key's publisher
+/// (O210) without the classifier's witness, because an identity refers to
+/// no installation and its path is the operator's: it refuses an existing
+/// entry and nothing else, as `write_identity` never did either. The
+/// installation's own key material is written by [`master_key`] alone,
+/// through the private writer that takes [`plan`]'s witness (O204).
+pub fn write_new_identity(path: &Path, data: &[u8]) -> io::Result<Published> {
+    publish_new_secret(path, data)
+}
+
+/// Write `data` as a NEW secret file at `path`, and never anything else there
+/// (ROADMAP O210, O321). Private: its doors are the witness-taking key
+/// writer and [`write_new_identity`].
 ///
 /// - **An existing entry is refused before a byte is written**, a link
 ///   included, dangling or not: `symlink_metadata`, then the publish below,
@@ -573,34 +586,39 @@ const SECRET_TEMP_INFIX: &str = ".tmp.";
 ///   never wider), never narrowed after the bytes exist; Windows has no mode
 ///   to set here, as for every key file.
 /// - **The name never holds fewer bytes than were written**: the bytes go to
-///   `<name>.tmp.<random nonce>` in the same directory — created with
+///   `<name>.tmp.<32 hex digits>` in the same directory — created with
 ///   `create_new`, so a planted link at it is refused rather than followed —
 ///   which is fsynced and only then hard-linked to `path`. `link` fails if
 ///   `path` exists, so a concurrent writer's secret is never replaced and a
-///   link planted there is never followed. The temp name is then removed and
-///   the directory fsynced. A crash before the link leaves no file at
-///   `path`; after it, a whole one.
-/// - **Where the filesystem has no hard links** (FAT and exFAT among them),
-///   it falls back to O204's writer: `create_new` of `path` itself, mode at
-///   the open, then the bytes and an fsync, and it warns. It never falls back
-///   to a rename, which replaces an existing file on Unix — a concurrent
-///   start's key, sealed under by then, among them. Any link failure other
-///   than "it exists" takes the fallback, not only the codes a linkless
-///   filesystem returns, which differ by platform: the fallback is exclusive
-///   too, so on an error a linking filesystem also raises (a full disk, a
-///   vanished temp) it costs that one write its crash protection and nothing
-///   else, and it is the writer every release before 1.7.0 used. Its
-///   residual, stated: a crash inside the in-place write leaves a torn file,
-///   which [`master_key`] refuses by name.
+///   link planted there is never followed. The directory is fsynced, so the
+///   name is durable before its temp twin is removed, and synced again. A
+///   crash before the link leaves no file at `path`; after it, a whole one.
+///   The temp name is 37 bytes longer than `path`'s, so a file name longer
+///   than 218 bytes (on a 255-byte limit) is refused naming the temp.
+/// - **Where the filesystem has no hard links** — and only there: the link
+///   error must read as "unsupported" ([`links_unsupported`]) — it falls back
+///   to O204's writer: `create_new` of `path` itself, mode at the open, the
+///   bytes and an fsync, and it warns. Never a rename, which replaces an
+///   existing file on Unix — a concurrent start's key, sealed under by then,
+///   among them. Which writer a linkless filesystem SHOULD get is
+///   O-NEW-O210-3's question; this one is what every release before 1.7.0
+///   used. Its residual, stated: a crash inside the in-place write leaves a
+///   torn file, which [`master_key`] refuses by name.
+/// - **Any other link error refuses**, the temp kept: a full disk or an I/O
+///   error on a filesystem that links never opens the torn-key window.
+/// - **Once a name holds bytes, nothing here removes it**, and once the temp
+///   is whole it is removed only after the secret is durable under its name
+///   or the name is another writer's: a concurrent start may already have
+///   loaded what a failing in-place write put there and sealed a vault under
+///   it (O204's race), so a failure after that point keeps both files and
+///   names both.
 ///
 /// What a crash leaves besides: before the link, the temp file, holding
 /// bytes nothing was ever sealed under; after it and before the temp name is
 /// removed, a second name for the published secret, owner-only like it.
-/// Nothing sweeps either. A file named like a temp that holds a WHOLE secret
-/// may be the last copy of it — an in-place fallback's temp is exactly that
-/// once the final name is lost — and removing key material on a guess is
-/// what O204's refusals are written never to advise.
-pub fn publish_new_secret(path: &Path, data: &[u8]) -> io::Result<Published> {
+/// Nothing sweeps either (O204: never delete key material on a guess); that
+/// nothing REPORTS them is O-NEW-O210-4.
+fn publish_new_secret(path: &Path, data: &[u8]) -> io::Result<Published> {
     use std::io::Write;
     let name = path.file_name().ok_or_else(|| {
         io::Error::new(
@@ -622,7 +640,16 @@ pub fn publish_new_secret(path: &Path, data: &[u8]) -> io::Result<Published> {
     tmp_name.push(hex::encode(nonce));
     let tmp = dir.join(tmp_name);
 
-    let mut file = open_new_private(&tmp)?;
+    let mut file = open_new_private(&tmp).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!(
+                "{} was not written: creating its temp file {} failed ({e})",
+                path.display(),
+                tmp.display()
+            ),
+        )
+    })?;
     #[cfg(any(test, feature = "test-fixture"))]
     {
         use crate::fixture::{secret_crash, SecretCrash};
@@ -645,7 +672,7 @@ pub fn publish_new_secret(path: &Path, data: &[u8]) -> io::Result<Published> {
         return Err(crash);
     }
 
-    match link_seam().and_then(|()| fs::hard_link(&tmp, path)) {
+    let published = match link_seam().and_then(|()| fs::hard_link(&tmp, path)) {
         Ok(()) => {
             #[cfg(any(test, feature = "test-fixture"))]
             if let Some(crash) =
@@ -653,70 +680,203 @@ pub fn publish_new_secret(path: &Path, data: &[u8]) -> io::Result<Published> {
             {
                 return Err(crash);
             }
-            if let Err(e) = fs::remove_file(&tmp) {
-                undercroft_obs::diag_warn!(
-                    "{} was written, and its temp name {} could not be removed ({e}); it is a \
-                     second name for the same secret, owner-only like it (ROADMAP O210)",
-                    path.display(),
-                    tmp.display()
-                );
-            }
-            sync_dir(dir)?;
-            Ok(Published::Linked)
+            Published::Linked
         }
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            // Another writer's name: these bytes were never published under
+            // it nor returned, so nothing was sealed under them.
             let _ = fs::remove_file(&tmp);
-            Err(already_exists(path))
+            return Err(already_exists(path));
         }
+        Err(link) if links_unsupported(&link) => match write_in_place(path, data) {
+            Ok(()) => {
+                undercroft_obs::diag_warn!(
+                    "{}: this filesystem has no hard links ({link}), so the file was created \
+                     in place; a crash while it was being written would have left a torn \
+                     file, which the next start refuses by name (ROADMAP O210)",
+                    path.display()
+                );
+                Published::InPlace
+            }
+            Err(InPlace::NameTaken) => {
+                let _ = fs::remove_file(&tmp);
+                return Err(already_exists(path));
+            }
+            Err(InPlace::NotCreated(e)) => {
+                return Err(kept(
+                    e,
+                    format!(
+                        "{} was not written: creating it in place failed",
+                        path.display()
+                    ),
+                    &tmp,
+                ))
+            }
+            Err(InPlace::Written(e)) => {
+                return Err(kept(
+                    e,
+                    format!(
+                        "{} was created in place and its write did not complete; it is kept, \
+                         because another start may already have loaded it",
+                        path.display()
+                    ),
+                    &tmp,
+                ))
+            }
+        },
         Err(link) => {
-            let placed = write_in_place(path, data);
-            let _ = fs::remove_file(&tmp);
-            placed.map_err(|e| match e.kind() {
-                io::ErrorKind::AlreadyExists => already_exists(path),
-                _ => e,
-            })?;
-            sync_dir(dir)?;
-            undercroft_obs::diag_warn!(
-                "{}: this filesystem refused a hard link ({link}), so the file was created in \
-                 place; a crash while it was being written would have left a torn file, which \
-                 the next start refuses by name (ROADMAP O210)",
-                path.display()
-            );
-            Ok(Published::InPlace)
+            return Err(kept(
+                link,
+                format!(
+                    "{} was not written: the hard link that publishes it failed with an error \
+                     that does not mean this filesystem lacks links",
+                    path.display()
+                ),
+                &tmp,
+            ))
         }
+    };
+    // The name is durable BEFORE its temp twin goes, so no ordering of the
+    // two directory updates on a power loss can lose both.
+    sync_dir(dir).map_err(|e| {
+        kept(
+            e,
+            format!(
+                "{} was written and the directory sync after it failed",
+                path.display()
+            ),
+            &tmp,
+        )
+    })?;
+    if let Err(e) = fs::remove_file(&tmp) {
+        undercroft_obs::diag_warn!(
+            "{} was written, and its temp name {} could not be removed ({e}); it holds the \
+             same secret, owner-only like it (ROADMAP O210)",
+            path.display(),
+            tmp.display()
+        );
     }
+    // Best effort: a removal this sync does not make durable leaves the temp
+    // behind after a power loss, a leftover O-NEW-O210-4 names; the secret
+    // is durable under its name either way.
+    let _ = sync_dir(dir);
+    Ok(published)
 }
 
-/// The fallback publish (ROADMAP O210): O204's exclusive in-place writer. A
-/// failed write or fsync removes the file this call created — it holds no
-/// whole secret, and nothing has read it as one.
-fn write_in_place(path: &Path, data: &[u8]) -> io::Result<()> {
+/// A failure after the temp file holds the whole secret: the temp is KEPT
+/// and the error names it, beside the name that was being published.
+fn kept(e: io::Error, what: String, tmp: &Path) -> io::Error {
+    io::Error::new(
+        e.kind(),
+        format!(
+            "{what} ({e}); the whole secret is kept at {}, which nothing removes (ROADMAP O210)",
+            tmp.display()
+        ),
+    )
+}
+
+/// Whether a hard link failed because the filesystem has none (ROADMAP O210)
+/// — the only failure the in-place fallback answers. Measured on Linux 6.6:
+/// `EPERM` on vfat, the code the kernel's VFS returns for every filesystem
+/// without a link operation (its exFAT driver among them), and `ENOSYS` on a
+/// FUSE exFAT; an SMB3 mount of Samba links. `EOPNOTSUPP` is what BSD and
+/// macOS document for a filesystem without links. Windows'
+/// `ERROR_INVALID_FUNCTION` and `ERROR_NOT_SUPPORTED` are unmeasured. `EPERM`
+/// is read as unsupported because the source is a regular file this process
+/// created and owns a moment before, in the same directory.
+fn links_unsupported(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::Unsupported
+        || e.raw_os_error()
+            .is_some_and(|code| LINKS_UNSUPPORTED.contains(&code))
+}
+
+/// `EPERM`, `ENOSYS`, `EOPNOTSUPP`.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const LINKS_UNSUPPORTED: &[i32] = &[1, 38, 95];
+/// `EPERM`, `ENOTSUP`, `ENOSYS`, `EOPNOTSUPP`.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const LINKS_UNSUPPORTED: &[i32] = &[1, 45, 78, 102];
+/// `EPERM`, `EOPNOTSUPP`, `ENOSYS`.
+#[cfg(any(
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+const LINKS_UNSUPPORTED: &[i32] = &[1, 45, 78];
+/// `ERROR_INVALID_FUNCTION`, `ERROR_NOT_SUPPORTED`.
+#[cfg(windows)]
+const LINKS_UNSUPPORTED: &[i32] = &[1, 50];
+/// Nothing classified: every link error refuses.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    windows
+)))]
+const LINKS_UNSUPPORTED: &[i32] = &[];
+
+/// How the in-place fallback failed — which decides what is kept.
+enum InPlace {
+    /// The name exists: another writer's.
+    NameTaken,
+    /// Nothing was created at the name.
+    NotCreated(io::Error),
+    /// The name was created and its write or fsync failed: it may hold bytes
+    /// a concurrent start has loaded, so it stays.
+    Written(io::Error),
+}
+
+/// The fallback publish (ROADMAP O210): O204's exclusive in-place writer. It
+/// removes nothing — O204's writer never did, and a name it created may
+/// already have been loaded.
+fn write_in_place(path: &Path, data: &[u8]) -> Result<(), InPlace> {
     use std::io::Write;
-    let mut file = open_new_private(path)?;
+    let mut file = open_new_private(path).map_err(|e| match e.kind() {
+        io::ErrorKind::AlreadyExists => InPlace::NameTaken,
+        _ => InPlace::NotCreated(e),
+    })?;
     #[cfg(any(test, feature = "test-fixture"))]
     if let Some(crash) = crate::fixture::secret_crash(crate::fixture::SecretCrash::InPlaceTorn) {
-        file.write_all(&data[..data.len() / 2])?;
-        return Err(crash);
+        file.write_all(&data[..data.len() / 2])
+            .map_err(InPlace::Written)?;
+        return Err(InPlace::Written(crash));
     }
-    let written = file.write_all(data).and_then(|()| file.sync_all());
-    drop(file);
-    if let Err(e) = written {
-        let _ = fs::remove_file(path);
-        return Err(e);
-    }
-    Ok(())
+    file.write_all(data)
+        .and_then(|()| in_place_sync_seam())
+        .and_then(|()| file.sync_all())
+        .map_err(InPlace::Written)
 }
 
-/// The fixture seam before the hard link: an armed fault in a test build
-/// fails the link as a filesystem without hard links does; nothing in
-/// production.
+/// The fixture seams: before the hard link, an armed `SecretLink` fails it as
+/// a filesystem without hard links does and `SecretLinkIo` as an ordinary
+/// I/O error; before the in-place fsync, `SecretInPlaceSync` fails that
+/// fsync. Nothing in production.
 #[cfg(any(test, feature = "test-fixture"))]
 fn link_seam() -> io::Result<()> {
-    crate::fixture::fire(crate::fixture::Fault::SecretLink)
+    use crate::fixture::{fire, Fault};
+    fire(Fault::SecretLink)
+        .map_err(|e| io::Error::new(io::ErrorKind::Unsupported, e.to_string()))?;
+    fire(Fault::SecretLinkIo)
 }
 
 #[cfg(not(any(test, feature = "test-fixture")))]
 fn link_seam() -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(any(test, feature = "test-fixture"))]
+fn in_place_sync_seam() -> io::Result<()> {
+    crate::fixture::fire(crate::fixture::Fault::SecretInPlaceSync)
+}
+
+#[cfg(not(any(test, feature = "test-fixture")))]
+fn in_place_sync_seam() -> io::Result<()> {
     Ok(())
 }
 
@@ -1128,12 +1288,33 @@ mod tests {
             .expect("premise: the test module marker");
         let body = &src[..end];
         let count = |needle: &str| body.matches(needle).count();
-        // ROADMAP O210: the one publisher, called by the key writer's two
-        // arms (the CLI's identity writer is the third caller, gated there).
+        // ROADMAP O210: the one publisher, PRIVATE, called by the key
+        // writer's two arms and the identity door (whose one caller, the
+        // CLI's `write_identity`, is gated there).
         assert_eq!(
             count(concat!("publish_new_", "secret(")),
-            3,
-            "definition + two calls"
+            4,
+            "definition + two key-writer calls + the identity door"
+        );
+        assert_eq!(
+            count(concat!("pub fn publish_new_", "secret")),
+            0,
+            "the publisher takes no witness, so it stays private"
+        );
+        assert_eq!(
+            count(concat!("write_new_", "identity(")),
+            1,
+            "the identity door: its definition, and no caller in this file"
+        );
+        // A name the fallback created may already have been loaded, so it
+        // removes nothing (the review of O210's first build).
+        let in_place = &body[body
+            .find(concat!("fn write_", "in_place("))
+            .expect("premise: the fallback")..];
+        let in_place = &in_place[..in_place.find("\n}\n").expect("premise: it closes")];
+        assert!(
+            !in_place.contains(concat!("remove_", "file(")),
+            "the fallback removes nothing"
         );
         assert_eq!(count(concat!("write_new_", "private(")), 0, "retired");
         assert_eq!(
@@ -1376,6 +1557,134 @@ mod tests {
             ),
             "{err}"
         );
+    }
+
+    /// **A failed in-place write keeps BOTH files** (the review of O210's
+    /// first build). Without hard links the name is visible from its
+    /// `create_new`, so a concurrent first start can load all 32 bytes and
+    /// seal a vault while the fsync is still to come. The first build removed
+    /// the name when that fsync failed and the caller then removed the
+    /// fsynced temp, leaving no copy of a key a vault may be sealed under —
+    /// every later start `MaterialMissing`. Now both stay and the error names
+    /// both, and the next start loads the key the name holds.
+    #[test]
+    fn o210_a_failed_in_place_write_keeps_the_name_and_the_temp() {
+        use crate::fixture::{fail_in_turn, Fault};
+        let root = tempdir().unwrap();
+        // The link fails as on vfat, then the in-place fsync fails.
+        fail_in_turn(Fault::SecretLink, Fault::SecretInPlaceSync);
+        let err = master_key(root.path(), None, Access::ReadWrite)
+            .err()
+            .expect("the in-place fsync fails");
+        assert_eq!(crate::fixture::armed(), None, "REACHED: both faults fired");
+        let at = root.path().join(MASTER_KEY_FILE);
+        let named = fs::read(&at).expect("the name the fallback created is kept");
+        assert_eq!(
+            named.len(),
+            KEY_LEN,
+            "its whole write landed before the fsync"
+        );
+        let temps = temps_of(root.path(), MASTER_KEY_FILE);
+        assert_eq!(temps.len(), 1, "the fsynced temp is kept");
+        assert_eq!(fs::read(&temps[0]).unwrap(), named, "the same secret");
+        let m = err.to_string();
+        assert!(
+            m.contains(&at.display().to_string()) && m.contains(&temps[0].display().to_string()),
+            "the error names both: {m}"
+        );
+        // A start that came in the window, or after: the key under the name.
+        assert_eq!(
+            key(root.path(), None).as_bytes().as_slice(),
+            named.as_slice()
+        );
+    }
+
+    /// **The fallback answers only a filesystem without links** (the review
+    /// of O210's first build): any other link error — a full disk, an I/O
+    /// error, a vanished temp — refuses, nothing is written at the name, and
+    /// the whole temp is kept and named. The first build fell back on every
+    /// error but "exists", opening the torn-key window on filesystems that
+    /// link. The next start, with the fault gone, links a whole key.
+    #[test]
+    fn o210_a_link_error_that_is_not_unsupported_refuses_and_keeps_the_temp() {
+        use crate::fixture::{fail_next, Fault};
+        let root = tempdir().unwrap();
+        fail_next(Fault::SecretLinkIo);
+        let err = master_key(root.path(), None, Access::ReadWrite)
+            .err()
+            .expect("an ordinary link error refuses");
+        assert_eq!(crate::fixture::armed(), None, "REACHED: the link failed");
+        assert!(
+            !entry_present(&root.path().join(MASTER_KEY_FILE)).unwrap(),
+            "nothing was written at the name: {err}"
+        );
+        let temps = temps_of(root.path(), MASTER_KEY_FILE);
+        assert_eq!(temps.len(), 1, "the temp is kept");
+        assert_eq!(fs::read(&temps[0]).unwrap().len(), KEY_LEN);
+        assert!(
+            err.to_string().contains(&temps[0].display().to_string()),
+            "{err}"
+        );
+        let next = key(root.path(), None);
+        assert_eq!(
+            fs::read(root.path().join(MASTER_KEY_FILE)).unwrap(),
+            next.as_bytes()
+        );
+    }
+
+    /// Which link errors read as "this filesystem has no hard links": the
+    /// codes measured (EPERM on vfat, ENOSYS on a FUSE exFAT) and the ones
+    /// documented, and never an ordinary I/O error. On Linux the table's
+    /// numbers are checked against the platform's own names for them.
+    #[test]
+    fn o210_only_an_unsupported_link_takes_the_fallback() {
+        let raw = io::Error::from_raw_os_error;
+        assert!(links_unsupported(&io::Error::new(
+            io::ErrorKind::Unsupported,
+            "x"
+        )));
+        for code in LINKS_UNSUPPORTED {
+            assert!(links_unsupported(&raw(*code)), "{code}");
+        }
+        assert!(!links_unsupported(&io::Error::other("x")));
+        assert!(!links_unsupported(&io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "x"
+        )));
+        #[cfg(target_os = "linux")]
+        {
+            for (code, name) in [
+                (1, "Operation not permitted"),
+                (38, "Function not implemented"),
+                (95, "Operation not supported"),
+            ] {
+                assert!(
+                    raw(code).to_string().contains(name),
+                    "{code}: {}",
+                    raw(code)
+                );
+            }
+            // ENOENT, EIO, EACCES, ENOSPC, EROFS, EXDEV, EMLINK refuse.
+            for code in [2, 5, 13, 28, 30, 18, 31] {
+                assert!(!links_unsupported(&raw(code)), "{code}: {}", raw(code));
+            }
+        }
+    }
+
+    /// The temp name is 37 bytes longer than the target's, so on a 255-byte
+    /// name limit a target name of 218 bytes publishes and one of 219 is
+    /// refused, naming the temp it could not create and writing nothing.
+    #[cfg(unix)]
+    #[test]
+    fn o210_a_name_too_long_for_its_temp_is_refused_naming_the_temp() {
+        let dir = tempdir().unwrap();
+        let fits = dir.path().join("k".repeat(218));
+        assert_eq!(write_new_identity(&fits, b"x").unwrap(), Published::Linked);
+        let long = dir.path().join("k".repeat(219));
+        let err = write_new_identity(&long, b"x").unwrap_err();
+        let m = err.to_string();
+        assert!(m.contains("temp file") && m.contains(".tmp."), "{m}");
+        assert!(!entry_present(&long).unwrap());
     }
 
     /// **ROADMAP O321, at the publisher.** A link at the name — dangling,

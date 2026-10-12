@@ -463,9 +463,15 @@ but a DANGLING link read as absent and the secret was written through it to
 wherever it pointed, at exit 0. Two smaller observables move: a `master.key` or
 `kdf.salt` of the wrong length is refused with *"master.key is N bytes where 32
 are expected …"* (still exit 1) where the message named neither the file nor
-its length; and on a filesystem without hard links (FAT, exFAT) the first start,
+its length; on a filesystem without hard links (FAT, exFAT) the first start,
 and a keygen writing there, print one warning that the file was created in
-place.
+place. And three that can stop a first start or a keygen which worked before:
+where creating the key's hard link fails for any reason other than "this
+filesystem has no hard links" — a full disk, an I/O error — the command exits 1
+naming the error and the temp file that holds the whole secret, where the old
+writer would have tried to create the key in place; a failed write of that
+in-place key now keeps it, and the temp, and names both; and an `--out` file
+name longer than 218 bytes is refused, naming the temp it could not create.
 
 **Cause:** the keygens asked whether the path existed — which follows a link —
 then wrote, then narrowed the mode, so the secret also sat under the umask's
@@ -483,9 +489,13 @@ hold the only copy of a key.
 `--out`, or remove the link first. A short key file left by a crash under an
 earlier release keys nothing when the refusal says no vault or backup refers to
 a key yet; otherwise restore it from a copy of the data directory. The
-in-place fallback's warning needs no action. `undercroft config check` cannot
-detect any of this: a keygen's path is a flag on one command, and the check
-reads which key files exist, never their length.
+in-place fallback's warning needs no action. A refused link: clear the cause it
+names and run the command again; the kept temp file holds a secret nothing was
+sealed under, and the engine never removes it. A kept in-place key after a failed
+write may already have been loaded by another start: keep it. A long `--out`
+name: choose a shorter one. `undercroft config check` cannot detect any of
+this: a keygen's path is a flag on one command, the check reads which key files
+exist, never their length, and a link error happens only when a key is written.
 
 ## 1.6.1 (released 2026-09-22)
 

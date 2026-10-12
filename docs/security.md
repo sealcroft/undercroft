@@ -16,9 +16,10 @@ modification: every read verifies, `verify` audits everything.
   about which key sealed a vault; the manifest MAC does. A key file is
   written under a temp name, fsynced, and only then hard-linked to its own
   name, owner-only from its creation, so a crash never leaves a short key
-  under that name; a short one already there is refused by name. On a
-  filesystem without hard links (FAT, exFAT) it is created in place, with a
-  warning, as before 1.7.0 (ROADMAP O210). `bundle keygen` and
+  under that name; a short one already there is refused by name. Only on a
+  filesystem without hard links (FAT, exFAT) is it created in place, with a
+  warning, as before 1.7.0; any other link error refuses and keeps the temp
+  (ROADMAP O210). `bundle keygen` and
   `bundle sign-keygen` write their identities the same way, and refuse an
   existing path — a link included, dangling or not — before a byte is
   written (ROADMAP O321).
