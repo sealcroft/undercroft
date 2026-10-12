@@ -2798,6 +2798,20 @@ file's bytes). `UPGRADING.md` carries the entry: a vault with such damage, which
 verified, now fails `verify` and stops `backup create` and `vault rotate`; `config check` opens no vault
 database, and the new binary's `verify --read-only` is the pre-flight.
 
+### The agent guide is split: `CLAUDE.md` is a core, and the rest is verbatim under `docs/agent-guide/` (O436)
+
+Not a fix, and not counted in this release's figures above: it changes how an agent working on this
+repository is instructed, which no deployment can observe. `CLAUDE.md` is read by every agent on every
+turn, and it went from 359,360 bytes to 47,260; everything else it held is now, verbatim, in one of
+eighteen reference documents under `docs/agent-guide/`, each read when the work touches its area, and
+a checker found every paragraph of the old file in exactly one place. The published suite figures
+moved with the Build & test block to `docs/agent-guide/build-and-test.md`, where `tests/battery.sh`
+and `tests/house-figures.sh` read them. Three checks arrived inside existing preflights: the cargo
+figures must be readable before any suite runs, the core may repeat no suite figure, and the core's
+size limit and its index of reference documents are held in both directions. The maintainer ruled
+the limit, 60 KiB, and that where the core's one-line form and a reference document's full text
+differ the full text governs, the divergence being a defect fixed by the unit that finds it.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and
