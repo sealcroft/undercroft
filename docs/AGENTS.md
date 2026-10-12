@@ -225,10 +225,15 @@ undercroft serve-http --host 0.0.0.0 --port 8800
   opened (ROADMAP O253) are the ordinary causes, and a genuine older
   `vault.json` restored beside a current database looks identical, so the
   line is evidence rather than an alarm.
-  Two conditions **refuse** instead, both 409: a manifest whose `vault.db`
-  is absent — "empty" is not "absent", and this one is an integrity verdict
-  (exit 2) — and a schema this build would have had to migrate, which needs
-  one writable open first.) On `/mcp` the
+  Three conditions **refuse** instead, all 409: a manifest that records
+  history beside no database — "empty" is not "absent", and this one is an
+  integrity verdict (exit 2, `class: "integrity"`), on the writable posture
+  too since 1.7.0, where the open used to create the file and answer
+  tampering (ROADMAP O308); a manifest that records NO anchored write — a
+  vault `init`, `vault create` or `POST /v1/vaults` just made — which a
+  writable open starts (exit 1, no class; it was exit 2 until 1.7.0, ROADMAP
+  O213); and a schema this build would have had to migrate, which needs one
+  writable open first (exit 1).) On `/mcp` the
   refusal is at the **call**, not in the catalogue: `tools/list` still
   advertises the write tools, so a client is told *why* a call was refused
   instead of finding a tool silently missing.

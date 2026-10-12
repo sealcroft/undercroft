@@ -1064,7 +1064,9 @@ fn o303_surfaces_answer_an_erased_trail_and_the_empty_chain() {
         !body.contains("\"class\""),
         "a posture error, not a verdict: {body}"
     );
-    assert!(body.contains("chain_meta"), "{body}");
+    // O213's posture refusal since its ruling of 2026-10-08 (it named
+    // `chain_meta`, `ReadOnlyUnmigrated`'s text).
+    assert!(body.contains("records no anchored write"), "{body}");
 }
 
 /// **ROADMAP O303 on `/v1`**: `store_for` answers both states 409 with the
@@ -1129,9 +1131,10 @@ fn o303_v1_anchor_beneath_a_cached_handle_refuses() {
 
 /// **ROADMAP O303, read-only, the EMPTY chain** — a fresh vault's, left by a
 /// crash between the table's creation and its seed: the read-only open, which
-/// may not seed it, answers the class its absent-table twin already answers —
-/// `ReadOnlyUnmigrated`, exit 1, never the tamper verdict — and a writable open
-/// adopts it.
+/// may not seed it, answers exit 1, never the tamper verdict — and a writable
+/// open adopts it. The variant is O213's since its ruling of 2026-10-08 (item
+/// 3), which O303's note bound this state to: `ReadOnlyNoAnchoredWrite`, what a
+/// fresh vault's absent database answers. It was `ReadOnlyUnmigrated`.
 #[test]
 fn o303_open_store_as_read_only_declines_the_empty_chain() {
     let dir = TempDir::new().unwrap();
@@ -1152,7 +1155,7 @@ fn o303_open_store_as_read_only_declines_the_empty_chain() {
     assert!(
         e.chain().any(|l| matches!(
             l.downcast_ref::<StoreError>(),
-            Some(StoreError::ReadOnlyUnmigrated { .. })
+            Some(StoreError::ReadOnlyNoAnchoredWrite { .. })
         )),
         "{e:#}"
     );

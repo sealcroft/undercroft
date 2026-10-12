@@ -397,9 +397,23 @@ compares, with no database opened.
 `audit` holds records"* (or *"… holds a committed height"*), or with *"a
 committed head with no committed height (`chain_meta.writes`)"*; or it answers
 `ManifestTampered` where every `audit` row is gone beside a manifest past
-genesis. A read-only open reports the first two on `unhealed` and its reads and
-`stats` refuse; before 1.7.0 a missing height served reads with `verify` OK
-while every write answered a raw 500.
+genesis and a database that is present. A read-only open reports the first two
+on `unhealed` and its reads and `stats` refuse; before 1.7.0 a missing height
+served reads with `verify` OK while every write answered a raw 500.
+
+**A deleted `vault.db` is not that state** (ROADMAP O308): beside a manifest
+past genesis it answers *"vault … has no database at …, while its authenticated
+manifest records a chain height of N"* — `DatabaseMissing`, exit 2, `/v1` 409
+with `class: "integrity"` — on BOTH postures, and no database is created. 1.6.1's
+writable open created the file and served an empty vault at the manifest's
+height, taking writes (ROADMAP O303's filing); before this release's O308 fix
+the 1.7.0 tree created the file, ran its schema batch, answered
+`ManifestTampered` and left the file behind, so every later open of either
+posture read the missing file as tampering. A zero-length `vault.db`, or
+one with only a `-wal` beside it, answers the same way now, and a non-empty
+`-wal` is named and kept (it may hold committed frames). The remedy is the
+message's: stop every process that had the vault open, then restore the
+database, or the whole vault, from a backup that verifies.
 
 **Cause:** 1.6.1 and earlier adopted a database with no committed head by
 seeding `chain_meta` from the manifest, replaying nothing, so a database rolled
@@ -423,6 +437,44 @@ older than 0.19.0 and opened by no 1.x build since has no supported path — a
 gap, stated (ROADMAP O303, its ruling of 2026-10-06). `undercroft config check`
 cannot detect it — it opens no database.
 
+### a `--read-only` open of a vault nothing has written yet exits 1, not 2 (O213)
+
+**Symptom:** on a vault `init`, `vault create` or `POST /v1/vaults` has just
+made — a manifest and no database — a `--read-only` command, `serve-mcp
+--read-only` or `serve-http --read-only` exits **1** with *"vault "default"'s
+authenticated manifest records no anchored write (the genesis chain head at height
+0), and a read-only open neither creates, seeds nor migrates a database …"*, and
+a `--read-only` server answers its `/v1` routes **409 with no `class`**. Before
+1.7.0 it exited **2** with *"has a manifest but no database"* and `/v1` answered
+409 with `class: "integrity"`. `--read-only vault list` over such an
+installation now exits 0, naming the vault on its "unavailable" line. The same
+refusal answers a vault whose first writable open stopped early enough to leave
+a database holding none of the read schema's tables, or an EMPTY audit chain
+with or without its `chain_meta` table (it answered `ReadOnlyUnmigrated`, also
+exit 1); a database holding only part of the schema with no `audit` table still
+answers *"this vault's schema predates this build"*, and so does a vault read
+with `immutable=1` — a read-only mount — beside a non-empty `-wal` it cannot
+read, with a warning saying so.
+
+**Cause:** the read-only open answered A33's integrity verdict for every absent
+database, so every fresh volume a `--read-only` server was pointed at read as
+tampering (ROADMAP O213). A manifest whose MAC-covered head is the genesis
+constant at height 0 records no anchored write, so an absent database
+contradicts nothing it claims: it is a posture refusal, like a schema this build
+would have to migrate. A manifest that records history beside no database is
+still the integrity verdict, exit 2, on both postures (the entry above).
+
+**Fix:** start the vault writable once — any write command, `undercroft
+verify`, or the server without `--read-only` — then start it read-only. **An
+alert or a retry layer keyed on exit 2 or on `class: "integrity"` stops firing
+for this state**; key it on the message, or on exit 1 together with it, if a
+fresh volume must page. The message gives the second reading on purpose: if this
+vault ever held data, do NOT open it writable — a writable open starts it empty
+— but restore it from a backup that verifies (a create-time manifest put back
+beside a deleted database reads the same, and only an external witness, ROADMAP
+O245, tells a rollback to genesis apart). `undercroft config check` cannot detect
+this state: it opens no database.
+
 ### `--read-only backup create`, `bundle keygen` and `bundle sign-keygen` exit 1 instead of writing (O212)
 
 **Symptom:** `undercroft --read-only backup create` exits 1 with *"refused under
@@ -443,8 +495,9 @@ writes. Each now refuses before it writes: nothing under `backups/`, no byte of
 the vault's database or manifest, no identity file or directory. The backup's
 read-only open still leaves the `-shm` and empty `-wal` every read-only open
 does, and on a vault `init` created that nothing has written yet that open
-refuses first, exit 2 (ROADMAP O213). `POST /v1/vaults/{id}/backups` on a
-`--read-only` server is unchanged: it was already refused with 403.
+refuses first, exit 1 — the posture refusal (ROADMAP O213; exit 2 before it).
+`POST /v1/vaults/{id}/backups` on a `--read-only` server is unchanged: it was
+already refused with 403.
 
 **Fix:** run `bundle keygen` and `bundle sign-keygen` without `--read-only`. For
 an evidence copy during an incident, copy the vault's directory with `cp -a`,
@@ -1223,7 +1276,9 @@ reported this as `possible tampering` and wrote a `kdf.salt` beside
 - An uncommented `UNDERCROFT_PASSPHRASE=` with no value now refuses to start,
   naming the variable. Comment the line out instead.
 - A `--read-only` server needs one writable start first. On a fresh volume it
-  refuses with `vault "default" has a manifest but no database`.
+  refuses, exit 1, with `vault "default"'s authenticated manifest records no
+  anchored write` (it was exit 2, `has a manifest but no database`, until 1.7.0:
+  ROADMAP O213).
 
 `config check` detects the empty passphrase, a cleartext Qdrant URL and an
 unreadable `UNDERCROFT_INDEX_CA` when it runs with the engine's environment:

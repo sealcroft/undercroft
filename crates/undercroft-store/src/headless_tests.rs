@@ -543,9 +543,14 @@ fn o303_only_the_empty_chain_is_adopted() {
             let dir = TempDir::new().unwrap();
             let root = dir.path();
             empty_chain(root, level, table);
+            // ROADMAP O213 (its ruling of 2026-10-08, item 3), which O303's
+            // note bound this state to: the EMPTY chain answers what a fresh
+            // vault's absent database answers, `ReadOnlyNoAnchoredWrite` — and
+            // its absent-table twin with it, O303's "one state, one class",
+            // which O213's ruling did not split.
             match read_only(root) {
-                Err(StoreError::ReadOnlyUnmigrated { missing }) => {
-                    assert!(missing.contains("chain_meta"), "{level:?}: {missing}")
+                Err(StoreError::ReadOnlyNoAnchoredWrite { id }) => {
+                    assert_eq!(id, VAULT, "{level:?} table={table}")
                 }
                 other => panic!("{level:?} table={table}: read-only {:?}", other.err()),
             }

@@ -320,20 +320,23 @@ pub(crate) fn writes(conn: &Connection) -> Result<u64, StoreError> {
         )
         .optional()?
         .ok_or_else(|| {
-            StoreError::IntegrityFinding(
+            // Reached through the open's one judgement too, after its legacy
+            // rename and schema batch: it says what every caller guarantees
+            // (ROADMAP O322), never "nothing was written".
+            StoreError::IntegrityFinding(format!(
                 "audit chain: a committed head with no committed height \
-                 (`chain_meta.writes`) — the database was edited. Nothing was written; run \
-                 `undercroft verify` (ROADMAP O303)"
-                    .into(),
-            )
+                 (`chain_meta.writes`) — the database was edited. {}; run \
+                 `undercroft verify` (ROADMAP O303, O322)",
+                crate::CHAIN_AS_FOUND
+            ))
         })?;
     // Not a number is the same edit as none at all (ROADMAP O303): it was a
     // `CorruptRow`, a 500, for a verdict about stored evidence.
     v.parse::<u64>().map_err(|e| {
         StoreError::IntegrityFinding(format!(
             "audit chain: the committed height (`chain_meta.writes`) is not a number ({e}) — \
-             the database was edited. Nothing was written; run `undercroft verify` (ROADMAP \
-             O303)"
+             the database was edited. {}; run `undercroft verify` (ROADMAP O303, O322)",
+            crate::CHAIN_AS_FOUND
         ))
     })
 }

@@ -402,12 +402,12 @@ fn o291_an_open_racing_a_delete_answers_the_reopen_class() {
             .map(|_| ())
             .unwrap_err();
         assert!(deleted(&r), "{level:?} read-only: {r:?}");
-        // Asked AFTER the delete it finds no database and records nothing —
-        // the open that follows answers the reopen class above.
-        assert!(
-            matches!(VaultStore::recorded_embedder(&e), Ok(None)),
-            "{level:?} recorded_embedder"
-        );
+        // Asked AFTER the delete it answers the reopen class itself since
+        // ROADMAP O308: the absent-database door, which it asks first, finds
+        // the vault's directory gone (item 4(a)) — it answered `Ok(None)` and
+        // left the class to the open that followed.
+        let got = VaultStore::recorded_embedder(&e).map(|_| ()).unwrap_err();
+        assert!(deleted(&got), "{level:?} recorded_embedder: {got:?}");
         assert!(matches!(
             mgr(root).unlock(VAULT),
             Err(VaultError::NotFound(_))
