@@ -84,7 +84,7 @@ pub mod witness;
 pub use admission::{DestinationState, PendingAdmission, QUARANTINE_WING};
 pub use backup::{BackupOutcome, BackupReport};
 pub use delete::{delete_vault, Deleted};
-pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete};
+pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete, ATTESTATION_VERSION};
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
 pub use manage::{
     effective_trust_floor, DedupReport, DrawerSummary, Hallway, Namespace, Tunnel, UpdateOutcome,

@@ -594,8 +594,16 @@ async function api(method, path, opts) {
   const text = await res.text();
   if (!res.ok) {
     let msg = text;
-    try { msg = JSON.parse(text).error || text; } catch (_) {}
-    throw new Error(res.status + ": " + msg);
+    let cls = null;
+    try { const j = JSON.parse(text); msg = j.error || text; cls = j.class || null; } catch (_) {}
+    // The status and the class travel on the error, not only in its text:
+    // a caller that must tell an integrity verdict from a refusal (ROADMAP
+    // O315 — a receipt a newer build minted is NOT a forged one) keys on
+    // `cls`, never on a substring of the message.
+    const err = new Error(res.status + ": " + msg);
+    err.status = res.status;
+    err.cls = cls;
+    throw err;
   }
   if (opts.raw) return text;
   try { return JSON.parse(text); } catch (_) { return text; }
@@ -1652,7 +1660,16 @@ async function verifyAttestation() {
     }
   } catch (e) {
     out.textContent = e.message;
-    toast("ATTESTATION FAILED — this does not describe what this vault did", true);
+    // **Only the integrity class is a verdict** (ROADMAP O315). This toasted
+    // "ATTESTATION FAILED" on EVERY error — a receipt a newer build minted
+    // (400: the engine refuses it unread, as age), a malformed body, a
+    // rejected bearer — so the console called a genuine receipt forged
+    // exactly where the engine had stopped doing so.
+    if (e.cls === "integrity") {
+      toast("ATTESTATION FAILED — this does not describe what this vault did", true);
+    } else {
+      toast("NOT CHECKED — " + e.message, true);
+    }
   }
 }
 

@@ -864,6 +864,52 @@ fi
 check "forged tag still exits 2"  2 "ATTESTATION FAILED"             -- \
   "$BIN" verify-forgetting "$ATT.forged"
 
+# **ROADMAP O315 — a receipt a NEWER build minted reads as newer, never as
+# forged.** The signature was checked BEFORE the version, over a type that
+# dropped every key it did not declare: a field a newer build signs, or a
+# version it bumps inside the signature, made this binary answer
+# `ATTESTATION FAILED` with exit 2 over a genuine receipt, and a key added
+# beside the signature was ignored while the document VERIFIED. The age fence
+# answers both with exit 1, naming the newer build, before the signature is
+# read. A shell cannot sign a newer build's EXTRA field, so the signed arm
+# here is the version bump; the unit and `cli.rs` suites sign the field
+# itself. Counterfactual on `5108dfa`: the bump exits 2 and the extra key 0.
+O315_KEY="$UNDERCROFT_HOME/o315-sign.key"
+check "o315 signing identity"     0 "Sender"                        -- \
+  "$BIN" bundle sign-keygen --out "$O315_KEY"
+O315_ID="$("$BIN" remember "a note the subject will ask us to erase, receipted and signed" \
+  --wing eng --room tmp | sed -n 's/^Filed drawer \([0-9a-f]*\) .*/\1/p')"
+O315_ATT="$UNDERCROFT_HOME/o315-attestation.json"
+check "o315 a signed receipt"     0 "attestation written to"        -- \
+  "$BIN" forget "$O315_ID" --sign "$O315_KEY" --out "$O315_ATT"
+check "o315 the genuine receipt verifies" 0 "ATTESTATION VERIFIED"  -- \
+  "$BIN" verify-forgetting "$O315_ATT"
+sed 's/"version": *[0-9]*/"version": 99/' "$O315_ATT" > "$O315_ATT.newer"
+sed '1s/^{$/{ "archive": "1 archive(s), oldest 2026-10-01",/' "$O315_ATT" > "$O315_ATT.annotated"
+head -c 200 "$O315_ATT" > "$O315_ATT.truncated"
+sed 's/"head_after": *"[0-9a-f]*"/"head_after": "00"/' "$O315_ATT" > "$O315_ATT.forged"
+# Premise, per document: an edit that changed nothing would make its check
+# below measure the genuine receipt.
+O315_SAME=""
+for f in newer annotated truncated forged; do
+  cmp -s "$O315_ATT" "$O315_ATT.$f" && O315_SAME="$O315_SAME $f"
+done
+if [ -z "$O315_SAME" ] && grep -q '"sig"' "$O315_ATT"; then
+  echo "ok    o315 premise: a signed receipt, and every edit below landed"; PASS=$((PASS+1))
+else
+  echo "FAIL  o315 premise — unsigned receipt, or unchanged:$O315_SAME"; FAIL=$((FAIL+1))
+fi
+check "o315 a newer build's version is exit 1, not 2" 1 "a newer build of Undercroft minted it" -- \
+  "$BIN" verify-forgetting "$O315_ATT.newer"
+check "o315 a key this build does not know is exit 1" 1 "a newer build of Undercroft minted it" -- \
+  "$BIN" verify-forgetting "$O315_ATT.annotated"
+check "o315 ...and the key is named"  1 '"archive"'                   -- \
+  "$BIN" verify-forgetting "$O315_ATT.annotated"
+check "o315 a truncated receipt is exit 1" 1 "is not an attestation" -- \
+  "$BIN" verify-forgetting "$O315_ATT.truncated"
+check "o315 a forged receipt is still exit 2" 2 "ATTESTATION FAILED" -- \
+  "$BIN" verify-forgetting "$O315_ATT.forged"
+
 # **UNDERCROFT_TRUST_FLOOR — the declared VAULT floor, end to end.** The
 # REQUEST floor (`--min-trust`, `min_trust`) is exercised on `/v1` below;
 # the declared vault floor had ZERO occurrences under tests/ on any
@@ -3446,6 +3492,53 @@ rest_code "a malformed receipt is 400" 400 -- -X POST "$API/vaults/erasure/verif
 # disagreement is a real one rather than two vaults being compared.
 check "the CLI agrees with the route" 0 "ATTESTATION VERIFIED" -- \
   env UNDERCROFT_HOME="$REST_HOME" "$BIN" verify-forgetting "$O14_ATT" --vault erasure
+# **ROADMAP O315 on `/v1`.** A receipt a newer build minted is the CALLER's
+# 400, naming the newer build — never 409 + `class: "integrity"`, which the
+# fleet's ops door exits 2 on. The plane mints unsigned, so the signed
+# document is minted by the CLI against this server's own vault and its
+# version bumped. Counterfactual on `5108dfa`: 409 + integrity for the bump,
+# 200 `verified` for the extra key.
+O315_V1_ID="$(curl -s -X POST "$API/vaults/erasure/drawers" -H "X-Vault-Assertion: $(sign erasure)" \
+  -d '{"text":"a second note the data subject will ask us to erase, signed this time","wing":"eng","room":"tmp"}' \
+  | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+O315_V1_ATT="$UNDERCROFT_HOME/o315-v1-attestation.json"
+check "o315 a signed receipt for the served vault" 0 "attestation written to" -- \
+  env UNDERCROFT_HOME="$REST_HOME" "$BIN" forget "$O315_V1_ID" --vault erasure \
+  --sign "$O315_KEY" --out "$O315_V1_ATT"
+rest_body "o315 v1 verifies the genuine signed receipt" '"verdict":"verified"' -- \
+  -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT"
+sed 's/"version": *[0-9]*/"version": 99/' "$O315_V1_ATT" > "$O315_V1_ATT.newer"
+sed '1s/^{$/{ "archive": "1 archive(s)",/' "$O315_V1_ATT" > "$O315_V1_ATT.annotated"
+head -c 200 "$O315_V1_ATT" > "$O315_V1_ATT.truncated"
+O315_SAME=""
+for f in newer annotated truncated; do
+  cmp -s "$O315_V1_ATT" "$O315_V1_ATT.$f" && O315_SAME="$O315_SAME $f"
+done
+if [ -n "$O315_V1_ID" ] && [ -z "$O315_SAME" ] && grep -q '"sig"' "$O315_V1_ATT"; then
+  echo "ok    o315 v1 premise: a signed receipt, and every edit below landed"; PASS=$((PASS+1))
+else
+  echo "FAIL  o315 v1 premise — id='$O315_V1_ID', unsigned, or unchanged:$O315_SAME"
+  FAIL=$((FAIL+1))
+fi
+rest_code "o315 a newer build's version is the caller's 400" 400 -- \
+  -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.newer"
+rest_body "o315 ...naming the newer build" "a newer build of Undercroft minted it" -- \
+  -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.newer"
+rest_body_lacks "o315 ...and no integrity class" '"class"' -- \
+  -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.newer"
+rest_code "o315 a key this build does not know is 400" 400 -- \
+  -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.annotated"
+rest_body_lacks "o315 ...and no integrity class either" '"class"' -- \
+  -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.annotated"
+rest_code "o315 a truncated receipt is 400" 400 -- \
+  -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O315_V1_ATT.truncated"
 # Arm 4: across a rotation the verdict REDUCES and says so, rather than
 # becoming the tamper verdict (O13). Reachable from the HTTP plane only
 # because this route exists.

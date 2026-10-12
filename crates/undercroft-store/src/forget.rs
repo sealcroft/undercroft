@@ -34,6 +34,23 @@
 //!   in. The heads still bind the operator — a later history shown for
 //!   the same interval that disagrees is two conflicting signed claims.
 //!
+//! **A document this build cannot read is never called forged** (ROADMAP
+//! O315). Before anything else — the vault, the signature, a single tag — the
+//! verifier runs an AGE FENCE: a `version` it does not know, or a field it
+//! does not know anywhere in the document, is refused as "a newer build minted
+//! it", an input error (exit 1, `/v1` 400), never the tamper verdict. The
+//! order is the whole of it. The type used to DROP a key it did not declare,
+//! so a field a newer build signs was recomputed out of the canonical, the
+//! signature failed, and an older build answered `ATTESTATION FAILED`, exit 2,
+//! on a genuine receipt — which a version bump does not prevent, the version
+//! being inside the same signature. It happened once: every build before
+//! 1.1.0 reads a genuine signed receipt carrying 1.1.0's `mirror` note as
+//! forged. Reading `version` and the key set ahead of the signature is sound
+//! in one direction only, O238's: it can buy a refusal and never an
+//! acceptance. Its cost, stated: a forger who adds a key buys "not checked"
+//! where the up-to-date verdict is "forged" — exit 1 instead of 2, and still
+//! never a verdict that the document is genuine.
+//!
 //! What "destroyed" means here is what the one destruction body ships
 //! (`manage.rs`, `destroy_in`): the row and its derived artifacts gone and a
 //! keyed tombstone chained. **A whole destruction is ONE write lock**
@@ -53,6 +70,23 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::{StoreError, VaultStore};
+
+/// The newest attestation `version` this build mints and checks: `1`, the
+/// tag-only chain step, and `2`, the label-and-time step (ROADMAP O233). A
+/// document declaring a higher one is refused by the age fence as a newer
+/// build's (ROADMAP O315).
+pub const ATTESTATION_VERSION: u32 = 2;
+
+/// The keys of an attestation document that this build does NOT declare,
+/// captured rather than dropped (ROADMAP O315).
+///
+/// Empty on every document any released build has minted — every key any of
+/// them wrote is declared here, counted across every tag — so on a genuine
+/// receipt this is always empty, and it serialises to nothing. It is the
+/// observable the age fence reads: a key a newer build adds lands here, where
+/// the type used to discard it silently and then recompute a signed canonical
+/// without it.
+pub type UnknownFields = std::collections::BTreeMap<String, serde_json::Value>;
 
 /// Whether this destruction also issued a delete to a remote mirror.
 ///
@@ -161,6 +195,10 @@ pub struct ForgottenDrawer {
     pub id: String,
     /// Unkeyed SHA-256 of the destroyed content, hex: the commitment a third party checks against content it already holds, without the vault key.
     pub content_fp: String,
+    /// Any key this build does not declare, kept so the age fence can see it
+    /// (ROADMAP O315). Empty on every receipt a released build minted.
+    #[serde(flatten)]
+    pub unknown: UnknownFields,
 }
 
 /// One chained record inside the attested interval.
@@ -172,6 +210,10 @@ pub struct AttestedRecord {
     pub tag: String,
     /// When the record was appended (RFC 3339).
     pub at: String,
+    /// Any key this build does not declare, kept so the age fence can see it
+    /// (ROADMAP O315). Empty on every receipt a released build minted.
+    #[serde(flatten)]
+    pub unknown: UnknownFields,
 }
 
 /// The attestation `undercroft forget` emits — and the retention sweep and
@@ -221,9 +263,97 @@ pub struct ForgetAttestation {
     /// The operator's Ed25519 signature over the attestation, hex, when signed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sig: Option<String>,
+    /// **Every top-level key this build does not declare** (ROADMAP O315).
+    ///
+    /// Captured, never dropped, because dropping was the defect: a newer
+    /// build that signs one more field has that field recomputed OUT of
+    /// [`Self::canonical`] by an older one, so the signature fails and a
+    /// genuine receipt reads as forged. A non-empty set — here or on any
+    /// drawer or record — is refused by the age fence before the signature
+    /// is looked at. Empty on every receipt a released build minted, and it
+    /// serialises to nothing, so no minted document moves by a byte.
+    #[serde(flatten)]
+    pub unknown: UnknownFields,
 }
 
 impl ForgetAttestation {
+    /// **The age fence** (ROADMAP O315; O267 ruling 4, on the O241 ruling 4
+    /// and O238 precedent): the chain step this document's heads were
+    /// computed with, or a refusal saying a newer build minted it.
+    ///
+    /// Run FIRST by [`VaultStore::verify_forget_attestation`], before the
+    /// vault, the signature or any tag, because what it refuses is a document
+    /// this build cannot read at all, and reading part of it is how a genuine
+    /// receipt became a forgery verdict. Two observables, both read ahead of
+    /// verification, which is sound in one direction only: `version` sits
+    /// inside the signed canonical, and an unknown key is one this build
+    /// would recompute out of it — so trusting either can buy a refusal and
+    /// never an acceptance.
+    ///
+    /// The refusal is [`StoreError::Invalid`] — the class this function's
+    /// version arm always answered, and the witness's (`witness_check`): exit
+    /// 1 on the CLI, 400 on `/v1`, an error on MCP — never
+    /// [`StoreError::Attestation`], the tamper verdict. Version `0` is refused
+    /// in the same class without the claim, since no build ever minted it.
+    pub(crate) fn age_fence(&self) -> Result<undercroft_vault::ChainStep, StoreError> {
+        let step = match self.version {
+            1 => undercroft_vault::ChainStep::V1,
+            2 => undercroft_vault::ChainStep::V2,
+            0 => {
+                return Err(StoreError::Invalid(format!(
+                    "attestation version 0 is not one any build of Undercroft mints (this build \
+                     checks 1 to {ATTESTATION_VERSION}); not checked"
+                )))
+            }
+            v => {
+                return Err(StoreError::Invalid(format!(
+                    "attestation version {v} is newer than this build understands (it checks 1 \
+                     to {ATTESTATION_VERSION}): a newer build of Undercroft minted it. Not \
+                     checked, and not a verdict on the document — check it with that build or a \
+                     later one (ROADMAP O315)"
+                )))
+            }
+        };
+        let unknown = self.unknown_fields();
+        if !unknown.is_empty() {
+            // Named, never echoed raw: the keys are the caller's bytes, so
+            // each is cut to 64 characters on a character boundary and
+            // printed through `Debug`, which escapes a control character a
+            // terminal would otherwise act on. Three named, the rest counted.
+            let named: Vec<String> = unknown
+                .iter()
+                .take(3)
+                .map(|k| format!("{:?}", k.chars().take(64).collect::<String>()))
+                .collect();
+            let more = match unknown.len() {
+                n if n > 3 => format!(" and {} more", n - 3),
+                _ => String::new(),
+            };
+            return Err(StoreError::Invalid(format!(
+                "the attestation carries {} field(s) this build does not know ({}{more}): a \
+                 newer build of Undercroft minted it. Not checked, and not a verdict on the \
+                 document — check it with that build or a later one (ROADMAP O315)",
+                unknown.len(),
+                named.join(", ")
+            )));
+        }
+        Ok(step)
+    }
+
+    /// Every key this build does not declare, anywhere in the document, as a
+    /// path: `archive`, `drawers[0].note`, `records[2].kind` (ROADMAP O315).
+    /// Empty on every receipt a released build minted.
+    pub fn unknown_fields(&self) -> Vec<String> {
+        let mut out: Vec<String> = self.unknown.keys().cloned().collect();
+        for (i, d) in self.drawers.iter().enumerate() {
+            out.extend(d.unknown.keys().map(|k| format!("drawers[{i}].{k}")));
+        }
+        for (i, r) in self.records.iter().enumerate() {
+            out.extend(r.unknown.keys().map(|k| format!("records[{i}].{k}")));
+        }
+        out
+    }
+
     /// Deterministic signing bytes: every field except the signature,
     /// `0x1f`-separated in fixed order (the manifest precedent).
     pub fn canonical(&self) -> Vec<u8> {
@@ -253,6 +383,15 @@ impl ForgetAttestation {
         // It IS signed when present, which is the point: a mirror note the
         // recipient could strip without breaking the signature would be a
         // disclosure an operator could quietly remove.
+        //
+        // **And an extension is an AGE question for every older verifier**
+        // (ROADMAP O315). This one shipped in 1.1.0 with no version change,
+        // and every build before it drops the key, recomputes these bytes
+        // without it, and reads a genuine signed receipt as forged. From
+        // 1.7.0 the age fence answers a key it does not know as a newer
+        // build's, before the signature — so the NEXT extension is safe for
+        // verifiers from 1.7.0 on and still a forgery verdict on 1.6.1 and
+        // older, which is what its `UPGRADING.md` entry owes the reader.
         if let Some(m) = &self.mirror {
             parts.push(format!("mirror\u{1e}{m}"));
         }
@@ -469,6 +608,7 @@ impl VaultStore {
             drawers.push(ForgottenDrawer {
                 id: id.clone(),
                 content_fp: hex::encode(crate::kg::content_fp(&d.content)),
+                unknown: UnknownFields::new(),
             });
         }
         let tables = crate::manage::DerivedTables::read(self)?;
@@ -499,6 +639,7 @@ impl VaultStore {
                         record_id: r.get(0)?,
                         tag: hex::encode(r.get::<_, Vec<u8>>(1)?),
                         at: r.get(2)?,
+                        unknown: UnknownFields::new(),
                     })
                 })?
                 .collect::<Result<_, _>>()?;
@@ -543,6 +684,7 @@ impl VaultStore {
             mirror: self.mirror_note(mirror),
             sender: None,
             sig: None,
+            unknown: UnknownFields::new(),
         };
         Ok((att, destroyed))
     }
@@ -635,6 +777,15 @@ impl VaultStore {
         &self,
         att: &ForgetAttestation,
     ) -> Result<AttestationVerdict, StoreError> {
+        // **The age fence FIRST** (ROADMAP O315): a version or a field this
+        // build does not know is refused as a newer build's, an input error,
+        // before anything below can read the document as forged. It came
+        // after the signature until O315, so a field a newer build signs was
+        // dropped by the parse, recomputed out of the canonical, and answered
+        // `ATTESTATION FAILED`, exit 2, over a genuine receipt. Ahead of the
+        // vault check too: nothing in a document this build cannot read is
+        // read, the witness's order (`witness_check`).
+        let step = att.age_fence()?;
         // A typed verdict, not a generic input error: every branch below is
         // "this document does not describe what this vault did", which the
         // CLI reports with its integrity exit code (see
@@ -676,21 +827,12 @@ impl VaultStore {
             // verdict says "unsigned" about it, which is true.
             (_, None) => {}
         }
-        // **Which chain step the document's heads were computed with**
+        // `step` — which chain step the document's heads were computed with
         // (ROADMAP O233): version 1 folds each tombstone's tag alone, version
-        // 2 its label and time as well. A version this build does not know is
-        // REFUSED as unsupported — an input error, never the tamper verdict,
-        // because a document a newer build minted is not a forgery.
-        let step = match att.version {
-            1 => undercroft_vault::ChainStep::V1,
-            2 => undercroft_vault::ChainStep::V2,
-            v => {
-                return Err(StoreError::Invalid(format!(
-                    "attestation version {v} is not one this build can check (it checks 1 \
-                     and 2); a newer build minted it"
-                )))
-            }
-        };
+        // 2 its label and time as well — came from the age fence above. It
+        // was read HERE, after the signature, until O315, which is how "a
+        // document a newer build minted is not a forgery" was written beside
+        // an order that made it one whenever that build signed a new field.
         let named: std::collections::HashSet<&str> =
             att.drawers.iter().map(|d| d.id.as_str()).collect();
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -957,6 +1099,7 @@ mod tests {
             drawers: vec![ForgottenDrawer {
                 id: "abc".into(),
                 content_fp: "ff".into(),
+                unknown: UnknownFields::new(),
             }],
             head_before: "aa".into(),
             head_after: "bb".into(),
@@ -964,10 +1107,12 @@ mod tests {
                 record_id: "del/abc".into(),
                 tag: "cc".into(),
                 at: "2026-08-09T00:00:00Z".into(),
+                unknown: UnknownFields::new(),
             }],
             mirror: mirror.map(str::to_string),
             sender: None,
             sig: None,
+            unknown: UnknownFields::new(),
         }
     }
 
@@ -1273,5 +1418,383 @@ mod tests {
             )
             .unwrap()
             .is_some());
+    }
+
+    /// Where a "newer build" put the field it added (ROADMAP O315's gate).
+    #[derive(Clone, Copy)]
+    enum Place {
+        Top,
+        Drawer(usize),
+        Record(usize),
+    }
+
+    /// **What a newer build mints**: `att` plus one field it signs. The
+    /// signature is over today's canonical with the field appended — the
+    /// `mirror` extension's shape, the only extension so far shipped — so it
+    /// verifies over the newer build's bytes and NOT over the bytes this
+    /// build recomputes, which is exactly what an older verifier meets.
+    /// `att` must already be signed, so `sender` is in the canonical.
+    fn as_newer_build(
+        att: &ForgetAttestation,
+        secret: &str,
+        place: Place,
+        key: &str,
+        value: &str,
+    ) -> ForgetAttestation {
+        let mut v = serde_json::to_value(att).unwrap();
+        let slot = match place {
+            Place::Top => &mut v,
+            Place::Drawer(i) => &mut v["drawers"][i],
+            Place::Record(i) => &mut v["records"][i],
+        };
+        slot[key] = serde_json::json!(value);
+        let mut newer_bytes = att.canonical();
+        newer_bytes.extend_from_slice(format!("\u{1f}{key}\u{1e}{value}").as_bytes());
+        v["sig"] = serde_json::json!(
+            undercroft_vault::bundle::sign_detached(secret, &newer_bytes).unwrap()
+        );
+        serde_json::from_value(v).unwrap()
+    }
+
+    fn assert_age_refusal(
+        store: &VaultStore,
+        doc: &ForgetAttestation,
+        names: &str,
+        what: &str,
+    ) -> String {
+        match store.verify_forget_attestation(doc) {
+            Err(StoreError::Invalid(why)) => {
+                assert!(
+                    why.contains("a newer build of Undercroft minted it") && why.contains(names),
+                    "{what}: refused as a newer build's, naming {names:?}: {why}"
+                );
+                why
+            }
+            other => panic!(
+                "{what}: a document a newer build minted must be refused as AGE (Invalid, \
+                 exit 1), never as forged and never accepted — got {other:?}"
+            ),
+        }
+    }
+
+    /// **ROADMAP O315: a document a newer build minted reads as "newer than
+    /// this build", never as forged** (O267 ruling 4; the O241 ruling 4 and
+    /// O238 precedent).
+    ///
+    /// The defect was the ORDER: the signature was checked over a canonical
+    /// recomputed from a type that drops keys it does not declare, and the
+    /// version was read only afterwards. So a field a newer build signs made
+    /// every older build answer `ATTESTATION FAILED`, exit 2, on a genuine
+    /// receipt, and a version bump could not help — the version is inside the
+    /// same signature. Every arm below names a state the old order conflated.
+    ///
+    /// COUNTERFACTUAL, run against `5108dfa`'s verifier (the version read
+    /// after the signature, and no key captured): arms 1-3 and the
+    /// bump-plus-field half of arm 4 answer `Attestation("signature: …")`,
+    /// the tamper verdict, and arms 5 and 6 answer `Ok(Verified)` with the
+    /// extra key silently ignored.
+    #[test]
+    fn a_document_a_newer_build_minted_is_refused_as_age_before_the_signature() {
+        use undercroft_vault::{SecurityLevel, VaultManager};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("n", SecurityLevel::Sealed).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
+        let a = drawer(
+            "a note the subject asked us to erase, minted by a newer build",
+            0,
+        );
+        let b = drawer("a second note erased in the same breath", 1);
+        let keep = drawer("an unrelated note that must survive", 2);
+        for d in [&a, &b, &keep] {
+            store.upsert(d).unwrap();
+        }
+        let mut att = store
+            .forget_with_proof(&[a.id.clone(), b.id.clone()])
+            .unwrap();
+        let (secret, _) = undercroft_vault::bundle::sign_keygen();
+        att.sign(&secret).unwrap();
+
+        // PREMISE: the genuine document carries no key this build does not
+        // know, passes the fence, and verifies — so every refusal below is
+        // the fence and not some other defect in the document.
+        assert!(
+            att.unknown_fields().is_empty(),
+            "premise: a minted receipt is all known keys"
+        );
+        assert_eq!(
+            store.verify_forget_attestation(&att).unwrap(),
+            AttestationVerdict::Verified,
+            "premise: the genuine signed receipt verifies"
+        );
+
+        // ARM 1 — the gate. A newer build signs one more top-level field.
+        let note = "2 archive(s), oldest 2026-10-01";
+        let newer = as_newer_build(&att, &secret, Place::Top, "archive", note);
+        // Premise of the arm: the signature is GENUINE over the newer
+        // build's bytes and fails over the bytes this build recomputes —
+        // i.e. under the old order this document answered the tamper
+        // verdict, which is the defect and not a property of the fixture.
+        let mut newer_bytes = att.canonical();
+        newer_bytes.extend_from_slice(format!("\u{1f}archive\u{1e}{note}").as_bytes());
+        undercroft_vault::bundle::verify_detached(
+            newer.sender.as_deref().unwrap(),
+            &newer_bytes,
+            newer.sig.as_deref().unwrap(),
+        )
+        .expect("premise: the newer build's signature is genuine over its own bytes");
+        assert!(
+            undercroft_vault::bundle::verify_detached(
+                newer.sender.as_deref().unwrap(),
+                &newer.canonical(),
+                newer.sig.as_deref().unwrap(),
+            )
+            .is_err(),
+            "premise: over the canonical this build recomputes, the signature fails — the \
+             old order's `ATTESTATION FAILED`"
+        );
+        assert_eq!(newer.unknown_fields(), vec!["archive".to_string()]);
+        assert_age_refusal(&store, &newer, "\"archive\"", "a signed top-level field");
+
+        // ARMS 2 and 3 — the same inside a record and inside a drawer, named
+        // by path, because a newer build may extend either and the type
+        // dropped keys at every level.
+        let in_record = as_newer_build(&att, &secret, Place::Record(1), "kind", "tombstone");
+        assert_age_refusal(
+            &store,
+            &in_record,
+            "records[1].kind",
+            "a signed record field",
+        );
+        let in_drawer = as_newer_build(&att, &secret, Place::Drawer(0), "note", "x");
+        assert_age_refusal(
+            &store,
+            &in_drawer,
+            "drawers[0].note",
+            "a signed drawer field",
+        );
+
+        // ARM 4 — a version bump, re-signed as its minter would: refused by
+        // version, before the signature. Under the old order the bump alone
+        // verified the signature and then refused by version (exit 1), and
+        // the bump plus a field refused by signature (exit 2).
+        let mut bumped = att.clone();
+        bumped.version = ATTESTATION_VERSION + 1;
+        bumped.sign(&secret).unwrap();
+        match store.verify_forget_attestation(&bumped) {
+            Err(StoreError::Invalid(why)) => assert!(
+                why.contains(&format!("version {}", ATTESTATION_VERSION + 1))
+                    && why.contains("a newer build of Undercroft minted it"),
+                "a newer version is named as one: {why}"
+            ),
+            other => panic!("a newer version must be refused as age: {other:?}"),
+        }
+        let bumped_and_extended =
+            as_newer_build(&bumped, &secret, Place::Top, "archive", "1 archive(s)");
+        match store.verify_forget_attestation(&bumped_and_extended) {
+            Err(StoreError::Invalid(why)) => assert!(why.contains("version"), "{why}"),
+            other => panic!("a bump plus a field is age, never forged: {other:?}"),
+        }
+
+        // ARM 5 — an UNSIGNED document carrying a key this build does not
+        // know. It verified before, the key ignored: a verdict over a
+        // document whose every field was not read.
+        let mut unsigned = att.clone();
+        unsigned.sender = None;
+        unsigned.sig = None;
+        let mut v = serde_json::to_value(&unsigned).unwrap();
+        v["archive"] = serde_json::json!("x");
+        let unsigned_extra: ForgetAttestation = serde_json::from_value(v).unwrap();
+        assert_age_refusal(
+            &store,
+            &unsigned_extra,
+            "\"archive\"",
+            "an unsigned extra key",
+        );
+
+        // ARM 6 — a key added beside a genuine signature, outside it. The
+        // signature verifies over the known fields, so the old order said
+        // VERIFIED and printed "signature verified" over a field it never
+        // read.
+        let mut v = serde_json::to_value(&att).unwrap();
+        v["ticket"] = serde_json::json!("JIRA-1");
+        let annotated: ForgetAttestation = serde_json::from_value(v).unwrap();
+        assert_age_refusal(
+            &store,
+            &annotated,
+            "\"ticket\"",
+            "a key beside the signature",
+        );
+
+        // ARM 7 — version 0 is refused in the same class WITHOUT the claim:
+        // no build minted it, so "a newer build minted it" would be false.
+        let mut zero = att.clone();
+        zero.version = 0;
+        match store.verify_forget_attestation(&zero) {
+            Err(StoreError::Invalid(why)) => assert!(
+                why.contains("version 0") && !why.contains("newer build"),
+                "{why}"
+            ),
+            other => panic!("version 0 is an input error: {other:?}"),
+        }
+
+        // ARM 8 — the fence is FIRST, ahead of the vault check too: a newer
+        // build's document naming another vault is age, not "attests vault
+        // …". Pinned with its cost, which the module header states: a forger
+        // who adds a key buys an exit-1 refusal where the up-to-date verdict
+        // is exit 2 — never an acceptance.
+        let mut foreign = as_newer_build(&att, &secret, Place::Top, "archive", "x");
+        foreign.vault = "elsewhere".into();
+        assert_age_refusal(
+            &store,
+            &foreign,
+            "\"archive\"",
+            "a newer document naming another vault",
+        );
+
+        // ARM 9 — the fence is not a softening of the tamper verdict: with
+        // every key known, a field edited under the signature, a re-signed
+        // tampered head, a record dropped from the end and another vault's
+        // document are all still `Attestation`, exit 2.
+        let mut forged_sig = att.clone();
+        forged_sig.head_after = "00".repeat(32);
+        let mut forged_head = att.clone();
+        forged_head.head_after = "00".repeat(32);
+        forged_head.sign(&secret).unwrap();
+        let mut truncated = att.clone();
+        truncated.records.pop();
+        truncated.sign(&secret).unwrap();
+        let mut other_vault = att.clone();
+        other_vault.vault = "elsewhere".into();
+        for (doc, what) in [
+            (&forged_sig, "a field edited under the signature"),
+            (&forged_head, "a re-signed tampered head"),
+            (&truncated, "a record dropped from the end"),
+            (&other_vault, "another vault's receipt"),
+        ] {
+            assert!(
+                doc.unknown_fields().is_empty(),
+                "premise: {what} carries known keys only"
+            );
+            let got = store.verify_forget_attestation(doc);
+            assert!(
+                matches!(got, Err(StoreError::Attestation(_))),
+                "{what} must stay the tamper verdict: {got:?}"
+            );
+        }
+
+        // ARM 10 — the caller's keys never reach the message raw: a control
+        // character is escaped and a long key is cut at 64 characters.
+        let mut v = serde_json::to_value(&att).unwrap();
+        v["\u{1b}[2Jx"] = serde_json::json!(1);
+        v["k".repeat(4096)] = serde_json::json!(1);
+        let hostile: ForgetAttestation = serde_json::from_value(v).unwrap();
+        let why = assert_age_refusal(&store, &hostile, "2 field(s)", "hostile keys");
+        assert!(
+            !why.contains('\u{1b}'),
+            "a raw escape reached the message: {why:?}"
+        );
+        assert!(
+            why.contains("\\u{1b}"),
+            "the escape is shown escaped: {why}"
+        );
+        assert!(
+            why.len() < 1024,
+            "a 4 KiB key is not echoed whole: {} bytes",
+            why.len()
+        );
+
+        // After everything, the genuine document still verifies, the
+        // destroyed drawers are gone and the kept one is here.
+        assert_eq!(
+            store.verify_forget_attestation(&att).unwrap(),
+            AttestationVerdict::Verified
+        );
+        assert!(store
+            .get(
+                &keep.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some());
+    }
+
+    /// **Every key a released build ever minted is one this build knows,
+    /// and nothing it mints moves by a byte** (ROADMAP O315).
+    ///
+    /// The fence's one way to fail silently is the other direction: refusing
+    /// a GENUINE OLD receipt as a newer build's, because some release wrote a
+    /// key this build no longer declares. Counted across every tag from
+    /// `v1.0.0` to `v1.6.1` and every revision of this file: no field was
+    /// ever removed, and the only one ever added is `mirror` (1.1.0). The key
+    /// sets are spelled as literals, never derived from the type, so this
+    /// cannot agree with a future rename by construction — and the minted
+    /// bytes are pinned, so capturing unknown keys moves no document a
+    /// release already handed out.
+    #[test]
+    fn every_key_a_released_build_minted_is_known_and_no_minted_byte_moves() {
+        let mut full = att(Some("pushed to qdrant"));
+        full.sender = Some("5e".into());
+        full.sig = Some("51".into());
+        let json = serde_json::to_string(&full).unwrap();
+        assert_eq!(
+            json,
+            "{\"version\":1,\"vault\":\"v\",\"created_at\":\"2026-08-09T00:00:00Z\",\
+             \"drawers\":[{\"id\":\"abc\",\"content_fp\":\"ff\"}],\"head_before\":\"aa\",\
+             \"head_after\":\"bb\",\"records\":[{\"record_id\":\"del/abc\",\"tag\":\"cc\",\
+             \"at\":\"2026-08-09T00:00:00Z\"}],\"mirror\":\"pushed to qdrant\",\
+             \"sender\":\"5e\",\"sig\":\"51\"}",
+            "a minted attestation's JSON must not move by a byte"
+        );
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let keys = |o: &serde_json::Value| -> Vec<String> {
+            let mut k: Vec<String> = o.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        assert_eq!(
+            keys(&v),
+            [
+                "created_at",
+                "drawers",
+                "head_after",
+                "head_before",
+                "mirror",
+                "records",
+                "sender",
+                "sig",
+                "vault",
+                "version"
+            ]
+        );
+        assert_eq!(keys(&v["drawers"][0]), ["content_fp", "id"]);
+        assert_eq!(keys(&v["records"][0]), ["at", "record_id", "tag"]);
+        // Read back, every one of them is known: the fence passes it.
+        let back: ForgetAttestation = serde_json::from_str(&json).unwrap();
+        assert!(
+            back.unknown_fields().is_empty(),
+            "{:?}",
+            back.unknown_fields()
+        );
+        assert_eq!(back.age_fence().unwrap(), undercroft_vault::ChainStep::V1);
+        // And a 1.0.0 document — no `mirror`, unsigned — the oldest shape.
+        let oldest: ForgetAttestation = serde_json::from_str(
+            "{\"version\":1,\"vault\":\"v\",\"created_at\":\"t\",\"drawers\":[],\
+             \"head_before\":\"aa\",\"head_after\":\"aa\",\"records\":[]}",
+        )
+        .unwrap();
+        assert!(oldest.unknown_fields().is_empty());
+        let mut v2 = oldest.clone();
+        v2.version = 2;
+        assert_eq!(v2.age_fence().unwrap(), undercroft_vault::ChainStep::V2);
+        // A null under a known optional key is that key, not an unknown one.
+        let nulls: ForgetAttestation = serde_json::from_str(
+            "{\"version\":1,\"vault\":\"v\",\"created_at\":\"t\",\"drawers\":[],\
+             \"head_before\":\"aa\",\"head_after\":\"aa\",\"records\":[],\
+             \"mirror\":null,\"sender\":null,\"sig\":null}",
+        )
+        .unwrap();
+        assert!(nulls.unknown_fields().is_empty());
     }
 }

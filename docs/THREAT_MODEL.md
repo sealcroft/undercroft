@@ -1095,7 +1095,15 @@ straight, each carrying what it actually is.
   `POST /v1/vaults/{id}/verify-forgetting`, the fleet's
   `ops/verify-forgetting`, and the admin console — where until 1.1.0 the
   HTTP plane could MINT a receipt and only the CLI could check one
-  (ROADMAP O14). **A whole destruction is one write lock (ROADMAP O255,
+  (ROADMAP O14). **A receipt a newer build minted reads as newer, never
+  as forged (ROADMAP O315, 1.7.0)**: the version and every key are read
+  BEFORE the signature, and one this build does not know is refused
+  unread — exit 1, `/v1` 400 with no class — where a field a later
+  release signed used to fail the signature and read as the tamper
+  verdict (1.6.1 and older still read it so). Reading them ahead of the
+  signature can buy a refusal and never an acceptance; its cost, stated:
+  a forger who adds a key gets "not checked" where an up-to-date build
+  says "forged". **A whole destruction is one write lock (ROADMAP O255,
   2026-09-25).** Until then each drawer was destroyed in its own
   transaction, so a receipt minted while another handle committed carried
   that writer's records — and labels — inside its interval and could never

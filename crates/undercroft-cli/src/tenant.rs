@@ -1971,7 +1971,10 @@ impl Tenancy {
         // A malformed body is the CALLER's error (400) and a well-formed
         // document that does not describe this vault is an integrity verdict
         // (409). Keeping those apart is the whole reason this route exists
-        // rather than a client comparing JSON by hand.
+        // rather than a client comparing JSON by hand. A document a NEWER
+        // build minted — a field or a version this build does not know — is
+        // the caller's 400 too, out of `store_err`'s `Invalid` arm: the store's
+        // age fence refuses it unread, before its signature (ROADMAP O315).
         let att: undercroft_store::ForgetAttestation = serde_json::from_str(body)
             .map_err(|e| RestError::new(400, format!("body is not an attestation: {e}")))?;
         let store = self.store_for(id)?;
@@ -5253,6 +5256,102 @@ mod tests {
         let (code, out) = s.call("POST", "/v1/vaults/acme/forget", Some(&ids));
         assert_eq!(code, 403, "{out}");
         assert!(out.contains("read-only"), "{out}");
+    }
+
+    /// **ROADMAP O315 through `/v1`: a receipt a newer build minted is the
+    /// caller's 400, naming the newer build — never 409 + `integrity`.**
+    ///
+    /// The route's doctrine is that 409 + `class: "integrity"` means the
+    /// document does not describe what this vault did, and the fleet's ops
+    /// door exits 2 on exactly that. A field a newer build signed made it
+    /// answer so for a genuine receipt, because the signature was checked over
+    /// a canonical recomputed without the field. Four documents, the
+    /// dispatched gate's: the genuine one, a forged one, one carrying a newer
+    /// build's field or version, and a truncated one.
+    ///
+    /// COUNTERFACTUAL, run against `5108dfa`: the signed-field and signed-bump
+    /// arms answered 409 + `integrity`, and the unsigned-key arm 200
+    /// `verified`.
+    #[test]
+    fn verify_forgetting_answers_a_newer_builds_receipt_as_the_callers_400() {
+        let mut s = surface(false);
+        let ids = json!({ "ids": [s.clean_id.clone()] }).to_string();
+        let (code, att) = s.call("POST", "/v1/vaults/acme/forget", Some(&ids));
+        assert_eq!(code, 200, "{att}");
+        // Signed here, as an operator would with `forget --sign`: the
+        // defect lives where a signature is checked.
+        let mut doc: undercroft_store::ForgetAttestation = serde_json::from_str(&att).unwrap();
+        let (secret, _) = undercroft_vault::bundle::sign_keygen();
+        doc.sign(&secret).unwrap();
+        let genuine = serde_json::to_value(&doc).unwrap();
+        let post = |s: &mut Surface, body: &str| {
+            s.call("POST", "/v1/vaults/acme/verify-forgetting", Some(body))
+        };
+
+        // Genuine: 200 verified — the premise every refusal below rests on.
+        let (code, out) = post(&mut s, &genuine.to_string());
+        assert_eq!(code, 200, "{out}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&out).unwrap()["verdict"],
+            json!("verified")
+        );
+
+        let assert_age = |code: u16, out: &str, what: &str| {
+            assert_eq!(code, 400, "{what}: the caller's 400: {out}");
+            let v: Value = serde_json::from_str(out).unwrap();
+            assert!(
+                v["error"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("a newer build of Undercroft minted it"),
+                "{what}: names the newer build: {out}"
+            );
+            assert!(
+                v.get("class").is_none(),
+                "{what}: no integrity class — it is not a verdict: {out}"
+            );
+        };
+
+        // A newer build's field, inside its signature.
+        let mut newer = genuine.clone();
+        newer["archive"] = json!("1 archive(s)");
+        let mut bytes = doc.canonical();
+        bytes.extend_from_slice("\u{1f}archive\u{1e}1 archive(s)".as_bytes());
+        newer["sig"] = json!(undercroft_vault::bundle::sign_detached(&secret, &bytes).unwrap());
+        let (code, out) = post(&mut s, &newer.to_string());
+        assert_age(code, &out, "a signed field");
+
+        // A newer build's version, re-signed as its minter would.
+        let mut bumped = doc.clone();
+        bumped.version = undercroft_store::ATTESTATION_VERSION + 1;
+        bumped.sign(&secret).unwrap();
+        let (code, out) = post(&mut s, &serde_json::to_string(&bumped).unwrap());
+        assert_age(code, &out, "a signed version bump");
+
+        // An unknown key with no signature over it at all.
+        let mut annotated = genuine.clone();
+        annotated["ticket"] = json!("JIRA-1");
+        let (code, out) = post(&mut s, &annotated.to_string());
+        assert_age(code, &out, "a key beside the signature");
+
+        // Forged: still 409 + integrity, so the fence softened nothing.
+        let mut forged = genuine.clone();
+        forged["head_after"] = json!("00".repeat(32));
+        let (code, out) = post(&mut s, &forged.to_string());
+        assert_eq!(code, 409, "{out}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&out).unwrap()["class"],
+            json!("integrity"),
+            "{out}"
+        );
+
+        // Truncated: the bytes cut mid-document are the caller's 400, as a
+        // malformed body always was — not a verdict and not an age claim.
+        let text = genuine.to_string();
+        let (code, out) = post(&mut s, &text[..text.len() / 2]);
+        assert_eq!(code, 400, "{out}");
+        assert!(out.contains("not an attestation"), "{out}");
+        assert!(!out.contains("newer build"), "{out}");
     }
 
     // ---- A22: rotate's error classes ----------------------------------

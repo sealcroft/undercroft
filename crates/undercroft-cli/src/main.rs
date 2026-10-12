@@ -2993,6 +2993,10 @@ fn run(cli: Cli) -> Result<()> {
                     outln!("ATTESTATION FAILED: {why}");
                     std::process::exit(EXIT_INTEGRITY.into());
                 }
+                // Exit 1 — including the age fence's refusal of a document a
+                // NEWER build minted (ROADMAP O315): not checked, which is
+                // neither valid nor forged, and must never print the line
+                // above.
                 Err(other) => return Err(other.into()),
             };
             // Attestation fields come from a caller-supplied JSON file;

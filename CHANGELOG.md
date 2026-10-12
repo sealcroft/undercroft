@@ -1757,6 +1757,35 @@ PATCH inside the unreleased 1.7.0, by the 2026-09-08 versioning ruling: the defe
 undefined panic status, and the new class reports a condition that was undefined; 0, 1 and 2 keep
 their meanings. `UPGRADING.md` carries the entry; `config check` cannot detect it.
 
+### A receipt a newer build minted is answered as newer than this build, never as forged (O315)
+
+`verify-forgetting` checked a signed erasure receipt's Ed25519 signature BEFORE it read the receipt's
+`version`, over a canonical recomputed from a type that silently dropped every key it did not declare. So
+a field a newer build signs — or a version it bumps, the version being inside the same signature — made
+every older build answer `ATTESTATION FAILED`, exit 2, the tamper verdict, over a genuine receipt; and a
+key added beside a signature was ignored while the document `VERIFIED`. It had happened once already:
+1.1.0's `mirror` note shipped with no version change, so every build before 1.1.0 reads a genuine
+mirror-bearing signed receipt as forged.
+
+Now an **age fence** runs first, before the vault check, the signature and every tag (O267's ruling,
+on the O238 precedent): a `version` above 2, or a key the receipt's types do not declare — at the top, in
+a drawer or in a record, named by path — is refused as "a newer build of Undercroft minted it": exit 1,
+`/v1` 400 with no class (through the orchestrator's ops relay too, whose CLI exits 1), an error on MCP,
+and "NOT CHECKED" on the admin console, which toasted "ATTESTATION FAILED" on every error until now and
+says so only on the integrity class. Reading the version and the key set ahead of the signature can buy a
+refusal and never an acceptance; its cost is stated — a forger who adds a key gets "not checked" where an
+up-to-date build says "forged". Every key any release ever minted is known (read at all 13 tags), and no
+minted byte moves. Measured on the LoCoMo feed mined into four wings (340 drawers) and one signed
+`forget` of 40: a version bump exits 1 (2 on `5108dfa`), an extra key 1 (0 there), a truncated file 1, a
+forged receipt 2, the genuine one 0; `/v1` 400, 400, 400, 409 + `integrity`, 200 (409, 200, 400, 409, 200
+there).
+
+PATCH inside the unreleased 1.7.0: a genuine document was read as forged, which the code's own comment
+said must not happen. `UPGRADING.md` records both moved observables and that 1.7.0 is the first release
+that answers a newer build's receipt as age; `config check` cannot detect it. The export bundle's
+manifest and the chain witness keep the old parse — filed as a ROADMAP entry; the witness first ships in
+1.7.0, so a fence there costs no compatibility only if it lands before 1.7.0 does.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

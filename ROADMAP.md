@@ -14391,6 +14391,87 @@ orchestrator likewise answers `/healthz`.
 C++ logger in a model build) is not a Rust print and is not counted; a telemetry build's JSON log
 layer writes STDOUT, which is O333's.
 
+### O315 — CLOSED 2026-10-12: a receipt a newer build minted is answered as newer than this build, never as forged — an age fence reads the version and every key before the vault, the signature or a tag
+
+**Filed 2026-10-06 by O267's ruling (its refuter; the order read again by the integrator).**
+`verify_forget_attestation` checks the Ed25519 signature over `att.canonical()`
+(`crates/undercroft-store/src/forget.rs` 650-656) before it matches the version (684-693), and the
+attestation type drops unknown fields (no `deny_unknown_fields`, 179). A receipt minted by a build that
+signs one more field is recomputed shorter by an older build, fails the signature, and is reported
+`ATTESTATION FAILED`, exit 2 — the tamper verdict — which the comment at 681-683 ("a document a newer
+build minted is not a forgery") says must not happen, and which a version bump does not prevent. It has
+happened once: the `mirror` extension (256-258) shipped in `30c560f`, first tagged `v1.1.0`, with no
+version change, so every pre-1.1.0 verifier reads a genuine mirror-bearing signed receipt as forged.
+
+**Shape**: an age fence on the O241 ruling 4 and O238 precedent — an unknown version, or a field this
+build does not know, refused as "a newer build minted it" (exit 1) BEFORE the signature is checked —
+landing in a release before any further canonical extension; O316's signed archive note waits for it.
+**Gate**: a signed receipt carrying an extra canonical field is refused with exit 1 by the fenced build,
+and the same document without the field verifies; counterfactual, today's order answers exit 2 (O267's
+P-Q1d).
+
+#### BUILT 2026-10-12, as ruled (O267 ruling 4) — and one renderer the entry did not name
+
+**What landed.** `crates/undercroft-store/src/forget.rs`: `ForgetAttestation`, `ForgottenDrawer` and
+`AttestedRecord` capture every key they do not declare (`#[serde(flatten)] unknown: UnknownFields`) instead
+of dropping it — empty on every receipt a release minted, and serialised to nothing, so no minted byte
+moves. `ForgetAttestation::age_fence` is the first statement of `verify_forget_attestation`, ahead of the
+vault check, the signature and every tag: a `version` above `ATTESTATION_VERSION` (2) is refused as "a newer
+build of Undercroft minted it", and so is any key the type does not declare, at the top, in a drawer or in a
+record — named by path, three at most, each cut to 64 characters and printed through `Debug`, the caller's
+bytes. Version 0 is refused in the same class without the claim. The class is `StoreError::Invalid`, the one
+the old version arm answered and `witness_check` answers for a newer witness: exit 1, `/v1` 400 with no
+class and so through the orchestrator's ops relay (whose CLI exits 1), an error on MCP. **The renderer the
+entry did not name**: `ui.html`'s receipt checker toasted "ATTESTATION FAILED" on EVERY error, a newer
+build's receipt, a malformed body and a refused bearer included; it says so now only on `class:
+"integrity"` and "NOT CHECKED" otherwise, `api()` carrying the status and the class on what it throws.
+
+**Why the order is sound, and its cost.** O238's argument for the manifest: `version` and the key set are
+read before verification, which can buy a refusal and never an acceptance — `version` is inside the signed
+canonical, and an undeclared key is one this build would recompute out of it. Ahead of the vault check too,
+on the witness's order: nothing in a document this build cannot read is read. The cost, pinned by the unit
+test's arm 8: a forger who adds a key buys exit 1, "not checked", where an up-to-date build answers exit 2 —
+never a verdict that the document is genuine.
+
+**No genuine receipt is fenced.** Read at all 13 release tags `v1.0.0`..`v1.6.1` and all 22 revisions of
+`forget.rs`: the three types never lost a field, and `mirror` (1.1.0) is the only one ever added.
+`every_key_a_released_build_minted_is_known_and_no_minted_byte_moves` pins the key sets as literals and the
+minted JSON byte for byte.
+
+**Tests, each RED on the unfixed code.** Store: `a_document_a_newer_build_minted_is_refused_as_age_before_the_signature`
+(a signed top-level, record and drawer field; a signed bump alone and with a field; an unsigned extra key; a
+key beside a genuine signature; version 0; a newer document naming another vault; four forgeries still
+`Attestation`; hostile keys escaped and cut) and the key-set test. CLI `tests/cli.rs`
+`verify_forgetting_answers_a_newer_builds_receipt_with_exit_1_never_2` (genuine 0; signed field, signed
+bump and annotated 1; forged 2; truncated bytes 1; records cut and re-signed 2). `/v1`
+`verify_forgetting_answers_a_newer_builds_receipt_as_the_callers_400`; MCP
+`a_receipt_a_newer_build_minted_is_refused_as_age_over_mcp`; console
+`the_console_calls_only_an_integrity_verdict_a_failed_attestation`. Counterfactuals, each applied by a
+script that asserted its anchor, forced a recompile and restored with `cmp`: the fence after the signature
+→ the store test answers `Attestation("signature: …")`; undeclared keys not captured → RED; no `flatten` →
+the byte pin RED; raw keys in the message → arm 10 RED; the first two with the old console catch → all four
+CLI-side tests RED, with 409 + `integrity`, exit 2 and "attestation failed: signature". e2e gained 18 checks
+and e2e-orchestrator 10, run ad hoc against both release binaries: on `5108dfa`'s, 7 and 3 of them fail as
+the defect reads (bump exit 2, annotated exit 0, `/v1` 409 + `integrity` and 200, the ops relay 200 and its
+CLI exit 0).
+
+**Real corpus.** The LoCoMo feed mined into four wings (340 drawers) and one signed `forget` of 40 (55 ms, a
+14,357-byte receipt). CLI on this build: genuine 0 (14 ms), bump 1, extra field 1, truncated 1, forged 2; on
+`5108dfa`'s: bump 2 and extra field 0, `ATTESTATION VERIFIED`. `/v1` on this build 200, 400, 400, 400, 409 +
+`integrity`; on `5108dfa`'s 200, 409 + `integrity`, 200 `verified`, 400, 409. `verify` OK after.
+
+**What it does not do, stated.** It fixes no older build: 1.6.1 and earlier still read a newer build's
+signed field as forged, and every build before 1.1.0 reads 1.1.0's `mirror` that way — `UPGRADING.md` records
+1.7.0 as the first release that answers it as age. The export bundle's manifest and the chain witness drop
+keys the same way: filed as O-NEW-O315-1. O316's unsigned archive note must not ride as a top-level key of
+`POST …/forget`'s reply, which IS the attestation, or this build's own verifier refuses the reply it minted —
+noted there.
+
+**Version.** PATCH inside 1.7.0: the defect was a genuine document read as forged, which the comment beside
+the code already said must not happen, and an undeclared key that was ignored was never documented as
+accepted. Two observables move, both in `UPGRADING.md`: a newer build's signed receipt exits 1 (400) where it
+exited 2 (409 + `integrity`), and a receipt carrying an undeclared key exits 1 (400) where it verified.
+
 ## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
@@ -40792,6 +40873,13 @@ still refused.
 
 **Relations:** shares a question with O356 — both change what `verify_forget_attestation` answers for a genuine document.
 
+**Noted 2026-10-12 by O315's build.** `verify_forget_attestation` now runs an age fence first — a version or
+a key this build does not know is refused as a newer build's (`StoreError::Invalid`) before the vault, the
+signature or a tag — so this entry's verdict is reached only by a document past it. The three types gained a
+flattened `unknown` map, empty on every minted receipt and serialised to nothing; `AttestationVerdict` is
+untouched and keeps `Copy`. Every receipt this entry's gate mints with `v1.5.2` and `v1.6.1` passes the
+fence: no key any release minted is unknown to it.
+
 #### PANEL ANALYSIS 2026-10-08 — escalated to the maintainer
 
 **The question.** A receipt minted before O255 while another handle committed carries that handle's records inside
@@ -41835,6 +41923,10 @@ which neither `secure_delete` nor `VACUUM` reaches — save a unique token, `for
 docs sweep, including `forget.rs` 798-799's comment), O317 (an archive-removal surface). This entry stays
 open for its engineering half — `secure_delete`, a TRUNCATE checkpoint after a destruction, and P-Q1e's
 FTS5 residue.
+
+**Noted 2026-10-12 by O315's build.** Item 4's fence is built (O315, under `## 1.7.0`): a version or a key
+this build does not know is refused as a newer build's before the vault, the signature or a tag, so a signed
+archive extension may follow it from 1.7.0 on.
 
 #### RULED 2026-10-08 by two independent panels (three lenses each, one Agentic Memory Architecture) and a reconciling refuter
 
@@ -45686,25 +45778,6 @@ the tree, which no arm judges — filed as its own entry, not ruled here.
 **Version class.** PATCH-class: a preflight change with no bump of its own; a CHANGELOG line; no
 `UPGRADING.md` entry.
 
-### O315 — a signed erasure receipt is checked for its signature before its version, so a field a newer build adds makes every older build call it forged
-
-**Filed 2026-10-06 by O267's ruling (its refuter; the order read again by the integrator).**
-`verify_forget_attestation` checks the Ed25519 signature over `att.canonical()`
-(`crates/undercroft-store/src/forget.rs` 650-656) before it matches the version (684-693), and the
-attestation type drops unknown fields (no `deny_unknown_fields`, 179). A receipt minted by a build that
-signs one more field is recomputed shorter by an older build, fails the signature, and is reported
-`ATTESTATION FAILED`, exit 2 — the tamper verdict — which the comment at 681-683 ("a document a newer
-build minted is not a forgery") says must not happen, and which a version bump does not prevent. It has
-happened once: the `mirror` extension (256-258) shipped in `30c560f`, first tagged `v1.1.0`, with no
-version change, so every pre-1.1.0 verifier reads a genuine mirror-bearing signed receipt as forged.
-
-**Shape**: an age fence on the O241 ruling 4 and O238 precedent — an unknown version, or a field this
-build does not know, refused as "a newer build minted it" (exit 1) BEFORE the signature is checked —
-landing in a release before any further canonical extension; O316's signed archive note waits for it.
-**Gate**: a signed receipt carrying an extra canonical field is refused with exit 1 by the fenced build,
-and the same document without the field verifies; counterfactual, today's order answers exit 2 (O267's
-P-Q1d).
-
 ### O316 — an erasure says nothing of the copies it leaves, and a restore reverses receipted erasures in silence
 
 **Filed 2026-10-06 by O267's ruling (items 2 and 3).** A vault DELETE answers `deleted: true` while the
@@ -45730,6 +45803,13 @@ step; every over-claim above is corrected and the `Dangling` scope stated; the c
 new field gets its `HAND_PROJECTED` rows; `ui.html` renders neither, which is written down. **Gate**:
 P-Q1a and P-Q1b driven through the CLI and `/v1`; the new fields asserted present and, with nothing left,
 empty or "unknown" as ruled; a text check over the surfaces above.
+
+**Noted 2026-10-12 by O315's build.** The age fence refuses any key a receipt does not declare, before its
+signature, and `POST /v1/vaults/{id}/forget` answers with the attestation itself — so this entry's unsigned
+archive note cannot ride as a top-level key of that reply, or this build's own `verify-forgetting` refuses
+the reply it minted as a newer build's. Where the note travels instead is this entry's build to settle. A
+SIGNED note, declared in a later release, is answered as age by every verifier from 1.7.0 up to that release
+and as forged by 1.6.1 and older, which its `UPGRADING.md` entry owes.
 
 **Relations:** shares a diff surface with O147 — both add fields to the reply of `DELETE /v1/vaults/{id}`.
 
@@ -48582,6 +48662,28 @@ on) and the two annotations.
 **Relations:** shares a diff surface with O325 — a digests asset uploaded before that entry's `verify`.
 
 **Relations:** shares a diff surface with O326 — the publishing jobs' permissions.
+
+### O-NEW-O315-1 — the export bundle's manifest and the chain witness drop a key they do not declare, so a newer build's signed field reads as a bad signature or as forged
+
+**Filed 2026-10-12 by O315's build (its sibling sweep); read in code, unmeasured.** O315 fenced the erasure
+receipt; two other documents this tree signs and verifies keep the parse it replaced. `BundleManifest`
+(`crates/undercroft-vault/src/bundle.rs` 523) captures no undeclared key and its `version` is read by
+nothing: `BundleManifest::attest` verifies the signature over `canonical()` unconditionally, so a field a
+newer build signs makes every older importer answer "manifest attestation failed" naming the signature —
+exit 1, `/v1` 400 (`tenant.rs`, `verify_attestation`) — over a genuine bundle, and an unsigned newer
+manifest imports with the field ignored. `ChainWitness` (`crates/undercroft-store/src/witness.rs` 63) reads
+`version` before its signature, as O315's fence does, but drops undeclared keys: a newer build that signs one
+more field without a version bump makes `witness_check` answer `StoreError::Attestation("witness signature:
+…")` — exit 2, 409 + `integrity` — on a genuine witness, O315's class exactly, and an unsigned witness is
+checked with the extra key ignored. The witness first ships in 1.7.0, so a fence landing in 1.7.0 costs no
+compatibility; once 1.7.0 ships, its verifiers are fixed in place.
+
+**Shape, for a ruling panel**: O315's — capture undeclared keys and refuse them, with an unknown version, as
+a newer build's before the signature, on both documents, each in its own refusal class (an import refusal;
+the witness's `Invalid`), plus a version check for the bundle manifest, which has none. **Gate**: a signed
+bundle manifest and a signed witness, each carrying one extra signed field, refused as a newer build's; the
+same documents without the field accepted; counterfactual, today's order answers the bad signature and the
+tamper verdict respectively.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

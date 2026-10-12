@@ -1382,7 +1382,14 @@ Consequences that are binding, not advisory:
   provable forgetting (forget.rs — C3.2 phase 1: `forget`/
   `verify-forgetting`, chain-attested destruction with heads + tombstone
   interval + unkeyed content fps; vault-verifiable by keyed replay, third
-  parties verify the operator's Ed25519 signature. **The keyed replay has a
+  parties verify the operator's Ed25519 signature. **A document a newer
+  build minted is AGE, never forgery (O315)**: the three types capture every
+  key they do not declare instead of dropping it, and `age_fence` — the
+  verifier's first statement, ahead of the vault, the signature and every
+  tag — refuses an unknown `version` or key as a newer build's (`Invalid`:
+  exit 1, `/v1` 400 with no class). Signature-first over a canonical
+  recomputed without the key is how 1.1.0's `mirror` reads as forged to
+  every older build. **The keyed replay has a
   SHORTER LIFETIME than the document it checks, and pretending otherwise was
   a CRITICAL** (O13): rotation destroys the mac key that made the tombstones,
   so every genuine receipt reported `ATTESTATION FAILED` at exit 2 — the
