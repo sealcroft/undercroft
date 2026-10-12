@@ -14469,10 +14469,17 @@ exit 1 in 16 and 28 ms, `/v1` 500 in 20 and 36 ms, the directory the link names 
 archive; with the link removed the backup is taken. The control backup measured 79 and 124 ms
 here against 70 and 108 ms unfixed — noise; the judgement is one `symlink_metadata`.
 
-**Residuals, stated.** A link swapped in at `.staging` between the judgement and the sweep's
-read or the stage's `create_dir` is followed — the restore area's own window (`container()` then
-`sweep_stale`), which a stat cannot close; `openat`-style directory descriptors are not in `std`.
-`backups/` itself is followed when it is a link, as `vaults/` is for the restore area: making
+**Residuals, stated.** The judgement is ONE stat, while the backup goes on naming
+`.staging/<nonce>` BY PATH for its whole run — the sweep's read, the stage's `create_dir`, the
+copy's `Connection::open`, its sync, the immutable re-read, the manifest write, the publish's
+listing and rename, and the `Drop`'s `remove_dir_all`. A link swapped in at `.staging` at any
+moment in that window redirects whichever of those come after it to wherever it points, and with
+a `<nonce>` directory made there first (the nonce is readable in a listing of `.staging`) the
+copied database is written there. The restore area has the same window over its own stage
+(`container()`, then the stage's path for the whole restore). A stat cannot close it;
+`openat`-style directory descriptors are not in `std`. This paragraph first described the window
+as "between the judgement and the sweep's read or the stage's `create_dir`", which understated it;
+corrected after the independent review. `backups/` itself is followed when it is a link, as `vaults/` is for the restore area: making
 it a link takes a write to the data directory's root, not an entry under `backups/`, and the
 entry's shape names `.staging`. A 32-hex SYMLINK inside a real `.staging` is unlinked by the
 sweep without being followed (`remove_dir_all`'s documented behaviour), unmeasured here because
@@ -14502,7 +14509,7 @@ link and what it names byte-identical.
 **Prior rulings followed.** O283, the maintainer's "restore refuses symlinks"; O291's named
 extension of it to "every entry must be a regular file", which O291 sent for the maintainer's
 ratification through its pull request; and the reconciled 2026-10-08 ruling on O270 (PR #262,
-not yet on `main`), which adopts the same rule — "no entry that is not a regular file (O291's
+merged), which adopts the same rule — "no entry that is not a regular file (O291's
 survey, O301)" — for restore's genesis arm. Nothing here needed a panel: the entry's shape names
 the mechanism, and O291's survey already answers what "regular" means.
 
@@ -14513,7 +14520,12 @@ device — named with its kind; every stat error returned, never read as "no lin
 door asks it before anything is staged and answers `StoreError::Invalid` (exit 1, `/v1` 400);
 `Stage::swap` asks it again under the hold and answers `VaultError::Io`. Both texts keep
 "ROADMAP O283" and now read "ROADMAP O283, O301". One rule for what a vault directory may hold
-when something replaces or removes it; O283's three-name check is gone.
+when something replaces or removes it; O283's three-name check is gone. The door's refusal is
+one store function, `refuse_irregular_live_vault`, which `/v1`'s restore route also asks FIRST —
+before it releases its own cached handle on the vault. Added after the independent review: the
+route evicted first, that handle's close unlinked `-wal` by NAME, and a link put over the live
+`-wal` of a vault the server held was removed by the close and the restore answered 200 (measured
+on the corpus below), so "restore refuses symlinks" was false on `/v1` exactly there.
 
 **The filing, measured on the unfixed tree** (`main` `5f5fe2f`'s binary). A linked `-wal` was
 NOT renamed aside: SQLite opens every file it names through `unixOpen` with `O_NOFOLLOW`
@@ -14537,10 +14549,15 @@ byte-identical, the link and what it names unchanged, no restore area left — a
 refused as `Io` with the vault where it stands, no aside). `tests/cli.rs::o301_backup_restore_refuses_a_live_vault_holding_a_link_or_a_directory`
 and `tenant::tests::o301_v1_restore_refuses_a_live_vault_holding_a_link` drive the CLI (exit 1)
 and `/v1` (400), each with its control. RED on the unfixed tree at the `-wal` arm (the raw
-SQLite error, exit 1 / 500). Source arms: `irregular_target` calls `deletes::survey(`, the swap
-calls `irregular_target(`, no `fn linked_target(` remains, and the store's door asks before
-`Stage::copy(`; the `deletes::` user count stays one, because the restore reaches the survey
-through the vault crate. e2e: six CLI checks and four `/v1` checks.
+SQLite error, exit 1 / 500). `tenant::tests::o301_v1_restore_surveys_before_it_releases_its_own_handle`:
+the server has served the vault, a link is put over its live `-wal`, and the restore answers 400
+with the link kept and the server's handle not released; RED with the route's survey removed
+(200, the link gone). Source arms: `irregular_target` calls `deletes::survey(`, the swap calls
+`irregular_target(`, no `fn linked_target(` remains, the store's door calls
+`refuse_irregular_live_vault` before `Stage::copy(`, that function asks `irregular_target(`, and
+the CLI crate's production code calls it exactly once; the `deletes::` user count stays one,
+because the restore reaches the survey through the vault crate. e2e: six CLI checks and four `/v1`
+checks.
 
 **Counterfactuals** (cf.sh's discipline: the edit proved landed, a `Compiling` line required,
 restored, `cmp`ed, touched). `main`'s `restore.rs` and `restores.rs` put back whole: all three
@@ -14570,13 +14587,12 @@ same tree.
 **Residuals, stated.** An entry planted after the swap's survey and before its rename is renamed
 along and removed with the aside — O291's residual for the delete, the same window. A linked
 `-wal` planted between the door and the hold meets SQLite's own refusal at the hold, still
-refused with nothing changed but in the raw class, not the survey's. On `/v1`, when the serving
-process itself holds the vault, the route releases its own cached handle before the door looks,
-and SQLite's close unlinks `-wal` BY NAME: a link put over that live `-wal` is removed then and
-the restore proceeds — measured on the corpus, 200, the same on the unfixed binary. Nothing the
-vault held is lost (SQLite never read through the link, `O_NOFOLLOW`), and what it named is
-untouched; only the link goes, by SQLite's close rather than the swap. Windows is unmeasured
-(O275).
+refused with nothing changed but in the raw class, not the survey's. A link put over a held
+vault's `-wal` AFTER the route's survey and before its eviction is still unlinked by that close —
+the same window, narrowed to the route's next two statements. `DELETE /v1/vaults/{id}` has the
+twin of the defect this unit closed on restore's route, filed as O-NEW-O273-3, because closing it
+changes O291's ruled order. The statuses these refusals answer are O-NEW-O273-2's question.
+Windows is unmeasured (O275).
 
 ## 1.6.1 — released 2026-09-22
 
@@ -48737,6 +48753,79 @@ on) and the two annotations.
 **Relations:** shares a diff surface with O325 — a digests asset uploaded before that entry's `verify`.
 
 **Relations:** shares a diff surface with O326 — the publishing jobs' permissions.
+
+### O-NEW-O273-1 — an archive's identity is an unauthenticated `vault.json` read with no bound, so a planted entry under `backups/` can stall `/v1`, allocate without bound, or make a backup prune every real archive
+
+**Filed 2026-10-12 by O273's independent review, widening the builder's own flag; found by
+reading, not measured.** `backups::archive_vault_id` (`crates/undercroft-vault/src/backups.rs`)
+reads `backups/<entry>/vault.json` with a plain `fs::read` — no size bound, following links — and
+trusts the unauthenticated `id` in it. It is reached for EVERY entry under `backups/` by
+`GET /v1/vaults/{id}/backups` (`tenant.rs` `backup_list`, through the CLI crate's
+`read_backup_vault_id`) and by every `backup create`'s prune (`archives_of`). Under O273's own
+threat model, a writer who can add an entry under `backups/`:
+- a FIFO at an entry's `vault.json` blocks the read, and with it `/v1`'s one request loop;
+- a link from there to `/dev/zero`, or to any large file, allocates without bound;
+- with no link at all, ten planted `<vault>-2099-…Z/vault.json` holding `{"id":"<vault>"}` are that
+  vault's ten newest "archives" by name and by manifest, so its next `backup create` prunes every
+  real archive — the one it has just published included — and answers `Created`.
+
+O289's guarded read (`read_manifest_file`: a stat, a regular file only, at most 1 MiB) is not used
+here; O293 already files this bare read ("`backups.rs`: an archive's manifest read").
+
+**Shape**: three parts. (1) The guarded read for the identity read — O293's own shape, built there
+rather than twice. (2) An authenticated archive identity: an entry is this vault's archive only if
+its manifest's MAC verifies under the installation's key and names the vault, as the stage's
+unlock already checks, without opening anything writable. (3) Prune removes only what (2)
+authenticates, and orders "oldest" by what an archive holds — its manifest's chain height — never by
+its name, because a genuine archive copied under a later stamp still authenticates. (2) and (3)
+change which entries `GET …/backups` lists and prune counts (an archive from another installation
+would no longer be counted, or pruned), so they need a ruling.
+
+**Gate**: ten planted unauthenticated `<vault>-2099-…Z` entries, and two genuine archives copied
+under later stamps, leave every real archive in place across a `backup create`; a FIFO and a
+`/dev/zero` link under `backups/` answer `GET …/backups` within a bound on a thread.
+
+### O-NEW-O273-2 — one ruling owed: the `/v1` class of a refusal about what the installation holds at a name the engine owns
+
+**Filed 2026-10-12 by O273's independent review.** Three refusals that are neither a caller's error
+nor a verdict about a vault's bytes answer three different ways:
+- O268's restore area, and since O273 `backups/.staging`, when a link or not a directory:
+  `VaultError::Io`, which `store_err`/`vault_err` answer with their catch-all 500 — the class that
+  tells a retry layer the condition is transient — and exit 1 on the CLI;
+- O283/O301's link or irregular entry in the live vault: `Invalid` (400) at the door, but
+  `VaultError::Io` (500) when the swap meets the same thing under the hold;
+- while the tree's own doctrine answers a permanent, operator-fixable state of the installation
+  409 with no class (`RestoreInterrupted` in `vault_err`; the orchestrator's `state_error_response`,
+  which replaced a 502 for exactly that reason).
+
+O268's item 9 ruled the CLI's exit classes, not these statuses; O273 followed the container's class
+without ruling it. Changing `.staging` alone would make two halves of one rule disagree.
+
+**Shape, for a ruling while 1.7.0 is unreleased** (shipped, the statuses are documented): one class
+for "something the engine will not follow sits at a name it owns" — the restore area, `.staging`,
+and a live vault's entry met at the door or at the swap — and whether the door's 400 and the swap's
+500 become one answer.
+
+**Gate**: each of those refusals answers the ruled status on `/v1` and through the orchestrator's
+relay, and the ruled exit on the CLI, a test per surface.
+
+### O-NEW-O273-3 — `DELETE /v1/vaults/{id}` lets go of its own handle before it surveys, so a link over a held vault's `-wal` is unlinked and the delete answers "deleted"
+
+**Filed 2026-10-12 by O301's build, from its independent review's finding on restore's route; read
+in code, not measured.** O291's ruled `/v1` order (item 12) evicts the server's own cached handle
+before the delete's door surveys the vault. That handle's close unlinks `-wal` BY NAME, so a link
+put over the live `-wal` of a vault the server held is removed by the close, the survey then finds
+only regular files, and the delete answers `deleted: true` while what the link named survives —
+the shape "a delete never follows a link" exists to refuse. Restore's route had the same order and
+O301's build closed it there, measured at 200 before and 400 after on a real corpus. Nothing the
+vault held is lost: SQLite opens every file with `O_NOFOLLOW`, so it never read through the link.
+
+**Shape, for a ruling** (it inserts a step into O291 item 12's order): ask the delete's survey
+before the eviction, as restore's route now asks `refuse_irregular_live_vault`, the door asking
+again.
+
+**Gate**: a `/v1` server that has served the vault, a link put over its live `-wal`: the delete
+refuses with the link kept and the handle not released; with the link gone it deletes.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

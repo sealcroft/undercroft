@@ -149,10 +149,16 @@ fn nonce() -> String {
 /// followed, as the restore area is (ROADMAP O268). `backups/` itself is made
 /// when absent, as it always was.
 ///
-/// What a stat cannot close, stated: a link swapped in at the name between
-/// this judgement and the sweep's read or the stage's `create_dir` is
-/// followed — the restore area's window, one directory over; closing it needs
-/// directory descriptors (`openat`), which `std` does not offer.
+/// What a stat cannot close, stated: the judgement is ONE stat, while the
+/// backup goes on naming `.staging/<nonce>` BY PATH for its whole run — the
+/// sweep's read, the stage's `create_dir`, the copy's `Connection::open`, its
+/// sync, the immutable re-read, the manifest write, the publish's listing and
+/// rename, and the `Drop`'s `remove_dir_all`. A link swapped in at `.staging`
+/// at any moment in that window redirects whichever of those come after it to
+/// wherever it points; with a `<nonce>` directory made there first (the nonce
+/// is readable in a listing of `.staging`), the copied database is written
+/// there. The restore area has the same window over its own stage. Closing it
+/// needs directory descriptors (`openat`), which `std` does not offer.
 fn staging_root(backups: &Path) -> io::Result<PathBuf> {
     fs::create_dir_all(backups)?;
     let root = backups.join(STAGING_DIR);

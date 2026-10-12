@@ -3146,12 +3146,31 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
         verified < held && held < swapped,
         "verify, then hold, then swap"
     );
+    // ROADMAP O301: the door asks what the live vault holds before anything
+    // is staged, through the one function `/v1` also asks before it releases
+    // its own handle — and that function is the delete's survey.
     let surveyed = door
-        .find("restores::irregular_target(")
+        .find("refuse_irregular_live_vault(manager, &id)")
         .expect("the door asks what the live vault holds (ROADMAP O301)");
     assert!(
         surveyed < door.find("Stage::copy(").expect("the stage"),
         "the live vault is surveyed before anything is staged"
+    );
+    assert!(
+        body_of(door, "refuse_irregular_live_vault").contains("restores::irregular_target("),
+        "the restore's refusal is the delete's survey"
+    );
+    let route_surveys: usize = cli
+        .iter()
+        .filter(|(p, _)| !p.ends_with("_tests.rs"))
+        .map(|(_, t)| {
+            t.matches("undercroft_store::refuse_irregular_live_vault(")
+                .count()
+        })
+        .sum();
+    assert_eq!(
+        route_surveys, 1,
+        "`/v1` asks before it releases its handle, once"
     );
     let holds: usize = cli
         .iter()

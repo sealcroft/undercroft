@@ -2382,6 +2382,14 @@ impl Tenancy {
         if !src.join("vault.json").exists() {
             return Err(RestError::new(404, format!("no backup named {name}")));
         }
+        // ROADMAP O301: what the live vault holds is asked BEFORE this process
+        // lets go of its own handle on it. That handle's close unlinks the
+        // vault's `-wal` by NAME, so a link put over the live `-wal` was removed
+        // by the eviction below and the restore went on over the vault at 200 —
+        // "restore refuses symlinks" was false on `/v1` exactly when this server
+        // held the vault. The store's one refusal, in its words; the door asks
+        // again.
+        undercroft_store::refuse_irregular_live_vault(&self.manager, id).map_err(store_err)?;
         // This process's own cached handle would be the holder the restore's
         // hold refuses, so it goes first — behind `deny_co_resident` above,
         // as every eviction here is. A refused restore costs a reopen.
@@ -5635,5 +5643,73 @@ mod tests {
         }
         let (code, answer) = s.call("POST", "/v1/vaults/acme/backups/restore", Some(&body));
         assert_eq!(code, 200, "control: nothing irregular left: {answer}");
+    }
+
+    /// **The route asks what the live vault holds BEFORE it lets go of its own
+    /// handle** (ROADMAP O301). This server has served `acme`, so it holds it,
+    /// and a link is put over that live `-wal`. The route used to evict first:
+    /// the handle's close unlinked `-wal` by NAME — the link — and the restore
+    /// went on over the vault at 200, so "restore refuses symlinks" was false on
+    /// `/v1` for a vault the server held (measured on a real corpus). Now 400,
+    /// the link and what it names kept, the handle not released; with the link
+    /// gone the same restore runs.
+    #[cfg(unix)]
+    #[test]
+    fn o301_v1_restore_surveys_before_it_releases_its_own_handle() {
+        let mut s = surface(false);
+        let root = s.dir.path().to_path_buf();
+        let name = {
+            let m = VaultManager::open(&root, None).unwrap();
+            let store = VaultStore::open(m.unlock("acme").unwrap()).unwrap();
+            match store
+                .backup(&root.join(undercroft_vault::BACKUPS_DIR))
+                .unwrap()
+            {
+                undercroft_store::BackupOutcome::Created(r) => r.name,
+                undercroft_store::BackupOutcome::Refused(r) => panic!("premise: {r:?}"),
+            }
+        };
+        let (code, answer) = s.call("GET", "/v1/vaults/acme/stats", None);
+        assert_eq!(code, 200, "premise: the server opened acme: {answer}");
+        assert!(
+            s.tenancy.stores.contains_key("acme"),
+            "premise: the server holds acme"
+        );
+        let wal = root.join("vaults").join("acme").join("vault.db-wal");
+        assert!(
+            std::fs::symlink_metadata(&wal).is_ok_and(|m| m.is_file()),
+            "premise: the held vault has a live -wal"
+        );
+        let elsewhere = TempDir::new().unwrap();
+        let named = elsewhere.path().join("frames");
+        std::fs::write(&named, b"what the -wal link names").unwrap();
+        std::fs::remove_file(&wal).unwrap();
+        std::os::unix::fs::symlink(&named, &wal).unwrap();
+        let body = format!("{{\"name\":\"{name}\"}}");
+        let (code, answer) = s.call("POST", "/v1/vaults/acme/backups/restore", Some(&body));
+        assert_eq!(code, 400, "{answer}");
+        assert!(
+            answer.contains("vault.db-wal is a symbolic link")
+                && answer.contains("ROADMAP O283, O301"),
+            "{answer}"
+        );
+        assert!(
+            std::fs::symlink_metadata(&wal)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the link is kept: nothing closed the handle beneath it"
+        );
+        assert_eq!(std::fs::read(&named).unwrap(), b"what the -wal link names");
+        assert!(
+            s.tenancy.stores.contains_key("acme"),
+            "a refused restore does not release the server's handle"
+        );
+        std::fs::remove_file(&wal).unwrap();
+        let (code, answer) = s.call("POST", "/v1/vaults/acme/backups/restore", Some(&body));
+        assert_eq!(
+            code, 200,
+            "control: with the link gone the restore runs: {answer}"
+        );
     }
 }

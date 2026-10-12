@@ -226,24 +226,9 @@ pub fn restore_archive(
             "vault '{id}' exists; pass --force to overwrite it with the backup ({UNCHANGED})"
         )));
     }
-    // ROADMAP O283, ruled by the maintainer 2026-09-27: "restore refuses
-    // symlinks" — and O301, by the vault delete's survey: any entry of the
-    // vault's directory that is not a regular file. The swap renames the PATH
-    // aside; for a link that is the link, so the directory it names was
-    // orphaned and the vault silently moved onto this palace's own filesystem,
-    // a linked staged manifest was removed as a link with what it named left
-    // behind, and a linked `-wal` failed the hold with a raw SQLite error only
-    // after the archive was staged and verified. Refused before anything is
-    // staged; the swap asks again under the hold.
-    if let Some(why) = undercroft_vault::restores::irregular_target(root, &id)? {
-        return Err(StoreError::Invalid(format!(
-            "vault '{id}' is not restored over: {why}. A restore replaces only a directory \
-             of regular files at that path and never follows a link: what a link names would \
-             be left behind, and a linked vault directory would move the vault onto this \
-             palace's own filesystem. Replace the link with what it names, or move the entry \
-             out, then restore ({UNCHANGED}; ROADMAP O283, O301)"
-        )));
-    }
+    // ROADMAP O283, O301: refused before anything is staged; the swap asks
+    // again under the hold.
+    refuse_irregular_live_vault(manager, &id)?;
     if !archive.irregular().is_empty() {
         return Err(StoreError::IntegrityFinding(format!(
             "backup {name} does not verify, so {UNCHANGED}: it holds {:?} as something other \
@@ -370,4 +355,33 @@ pub fn restore_archive(
         replaced: swapped.replaced,
         skipped,
     }))
+}
+
+/// **Refuse to restore over a live `vaults/<id>` that is a symbolic link, or
+/// that holds any entry that is not a regular file** (ROADMAP O283, ruled by
+/// the maintainer 2026-09-27: "restore refuses symlinks"; O301: the vault
+/// delete's survey, through `restores::irregular_target`). The swap renames the
+/// PATH aside: for a link that is the link, so the directory it names was
+/// orphaned and the vault silently moved onto this palace's own filesystem; a
+/// linked staged manifest or `-shm` was removed as a link with what it named
+/// left behind, a subdirectory was removed with its files, and a linked `-wal`
+/// failed the hold with a raw SQLite error only after the archive was staged.
+///
+/// The door asks this before anything is staged, and `/v1` asks it FIRST, before
+/// it releases its own cached handle on the vault: that handle's close unlinks
+/// `-wal` by NAME, so a link put over the live `-wal` of a vault the server held
+/// was removed by the close and the restore went on over the vault (measured,
+/// 200). One function, so the two callers answer one refusal.
+pub fn refuse_irregular_live_vault(manager: &VaultManager, id: &str) -> Result<(), StoreError> {
+    undercroft_core::validate_name(id, "vault").map_err(|e| StoreError::Invalid(e.to_string()))?;
+    if let Some(why) = undercroft_vault::restores::irregular_target(manager.root(), id)? {
+        return Err(StoreError::Invalid(format!(
+            "vault '{id}' is not restored over: {why}. A restore replaces only a directory \
+             of regular files at that path and never follows a link: what a link names would \
+             be left behind, and a linked vault directory would move the vault onto this \
+             palace's own filesystem. Replace the link with what it names, or move the entry \
+             out, then restore ({UNCHANGED}; ROADMAP O283, O301)"
+        )));
+    }
+    Ok(())
 }

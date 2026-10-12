@@ -1115,7 +1115,9 @@ Consequences that are binding, not advisory:
   a linked `-wal` met SQLite's own `O_NOFOLLOW` only at the hold, as a raw
   "unable to open database file" after the archive was staged and verified)
   — `restores::irregular_target`, the vault DELETE's survey, asked by the door
-  before anything is staged and by the swap under the hold, and
+  before anything is staged (`refuse_irregular_live_vault`, which `/v1`'s
+  route also asks BEFORE it releases its own handle, whose close unlinks a
+  `-wal` link by name) and by the swap under the hold, and
   `key_generation_differs` is read under the hold.
   **`DELETE /v1/vaults/{id}`, one door (delete.rs, `delete_vault`,
   ROADMAP O291)** — it removed the vault directory with nothing held:

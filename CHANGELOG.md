@@ -1784,6 +1784,13 @@ in 7–24 ms. The O273 half on the same corpus: the unfixed backup through a lin
 published its archive from the directory the link named and swept the stage-shaped directory
 there (exit 0, 93–143 ms); now it refuses in 16–28 ms with that directory unchanged.
 
+**And `/v1` asks before it lets go of its own handle.** The restore route released the server's
+cached handle on the vault first, and that handle's close unlinks `-wal` by NAME: a link put over
+the live `-wal` of a vault the server held was removed by the close and the restore answered 200
+(measured on the same corpus). The route now asks the door's refusal first —
+`refuse_irregular_live_vault`, one store function — and answers 400 with the link kept and the
+handle not released. The delete route has the same order by O291's ruling and is filed for one.
+
 Gates: a unit test in the vault crate and store tests for each, asserting the steps REACHED (a
 backup refused at the stage fires its manifest-read pause point and never `Pinned`; a restore
 refused at the door fires none, one refused by the swap fires `Held`) — because a refusal after
