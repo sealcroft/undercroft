@@ -250,6 +250,54 @@ jobs:
           - ort-build
     steps:
       - uses: actions/checkout@v5
+      # ── the leg's image, built over the Actions layer cache (ROADMAP O439) ──
+      # Every leg used to build the whole builder stage from nothing — about
+      # seven and a half minutes of every leg's eight to seventeen — and the
+      # model legs then compiled their own dependencies at run time on top.
+      # Now the image a leg runs on (the Dockerfile's `battery-core`, `battery`
+      # or `models` stage, read from its compose service by `battery.sh
+      # --image-of`, so this file keeps no map of its own) is built here with
+      # buildx over the dependency layers earlier runs left in the Actions
+      # cache, and loaded; only the workspace compiles, and only what the
+      # suite runs — four legs never compile the telemetry binaries. Legs stay
+      # independent (ROADMAP M13): each builds what it runs, nothing waits on
+      # another job.
+      #
+      # ONE leg per cache scope writes it, and only the dependency stages
+      # (`deps-all`, `deps-models`), whose layers no source edit moves: the
+      # workspace's own layers are this commit's alone, and uploading them
+      # from every leg would buy nothing and evict what later runs need. The
+      # `battery` scope's writer is e2e-telemetry, whose image needs every
+      # dependency stage in it; `battery-core` legs read the same scope.
+      #
+      # Freshness is proved, not trusted: `battery.sh` runs with
+      # BATTERY_PREBUILT=1, so it builds nothing itself, and every suite on
+      # the image runs `undercroft-battery-premise` first, which refuses an
+      # image whose recorded tree digest is not this checkout's.
+      - name: Which image this leg runs on
+        id: image
+        run: echo "target=$(bash tests/battery.sh --image-of '${{ matrix.suite }}')" >> "$GITHUB_OUTPUT"
+      - name: Buildx, for the layer cache
+        if: steps.image.outputs.target != ''
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: The dependency layers, written to the Actions cache by one leg per scope
+        if: steps.image.outputs.target != '' && (matrix.suite == 'e2e-telemetry' || matrix.suite == 'ort-build')
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: ${{ steps.image.outputs.target == 'models' && 'deps-models' || 'deps-all' }}
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=${{ steps.image.outputs.target == 'models' && 'models' || 'battery' }}
+          cache-to: type=gha,mode=max,scope=${{ steps.image.outputs.target == 'models' && 'models' || 'battery' }}
+      - name: The ${{ steps.image.outputs.target }} image this leg runs on
+        if: steps.image.outputs.target != ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: ${{ steps.image.outputs.target }}
+          load: true
+          tags: undercroft-${{ steps.image.outputs.target }}:ci
+          cache-from: type=gha,scope=${{ steps.image.outputs.target == 'models' && 'models' || 'battery' }}
       # Through `battery.sh`, not `docker compose run` directly. The script
       # runs the suite, captures its exit code WITHOUT a pipe, and then
       # compares the suite's MEASURED check count against the figure the agent
@@ -260,10 +308,16 @@ jobs:
       # green. `--no-preflight` skips the host-side preflights, which
       # the dedicated `preflight` job above already runs once.
       #
-      # It also gets `--build` (the script always passes it) and the narrowed
-      # backends reset for free, so CI and a local battery run the same code
-      # rather than two implementations that agree until they do not.
+      # It also gets the narrowed backends reset for free, so CI and a local
+      # battery run the same code rather than two implementations that agree
+      # until they do not. A leg with no image (obs-config, arch-check) builds
+      # its own with `--build`, as before.
       - name: ${{ matrix.suite }}
+        env:
+          BATTERY_PREBUILT: ${{ steps.image.outputs.target != '' && '1' || '0' }}
+          BATTERY_CORE_IMAGE: undercroft-battery-core:ci
+          BATTERY_IMAGE: undercroft-battery:ci
+          BATTERY_MODELS_IMAGE: undercroft-models:ci
         run: bash tests/battery.sh --no-preflight ${{ matrix.suite }}
 
   tls-pins:
@@ -280,7 +334,11 @@ jobs:
       # with the default features that recipe ships. Those two builds are this
       # job's entire cost: the job took 5 min 15 s with the one build (run
       # 35148259866, on `ec78535`) and 12 min 2 s with both (run 35166168384,
-      # on `ef20456`), so the second build costs about 6 min 47 s.
+      # on `ef20456`), so the second build costs about 6 min 47 s. Since
+      # ROADMAP O439 the suite builds the two side by side, over the
+      # Dockerfile's shared dependency stage, rather than each inside its own
+      # boot, and proves each booted engine is the binary its build recorded
+      # from this checkout.
       #
       # `deploy/observability` shipped UNSTARTABLE for two releases
       # because the engine pinned a path inside Caddy's root-only PKI tree,

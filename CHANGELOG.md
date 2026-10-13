@@ -2812,6 +2812,40 @@ size limit and its index of reference documents are held in both directions. The
 the limit, 60 KiB, and that where the core's one-line form and a reference document's full text
 differ the full text governs, the divergence being a defect fixed by the unit that finds it.
 
+### The battery builds its images once and runs every suite side by side, each suite proving its image is the tree under test (O439)
+
+Not a fix, and not counted in this release's figures above: it changes how this repository is tested, which
+no deployment can observe; the published images and binaries are built by the same commands from the same
+sources. Measured on 2026-10-13 before it, on the maintainer's machine: the host-side preflights took 911 s
+and the suites then ran one after another, each building its own image over a workspace compiled from
+nothing — 31½ to 43 minutes a battery; CI's legs took 8 to 17½ minutes each, about seven and a half of every
+one spent building that same image. After it, a full local battery took **780 s** after a one-line change to
+`undercroft-core` (every workspace crate recompiled) and **726 s** with every image stage rebuilt, both
+beside other agents' builds on the same machine, every suite's verdict and check count the same as before.
+
+The Dockerfile compiles every dependency once over a skeleton of the workspace — stub sources, then every
+member's artifacts deleted, so no stub can be linked — and two images are cut from one `builder`:
+`battery-core` for `test`, `lint`, `e2e`, `orchestrator-e2e` and `backends-e2e`, and `battery`, which adds
+the telemetry binaries the suite used to compile at run time and mdBook, for `e2e-telemetry` and `site`.
+`tests/battery.sh` builds each once per run under a per-worktree tag, starts every suite the moment its
+image exists (`--serial` keeps the old one-at-a-time stream), and runs the preflights beside them as a
+second process of itself, in five shards and a last, at raised priority on Git Bash; every exit code is
+still collected without a pipe, and the shards' coordinator refuses a run where any preflight ran twice or
+not at all. Every suite on a battery image first runs `undercroft-battery-premise`, which refuses an image
+whose recorded tree digest (`tests/tree-digest.sh`, the one definition, run over the checkout too) is not
+the tree under test, or a binary that is not the one its build recorded. Eight preflight readers that
+started a process per item now start one per question, with the same answers.
+
+`tests/tls-pins.sh` booted engine images it never rebuilt — `up -d` builds only a missing tag, and the
+throwaway projects' tags outlive `down -v` — so on a machine that had run it once it tested that run's
+engine, six and three weeks old here; it now builds both on every run, side by side, and proves each
+running engine against its build record. Its throwaway projects were fixed names, so two worktrees running
+it at once tore down each other's stacks — this unit's own run did that to another worktree's battery,
+failing three of its checks — and each now ends in a digest of the checkout's path. CI's legs build the image they run with buildx over the dependency
+layers earlier runs left in the Actions cache, one leg per cache scope writing them, and run the battery
+with `BATTERY_PREBUILT=1`; no job is added and the verdict still needs every job. CI's new wall-clock is
+measured by the pull request's first runs, not here.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

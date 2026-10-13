@@ -48,6 +48,34 @@ for the target, and linking stays `release.yml`'s job. **A target you SHIP is
 a target that must be compiled on a pull request** — the same rule as *ask
 what a gate can SEE*, applied to the platform axis rather than to an
 observable.
+**Each leg builds the image it runs over the Actions layer cache (ROADMAP
+O439).** Every leg used to build the Dockerfile's builder stage from nothing —
+about seven and a half minutes of each leg's eight to seventeen and a half,
+measured on runs `38294232458`, `38304475585` and `38307051064` — and the model
+legs then compiled their own dependencies at run time on top, so `ort-build`
+was the run's wall-clock. Now a leg asks `bash tests/battery.sh --image-of
+<suite>` which image it runs on (its compose service's `target:` — the
+workflow keeps no map of its own), builds that stage with
+`docker/build-push-action` and buildx over the dependency layers earlier runs
+left in the Actions cache, loads it as `undercroft-battery-core:ci`,
+`undercroft-battery:ci` or `undercroft-models:ci`, and runs `battery.sh
+--no-preflight <suite>` with `BATTERY_PREBUILT=1`, so the script builds nothing
+and the premise in every suite refuses an image that is not the checkout's
+tree. ONE leg per cache scope writes it — `e2e-telemetry` for `battery`, the
+scope both battery images read, because its target needs every dependency
+stage; `ort-build` for `models` — and only the dependency stages (`deps-all`,
+`deps-models`) with `mode=max`: the workspace's own layers belong to one
+commit, and uploading them from every leg would buy nothing and evict what
+later runs need. The legs stay independent (M13's ruling): each builds what it
+runs and none waits on another job, so no job is added and `verdict`'s
+`needs:` does not move. A cache entry written on a pull request is visible to
+that pull request alone; one written on `main` is visible to every pull
+request, so the first run after a dependency change pays the dependency
+compile once per leg, as every run used to. `tls-pins` and `trivy-image` build
+through the default docker driver as before — `tls-pins` now builds its two
+engine images side by side, and `trivy-image` stays uncached on purpose, being
+the authority on what the published image holds.
+
 **One toolchain builds everything, and CI's supply chain is pinned (ROADMAP
 O294, O326, O327).** `rust-toolchain.toml` names the version the Docker images
 carry — the Dockerfile's builder and CI's lint container name it in full,

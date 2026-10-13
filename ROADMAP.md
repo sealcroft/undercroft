@@ -4012,7 +4012,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**466** of the **481** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**467** of the **482** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -53813,6 +53813,179 @@ not verifiable on such a handle; or refusing `verify` on the posture outright an
 writable directory). **Gate**: the probe's run answers no integrity verdict on an intact vault; a vault really
 damaged or rolled back, read through the same posture with nothing writing, still answers whatever the ruled
 class is. **Counterfactual**: today's chain-leg failure on nearly every call.
+
+### O439 — the local battery and CI each under fifteen minutes of wall-clock: the battery images built once per run, every suite on them side by side, CI's legs over the Actions layer cache, and every suite proving its image is the tree under test — the local battery measured under fifteen minutes warm and cold, CI's figure open until the pull request runs
+
+**Asked by the maintainer, 2026-10-13**, relayed by the session that dispatched the unit: a full local battery
+took about an hour and a half and CI thirty to forty minutes, and both are to finish inside fifteen minutes of
+wall-clock without losing a suite or the fidelity of a verdict. Approved: a cached dependency layer with
+BuildKit cache mounts, one image built once that the suites run against, CI caching through buildx and the
+Actions cache, and the local suites in parallel. NOT approved: skipping or path-filtering a suite — where the
+four cannot reach fifteen minutes, the remainder is reported per suite and nothing is narrowed.
+
+#### Measured before (2026-10-13)
+
+- **Local**, on the maintainer's Windows host through Git Bash, beside other agents' Docker builds (a machine
+  never idle that day, which every figure here shares): the last full batteries took 31½ to 43 minutes. The
+  43-minute run spent its first fifteen in the host-side preflights, then ran its suites one after another:
+  `lint` 10 min 21 s (the builder stage, 414 s, inside it), `test` 3 min 04 s, `e2e` 3 min 07 s,
+  `orchestrator-e2e` 40 s, `e2e-telemetry` 5 min 20 s (two telemetry binaries compiled at run time),
+  `backends-e2e` 50 s, `site` 1 min 49 s (mdBook compiled at run time), `tls-pins` 3 min. The preflights alone,
+  `--preflight-only`, measured 911 s. Every compose service built its own image of the same builder.
+- **Why the preflights cost fifteen minutes**: a process creation on that Git Bash took about a second — a
+  hundred `/usr/bin/true` in 113.8 s, and four such loops at once in 122 s, so the latency is the host's and it
+  runs in parallel — and the preflights made around a thousand.
+- **CI**, from `gh run view --json jobs` over runs `38294232458`, `38304475585` and `38307051064`: 11.4 to 17.7
+  minutes a run; `ort-build` up to 1,052 s, `onnx-build` 848 s, `tls-pins` 825 s, `e2e-telemetry` 705 s, and
+  about 450 s of the builder stage in every Docker leg.
+
+#### What changed
+
+- **The dependency layer, in the Dockerfile and not in a cache mount.** A `skeleton` stage copies the
+  workspace's manifests, the lock and `vendor/` with every target root stubbed (a lib empty, every other
+  root `fn main() {}`, a root being `src/lib.rs`, `src/main.rs` or a manifest's `path =`), and `deps`
+  compiles the release build's and the test build's dependencies over it; `deps-telemetry` and
+  `deps-models` do the same for the telemetry binaries and the model legs. The skeleton's bytes move only
+  with a manifest, the lock or `vendor/`, so a source edit reaches none of them. Each ends with
+  `cargo clean -p` over every member named in the manifests, so no stub can be "fresh" to cargo — a COPY
+  keeps the host's mtimes, and a real source older than the stub's build would otherwise link the stub —
+  and `builder` refuses to build when a member's fingerprint is left, or when the layer holds fewer than a
+  hundred. The equivalent of cargo-chef in a few lines of shell, with no third-party tool in the build that
+  makes the published image. **BuildKit cache mounts were approved and are deliberately not used**: one is
+  shared by every build on the machine with the same id, and every worktree compiles at `/src`, so cargo's
+  mtime-based freshness across worktrees is exactly the shared-`CARGO_TARGET_DIR` false green
+  `build-pitfalls.md` records; and a cache mount is never exported to the Actions cache, so it buys CI
+  nothing. A layer is content-addressed, safe across worktrees, and exported. A `deps-check` stage cooking
+  the lint suite's checked dependencies was built, measured and dropped: its `target/debug` is 632 MB,
+  re-copied over a `builder` that moves with every commit, to save a suite that runs beside the others
+  about a minute. Folding the telemetry dependencies into `deps`, so `tls-pins`' telemetry engine build
+  would compile only the workspace, was considered and not done: `deps` is under the published image too,
+  which should pay for no dependency it does not link, and measured, that build (362 s) finished beside the
+  default one (349 s) rather than after it, so it was not what `tls-pins` waited on.
+- **One build, two images.** `battery-core` is `builder` plus the premise below, and `test`, `lint`, `e2e`,
+  `orchestrator-e2e` and `backends-e2e` run on it; `battery` adds the telemetry binaries (the `telemetry`
+  stage runs, unchanged, the two `cargo build … --features telemetry` commands the `e2e-telemetry` suite ran
+  at run time, beside `builder`) and mdBook, for `e2e-telemetry` and `site`. A local battery builds both at
+  once, BuildKit computing what they share once; a CI leg builds only the one its suite needs. The model
+  legs run on `models`. A compose service's `target:` says which, `battery.sh --image-of <suite>` prints
+  it, and each tag is per worktree.
+- **Side by side.** `tests/battery.sh` builds each image once and starts every suite when its image exists
+  — a suite with none at once — each into `.battery/<suite>.log`, the exit code collected by `wait` after
+  `kill -0`, every wait bounded by `BATTERY_TIMEOUT_SECONDS`; `--serial` and a one-suite run keep the old
+  streamed shape. The preflights run beside them as a second process, `--preflight-only`, at AboveNormal
+  priority on a Windows host, their log printed whole at the end and their exit code folded in.
+- **The preflights, in shards, and with fewer processes.** `--preflight-only` runs them as five processes
+  of the script side by side and then the last preflight alone (it reads the awk record the others wrote;
+  each shard keeps its own and the last merges them). `PF_SHARDS` keeps together the preflights that read
+  one another's variables (`version surfaces` reads `workspace_version` from the ROADMAP tag arm, `prose
+  figures` reads `CI_N` and `CI_NEEDS_N`); an unlisted preflight runs in shard 1. The coordinator compares
+  the headers every shard printed with the ones the file holds and refuses a run where any preflight ran
+  twice or not at all — the only symptom of a shard that stopped early. And eight readers that started a
+  process per item now start one per question, with the same answers and their own probes unchanged: the
+  supply chain's image reader, the pipeline scanner, model-leg parity, prose figures' variable lookup, its
+  number-word reader and its platform-views counts (twenty rows of five processes each, now one), the CI
+  verdict's job list, and the hierarchy word (a recursive walk of the whole scope per allowance, ninety-odd,
+  now one walk). The platform-views reader was proved equal to the old one on the set's real text and on a
+  mutated copy carrying a changed figure and doubled digit runs, forty rows, no difference.
+- **The premise.** `tests/tree-digest.sh` is the ONE definition of the tree a build compiled; the
+  Dockerfile records it and every binary's sha256, and `undercroft-battery-premise` — named first by every
+  compose service on a battery or model image — refuses an image whose record is not `BATTERY_EXPECT_TREE`
+  or a binary that is not its record, exit 1, before the suite runs.
+- **`tls-pins` built nothing after a machine's first run** — `up -d` builds only a missing tag and the
+  throwaway projects' tags outlive `down -v` — so it booted that run's engine: six and three weeks old on
+  the maintainer's machine. Not this unit's defect; found reading the code for it. It now builds both
+  engine images on every run, side by side, and each boot compares its running engine's sha256 with the
+  record the `build-record` stage exports from the same build. **And its project names were fixed**, so two
+  worktrees running it at once shared them: this unit's own `tls-pins` run, made while another worktree's
+  battery was running, tore down that battery's stacks and failed 3 of its checks — and 5 of its own — in
+  the same second. That failure is this unit's, reported as such; the projects now end in a digest of the
+  checkout's path. It prints how long each engine build and each deployment took, as notes.
+- **CI.** Each matrix leg asks `--image-of`, builds that stage with `docker/build-push-action` and buildx
+  over the dependency layers in the Actions cache (the two actions `release.yml` already pins, by the same
+  SHAs), loads it, and runs `battery.sh --no-preflight <suite>` with `BATTERY_PREBUILT=1`. One leg per
+  cache scope writes it (`e2e-telemetry` for `battery`, whose image needs every dependency stage;
+  `ort-build` for `models`), and only the dependency stages (`deps-all`, `deps-models`). No job is added;
+  the legs stay independent (M13). `tls-pins` builds its two images side by side; `trivy-image` stays
+  uncached, the authority on the published image.
+
+#### Measured after (2026-10-13)
+
+Both runs full batteries, all ten suites and the twenty-four preflights, on the same host beside other agents'
+Docker builds; every suite's verdict and check count equal to the old battery's — `test` 1,443 passed and 21
+ignored, `e2e` 901, `orchestrator-e2e` 201, `e2e-telemetry` 62, `backends-e2e` 157, `obs-config` 17, `site` 7,
+`tls-pins` 32 — and the published-figure comparison clean.
+
+- **Warm, after a one-line change to `undercroft-core`** (so every workspace crate recompiled): **780 s**. Both
+  images built in 361 s; then `site` 25 s, `e2e-telemetry` 49 s, `orchestrator-e2e` 57 s, `backends-e2e` 80 s,
+  `lint` 138 s, `test` 201 s, `e2e` 214 s; `tls-pins`, started at once, 701 s; the preflights about 535 s.
+- **Cold**, every stage from `base` down rebuilt (a temporary `ENV` in `base`, reverted; the toolchain image was
+  already pulled, which a fresh machine would also pay): **726 s**. The images in 509 s — `base` 10 s, `deps`
+  142 s, then `builder` 283 s beside `deps-telemetry` 227 s and `telemetry` 108 s, `mdbook` 76 s beside them
+  all; then `test` 168 s, `e2e` 183 s; `tls-pins` 662 s (its observability engine built in 393 s, the
+  team-server engine in 343 s, the two deployments 104 s and 49 s); the preflights about 320 s.
+- **Nothing changed since the last run** (the images and both engines served by the layer cache): 317 s, and
+  `tls-pins` 281 s of it.
+- **The long poles**, both under fifteen minutes in both runs: `tls-pins`, whose two engine builds are the
+  `builder` workload twice over (one with the telemetry features) plus two real deployments, and the image
+  build followed by `e2e`. The host's load from other work moved every figure more than the run's own did:
+  the cold run was the faster of the two.
+
+#### What the premise refuses, proved
+
+- **A stale image.** A one-line change to a crate, run against the image built before it: `PREMISE FAILURE`,
+  exit 1, the suite never run; the same image after a rebuild passes.
+- **A replaced binary.** A byte changed in a recorded binary: refused by the record's own `sha256sum -c`.
+- **A stale engine in `tls-pins`.** The suite's old behaviour, booting a stale engine image (a 1.5.0 build)
+  under the project's tag: the new premise check failed it (32 passed, 1 failed) while the freshly built
+  engine passed.
+- **The dependency layer's guarantee.** `builder`'s guard, run over a synthetic layer: an empty one refused
+  ("examined nothing"), one holding 150 dependency fingerprints accepted, the same with one
+  `undercroft-core-…` fingerprint added refused, naming it.
+- **A shard that stops early.** A level-2 heading planted in this file: `ROADMAP headings` failed in its shard,
+  which stopped there, and the coordinator then failed the run naming `version surfaces` as not run — exit
+  1, reverted, the file's checksum back to its own.
+
+#### CI: the expected shape, and what to watch
+
+Not measured — the unit could not push, and a workflow's time exists only on a pushed branch. Expected, from
+the before-figures and the local measurements:
+
+- **The pull request's first run pays what every run paid before.** No cache exists yet in either scope, so
+  every Docker leg compiles its dependencies itself, as it always did, and the two writer legs then upload
+  the dependency layers; expect the legs near their old 8 to 17½ minutes, the writers longer by the upload.
+  A cache written on a pull request is visible to that pull request alone, so the SECOND run is the first
+  measurement, and only a run on `main` makes the cache every pull request reads.
+- **From the second run**, a Docker leg should be the cache import, the workspace compile (the builder's
+  share after its dependencies, its seven and a half minutes less the dependency compile), the image load
+  and the suite. The jobs most likely to be the run's wall-clock are `tls-pins` (its two engine images
+  through the default driver, uncached by design, now side by side over one shared dependency stage — 825 s
+  before, when they were built one after the other each from nothing) and whichever leg's suite is
+  longest after its compile.
+- **What to read in a leg's log**: `premise: image built from tree <digest>, the tree under test` before
+  every suite's own output — its absence, or a `PREMISE FAILURE`, means the leg ran nothing it should
+  trust; the build step's `CACHED` lines over `deps`, `deps-telemetry`, `deps-models` and `mdbook`; and on
+  the two writer legs, how long the cache export took.
+- **What to watch over time**: the repository's Actions cache (10 GB, evicted least-recently-used) — the
+  two scopes' dependency layers are a few GB together, and a release workflow or another cache evicting
+  them would put every leg back on the first-run path without failing anything; and the first run after any
+  `Cargo.lock` change, which recompiles the dependencies once per leg by design.
+
+#### What remains
+
+- **CI's wall-clock**, unmeasured until this unit's pull request runs (the section above says what to read).
+  The goal is met when a run after the first, on a cache this pull request or `main` wrote, finishes inside
+  fifteen minutes; if one job does not, the measured remainder is reported per job here and no suite is
+  narrowed or path-filtered, which was not approved.
+- **`backends-e2e` across worktrees.** Its five databases are services of the `undercroft` project every
+  checkout declares, and the battery resets them before the suite, so two worktrees running it at once can
+  pull the databases from under each other — the fixed-name hazard `tls-pins` had, one suite over, not caused
+  by this unit and not fixed by it, because a per-checkout project would start five databases per worktree.
+  It needs its own entry, not yet filed — ids are assigned by the session that dispatched this unit — and a
+  ruling on that cost.
+- **The prior ruling is followed, not revised**: M13's — legs independent, no new job, the verdict's `needs:`
+  untouched, every leg through `battery.sh --no-preflight`. What M13 called the legs inheriting `--build` is
+  kept in substance: every leg builds its image on every run, the layer cache deciding the cost, and the
+  premise proves it is the checkout's.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

@@ -290,7 +290,11 @@ when a count moves.
 - **The exit code is the verdict.** `tests/battery.sh` never parses suite
   output to decide pass/fail and never pipes a suite; it runs every suite in
   one pass over one tree. Never let a pipeline's tail mask an exit code you
-  depend on. Logs land in `.battery/`.
+  depend on. Logs land in `.battery/`. Since O439 it builds its images once per
+  run from one `builder`, runs the suites side by side on them (`--serial` for
+  one at a time) with the preflights beside them, and every suite on them first
+  proves its image was built from the tree under test
+  (`undercroft-battery-premise`).
 - **Heavy cargo work** uses the `undercroft-target` volume with
   `CARGO_TARGET_DIR=/build` (a host bind-mounted `target/` SIGBUSes). Always
   pair the volume mount with `CARGO_TARGET_DIR`, and give each parallel agent

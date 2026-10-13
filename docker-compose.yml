@@ -41,11 +41,28 @@
 # is right to fail on that. The first draft of this very comment did it.
 name: undercroft
 
+# **The battery images (ROADMAP O439).** Every suite that needs a binary or the
+# toolchain runs on one build of the Dockerfile's battery stages: test, lint,
+# e2e, orchestrator-e2e and backends-e2e on `battery-core` (`builder` and the
+# premise), e2e-telemetry and site on `battery` (that, the telemetry binaries
+# and mdBook). `tests/battery.sh` builds them once per run and runs these
+# without `--build`;
+# a direct `docker compose run --rm --build <suite>` builds it as it always
+# did. Each names `undercroft-battery-premise` first: inside its own container
+# it proves the image was built from BATTERY_EXPECT_TREE (the battery passes
+# the checkout's digest) and that every binary is the one the build recorded,
+# then execs the suite. `target:` is written out in each service, never through
+# an anchor, because the battery reads it there to know which image a suite
+# needs. The two model legs run on the `models` stage the same way.
 services:
   test:
+    image: ${BATTERY_CORE_IMAGE:-undercroft-battery-core:local}
     build:
       context: .
-      target: test
+      target: battery-core
+    environment:
+      BATTERY_EXPECT_TREE: ${BATTERY_EXPECT_TREE:-}
+    entrypoint: ["undercroft-battery-premise"]
     command: ["cargo", "test", "--release"]
 
   # The CI lint gate (rustfmt + clippy, warnings-as-errors), runnable
@@ -53,10 +70,13 @@ services:
   # changes, like the other suites:
   #   docker compose run --rm --build lint
   lint:
+    image: ${BATTERY_CORE_IMAGE:-undercroft-battery-core:local}
     build:
       context: .
-      target: test
-    entrypoint: ["sh", "-c"]
+      target: battery-core
+    environment:
+      BATTERY_EXPECT_TREE: ${BATTERY_EXPECT_TREE:-}
+    entrypoint: ["undercroft-battery-premise", "sh", "-c"]
     # The default build, then the TELEMETRY build (ROADMAP O84).
     #
     # `--all-targets` above lints default members with DEFAULT features, so
@@ -76,10 +96,13 @@ services:
       - "rustup component add rustfmt clippy >/dev/null 2>&1 && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo clippy -p undercroft-cli --features telemetry --all-targets -- -D warnings && cargo clippy -p undercroft-orchestrator --features telemetry --all-targets -- -D warnings"
 
   e2e:
+    image: ${BATTERY_CORE_IMAGE:-undercroft-battery-core:local}
     build:
       context: .
-      target: builder
-    entrypoint: ["bash", "/src/tests/e2e.sh"]
+      target: battery-core
+    environment:
+      BATTERY_EXPECT_TREE: ${BATTERY_EXPECT_TREE:-}
+    entrypoint: ["undercroft-battery-premise", "bash", "/src/tests/e2e.sh"]
     volumes:
       - ./tests/e2e.sh:/src/tests/e2e.sh:ro
 
@@ -87,10 +110,13 @@ services:
   # orchestrator control plane in one container.
   #   docker compose run --rm orchestrator-e2e
   orchestrator-e2e:
+    image: ${BATTERY_CORE_IMAGE:-undercroft-battery-core:local}
     build:
       context: .
-      target: builder
-    entrypoint: ["bash", "/src/tests/e2e-orchestrator.sh"]
+      target: battery-core
+    environment:
+      BATTERY_EXPECT_TREE: ${BATTERY_EXPECT_TREE:-}
+    entrypoint: ["undercroft-battery-premise", "bash", "/src/tests/e2e-orchestrator.sh"]
     volumes:
       - ./tests/e2e-orchestrator.sh:/src/tests/e2e-orchestrator.sh:ro
 
@@ -104,11 +130,13 @@ services:
   # certificate in the file, which is what lets one declaration cover two
   # authorities.
   backends-e2e:
+    image: ${BATTERY_CORE_IMAGE:-undercroft-battery-core:local}
     build:
       context: .
-      target: builder
-    entrypoint: ["bash", "/src/tests/e2e-backends.sh"]
+      target: battery-core
+    entrypoint: ["undercroft-battery-premise", "bash", "/src/tests/e2e-backends.sh"]
     environment:
+      BATTERY_EXPECT_TREE: ${BATTERY_EXPECT_TREE:-}
       UNDERCROFT_QDRANT_URL: https://qdrant-tls
       UNDERCROFT_CHROMA_URL: https://chroma-tls
       UNDERCROFT_PGVECTOR_DSN: postgresql://undercroft:undercroft@pgvector:5432/undercroft?sslmode=require
@@ -199,18 +227,29 @@ services:
   # leg also runs ONE target from outside its crate, the CLI's `model_e2e`
   # join (ROADMAP O157), whose required-features no other leg enables and
   # which the unnamed `test` suite therefore skips.
+  #
+  # Both legs run on the Dockerfile's `models` stage (ROADMAP O439), which
+  # holds their dependencies compiled — tract, ONNX Runtime and the C++
+  # toolchain ORT links (pkg-config, libssl-dev, g++) — and the sources, and
+  # compiles no workspace member: each leg still compiles and tests at run
+  # time, so its verdict is still the exit code of these commands.
   onnx-build:
+    image: ${BATTERY_MODELS_IMAGE:-undercroft-models:local}
     build:
       context: .
-      target: builder
-    entrypoint: ["bash", "-c"]
+      target: models
+    environment:
+      BATTERY_EXPECT_TREE: ${BATTERY_EXPECT_TREE:-}
+    entrypoint: ["undercroft-battery-premise", "bash", "-c"]
     command:
       - "cargo build --release -p undercroft-cli --features onnx && cargo test --release -p undercroft-embed-onnx"
 
   # Build the optional ONNX Runtime (ort) backend, wired through the CLI
   # alongside tract (both features together — the strongest coexistence
   # check), then run that crate's own tests. Unlike the pure-Rust tract
-  # backend it links ORT's C++ library, so it needs pkg-config/openssl/g++.
+  # backend it links ORT's C++ library, so it needs pkg-config/openssl/g++,
+  # which the `models` stage installs (this command fetched them with apt on
+  # every run until ROADMAP O439).
   #
   # Last, the CLI's `model_e2e` join (ROADMAP O157): the real binary with each
   # model backend, driven to `stats` on the CLI, `/v1` and MCP over the fixture
@@ -219,24 +258,36 @@ services:
   # only pull-request compile of `onnx,ort` WITHOUT `test-fixture`, which is
   # the feature set `release.yml` ships.
   ort-build:
+    image: ${BATTERY_MODELS_IMAGE:-undercroft-models:local}
     build:
       context: .
-      target: builder
-    entrypoint: ["bash", "-c"]
+      target: models
+    environment:
+      BATTERY_EXPECT_TREE: ${BATTERY_EXPECT_TREE:-}
+    entrypoint: ["undercroft-battery-premise", "bash", "-c"]
     command:
-      - "apt-get update -qq && apt-get install -y -qq pkg-config libssl-dev g++ >/dev/null 2>&1 && cargo build --release -p undercroft-cli --features onnx,ort && cargo test --release -p undercroft-embed-ort && cargo test --release -p undercroft-cli --features onnx,ort,undercroft-embed-onnx/test-fixture --test model_e2e"
+      - "cargo build --release -p undercroft-cli --features onnx,ort && cargo test --release -p undercroft-embed-ort && cargo test --release -p undercroft-cli --features onnx,ort,undercroft-embed-onnx/test-fixture --test model_e2e"
 
-  # Observability end-to-end suite. Builds the CLI with --features telemetry
-  # (like onnx-build), then exercises the opt-in /metrics gating and that
-  # traffic advances the Prometheus counters.
+  # Observability end-to-end suite: exercises the opt-in /metrics gating and
+  # that traffic advances the Prometheus counters, on the CLI and the
+  # orchestrator each built with --features telemetry.
   #   docker compose run --rm e2e-telemetry
+  #
+  # The two binaries are the battery image's (ROADMAP O439): its `telemetry`
+  # stage runs the two `cargo build … --features telemetry` commands this
+  # service ran at run time, unchanged, and keeps the binaries under
+  # /opt/undercroft/telemetry, where BIN and ORCH name them and the premise
+  # checks them against their build record.
   e2e-telemetry:
+    image: ${BATTERY_IMAGE:-undercroft-battery:local}
     build:
       context: .
-      target: builder
-    entrypoint: ["bash", "-c"]
-    command:
-      - "cargo build --release -p undercroft-cli --features telemetry && cargo build --release -p undercroft-orchestrator --features telemetry && bash /src/tests/e2e-telemetry.sh"
+      target: battery
+    environment:
+      BATTERY_EXPECT_TREE: ${BATTERY_EXPECT_TREE:-}
+      BIN: /opt/undercroft/telemetry/undercroft
+      ORCH: /opt/undercroft/telemetry/undercroft-orchestrator
+    entrypoint: ["undercroft-battery-premise", "bash", "/src/tests/e2e-telemetry.sh"]
     volumes:
       - ./tests/e2e-telemetry.sh:/src/tests/e2e-telemetry.sh:ro
 
@@ -459,21 +510,27 @@ services:
       DEFAULT_VECTORIZER_MODULE: none
       CLUSTER_HOSTNAME: node1
 
-  # Build the documentation site (mdBook). Slow first run (compiles mdbook).
+  # Build the documentation site (mdBook).
   #   docker compose run --rm site   → website/book/
   site:
+    image: ${BATTERY_IMAGE:-undercroft-battery:local}
     build:
       context: .
-      target: builder
+      target: battery
+    environment:
+      BATTERY_EXPECT_TREE: ${BATTERY_EXPECT_TREE:-}
     working_dir: /src
-    # Same version the pages workflow pins — the two builds must not drift,
-    # or the manual's sidebar markup/behavior differs between preview and live.
+    # mdBook 0.5.4 — the version the pages workflow pins; the two builds must
+    # not drift, or the manual's sidebar markup/behavior differs between
+    # preview and live — is installed in the battery image by the Dockerfile's
+    # `mdbook` stage, once, where this command compiled it on every run until
+    # ROADMAP O439.
     # Builds AND assembles, through the same script the Pages workflow runs,
     # because the checks that matter are true only of the assembled site:
     # the manual's stylesheet reaches the fonts by a path that leaves the
     # book and re-enters the landing assets, and that path resolves only
     # once both halves are in one tree.
-    command: ["sh", "-c", "cargo install mdbook --version 0.5.4 --locked --quiet && bash website/build-site.sh"]
+    command: ["undercroft-battery-premise", "bash", "website/build-site.sh"]
     volumes:
       - ./website:/src/website
       # The book sources {{#include}} files from the repo root.

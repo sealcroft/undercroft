@@ -21,14 +21,19 @@
 # Usage, from the repo root:
 #     bash tests/battery.sh              # everything
 #     bash tests/battery.sh test lint    # a subset, same reporting
+#     bash tests/battery.sh --serial     # one suite at a time, streamed
 #
-# Exit code: 0 only if every suite selected exited 0.
+# Exit code: 0 only if every suite selected exited 0, and the preflights did.
+# Two or more suites run side by side on images built once for the run, the
+# preflights beside them (ROADMAP O439; the run's own comment, below).
 set -u
 
 cd "$(dirname "$0")/.."
 
-# Order matters: the cheap suites that fail fastest come first, so a broken
-# tree is reported in a minute instead of forty.
+# Order matters under `--serial`: the cheap suites that fail fastest come
+# first, so a broken tree is reported in a minute instead of forty. Side by
+# side (ROADMAP O439) every suite starts at once, and this is the order of the
+# report.
 ALL=(lint obs-config arch-check test e2e orchestrator-e2e e2e-telemetry backends-e2e site tls-pins)
 
 # `--preflight-only` exists so CI can run the host-side preflights without
@@ -39,6 +44,8 @@ ALL=(lint obs-config arch-check test e2e orchestrator-e2e e2e-telemetry backends
 # remembers to run it is a gate the next person does not have.
 PREFLIGHT_ONLY=0
 NO_PREFLIGHT=0
+SERIAL=0
+IMAGE_OF=0
 ARGS=()
 for a in "$@"; do
   case "$a" in
@@ -51,6 +58,13 @@ for a in "$@"; do
     # Without this flag every leg would re-run every host-side preflight, which
     # the dedicated `preflight` job already does once. ROADMAP M13.
     --no-preflight) NO_PREFLIGHT=1 ;;
+    # `--serial` runs the suites one at a time, each streamed to the terminal
+    # as well as its log — the shape every battery had before ROADMAP O439.
+    # Without it two or more suites run side by side, each into its own log.
+    --serial) SERIAL=1 ;;
+    # `--image-of <suite>…` prints the image each named suite runs on, and
+    # exits; CI's legs ask it (ROADMAP O439, beside `service_target` below).
+    --image-of) IMAGE_OF=1 ;;
     # Exit 1, never 2. Exit 2 is this project's integrity verdict on every
     # command; a mistyped flag borrowing it is the defect T11 closed in the
     # binaries, and it would be no less wrong here.
@@ -108,12 +122,185 @@ if [ "$PREFLIGHT_ONLY" -eq 1 ] && [ "$NO_PREFLIGHT" -eq 1 ]; then
   exit 1
 fi
 
+# A service's Dockerfile target, read out of its block in docker-compose.yml —
+# the one place a suite's image is declared (ROADMAP O439). `--image-of`
+# prints it for the suites named — `battery-core`, `battery`, `models`, or an
+# empty line for a
+# suite that builds its own — and exits: CI's legs ask it which image to build
+# from the layer cache, so the workflow keeps no suite-to-image map of its own.
+service_target() {
+  awk -v svc="  $1:" '
+      $0 == svc { inb = 1; next }
+      inb && /^  [a-z0-9-]+:$/ { exit }
+      inb && /^      target:/ { sub(/^      target:[ \t]*/, ""); print; exit }
+    ' docker-compose.yml
+}
+if [ "$IMAGE_OF" -eq 1 ]; then
+  for s in "${ARGS[@]}"; do
+    case "$(service_target "$s")" in
+      battery-core) echo battery-core ;;
+      battery)      echo battery ;;
+      models)       echo models ;;
+      *)            echo "" ;;
+    esac
+  done
+  exit 0
+fi
+
+# **The preflights run BESIDE the suites (ROADMAP O439).** They are host-side
+# and they run on whatever host runs this script — on the maintainer's Git Bash
+# that measured 911 s for `--preflight-only` on 2026-10-13, against about 30 s
+# on CI's runner, because every one of their thousands of short-lived
+# processes costs a Windows process creation. Run first and alone, they were a
+# quarter of an hour in which no suite started. So a run with suites starts
+# them as a SECOND PROCESS of this very script, `--preflight-only` — the exact
+# code CI's preflight job runs, unchanged — into `.battery/preflight.log`, and
+# runs the suites itself as `--no-preflight` does. Its exit code folds into the
+# verdict at the end, and its log is printed there whole.
+#
+# The cost, stated: a preflight failure no longer stops the suites from
+# starting, so a broken tree is reported when the run ends rather than when the
+# preflight fails. Every suite's verdict arrives with it, which a run that
+# stopped at the first failure never gave.
+#
+# **On a Windows host they run at AboveNormal priority.** Beside an image build
+# and the suites, the Docker VM holds every core, and a Git Bash process
+# creation waits behind it: the first side-by-side run measured 1442 s for the
+# preflights against 911 s alone. `nice -n -5` is what Git Bash maps to the
+# AboveNormal class, inherited by every process the preflights start, so they
+# take the cores they need from the VM — five shards (below), each one process
+# at a time. Measured beside two full runs' image builds and suites after both
+# changes, on 2026-10-13: 535 s and 320 s, against 397 s in shards alone on
+# that host — whose load from other work moved each figure more than the run
+# beside it did.
+# Only there: a Linux host refuses a negative niceness without root, and its
+# process creation is not the cost.
+PREFLIGHT_PID=""
+if [ "$PREFLIGHT_ONLY" -eq 0 ] && [ "$NO_PREFLIGHT" -eq 0 ]; then
+  mkdir -p .battery
+  PF_NICE=()
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) PF_NICE=(nice -n -5) ;; esac
+  ${PF_NICE[@]+"${PF_NICE[@]}"} bash tests/battery.sh --preflight-only > .battery/preflight.log 2>&1 &
+  PREFLIGHT_PID=$!
+  NO_PREFLIGHT=1
+  echo "preflights started beside the suites (pid $PREFLIGHT_PID, .battery/preflight.log)"
+fi
+
 # Everything between here and the `--preflight-only` exit is the host-side
 # preflight block. It is wrapped rather than re-indented DELIBERATELY: shell
 # does not care about indentation, and re-indenting ~1,300 lines to add one
 # condition would bury this change in a diff nobody could read — which is the
 # hazard CLAUDE.md records about a 100-line edit showing as 1,415 lines.
 if [ "$NO_PREFLIGHT" -eq 0 ]; then
+
+# ── the preflights run in SHARDS, side by side (ROADMAP O439) ───────────────
+# Every preflight below sits inside `if pf_shard "<its name>"; then … fi`, and
+# `--preflight-only` runs them as parallel processes of this script, one per
+# shard (`PREFLIGHT_SHARD=<n>`), then the last preflight alone in a final one
+# (`PREFLIGHT_SHARD=last`), because it reads the awk record every other shard
+# wrote. Measured on the maintainer's Git Bash on 2026-10-13: a process
+# creation took about a second (a hundred `/usr/bin/true` in 114 s, and four
+# such loops at once in 122 s — the latency is the host's, and it runs in
+# parallel), and the preflights make around a thousand of them, so run one
+# after another they took fifteen to eighteen minutes there and seconds on CI's
+# runner. The verdict is unchanged: each preflight runs exactly once — the
+# coordinator below counts the headers every shard printed against the ones
+# this file holds, and refuses a run where any is missing or doubled — each
+# shard's exit code is collected with `wait`, and the logs are printed whole,
+# shard by shard.
+#
+# A shard holds the preflights that depend on one another, in this file's
+# order: `version surfaces` reads `workspace_version`, defined with the ROADMAP
+# release-tag arm, and `prose figures` reads `CI_N` and `CI_NEEDS_N`, set by the
+# CI-verdict preflight. A preflight with no row here runs in shard 1. The rows
+# are balanced by the time each took on that host, the longest first.
+PF_SHARDS=(
+  "1|CI verdict covers every job"
+  "1|prose figures"
+  "2|ROADMAP headings"
+  "2|version surfaces"
+  "3|line endings"
+  "3|the test-count reader"
+  "3|the supply chain is pinned"
+  "3|former-name trace"
+  "3|compose project names"
+  "3|CA pins are readable by the engine"
+  "4|every shipped serve-http recipe runs init first"
+  "4|destructive compose scope"
+  "4|checks capture the binary, then match"
+  "4|published figures"
+  "4|handover freshness"
+  "4|context-check derivation"
+  "5|measured retrieval claims carry their configuration"
+  "5|lint parity (compose vs CI)"
+  "5|model leg parity"
+  "5|vendored crates are pinned"
+  "5|the hierarchy word names one level"
+  "5|the heritage name sits where a name can sit"
+  "5|fonts are openly licensed"
+  "last|awk ran every program it was given"
+)
+pf_shard() {  # pf_shard <preflight name>: does THIS process run that preflight?
+  [ -n "${PREFLIGHT_SHARD:-}" ] || return 0
+  local row
+  for row in "${PF_SHARDS[@]}"; do
+    if [ "${row#*|}" = "$1" ]; then [ "${row%%|*}" = "$PREFLIGHT_SHARD" ]; return; fi
+  done
+  [ "$PREFLIGHT_SHARD" = 1 ]
+}
+if [ "$PREFLIGHT_ONLY" -eq 1 ] && [ -z "${PREFLIGHT_SHARD:-}" ]; then
+  mkdir -p .battery
+  rm -f .battery/awk-calls.*.log .battery/preflight-shard.*.log
+  PF_IDS=()
+  for pf_row in "${PF_SHARDS[@]}"; do
+    pf_id=${pf_row%%|*}
+    [ "$pf_id" = last ] && continue
+    case " ${PF_IDS[*]} " in *" $pf_id "*) ;; *) PF_IDS+=("$pf_id") ;; esac
+  done
+  declare -A PF_PID=()
+  for pf_id in "${PF_IDS[@]}"; do
+    PREFLIGHT_SHARD=$pf_id bash tests/battery.sh --preflight-only > ".battery/preflight-shard.$pf_id.log" 2>&1 &
+    PF_PID[$pf_id]=$!
+  done
+  PF_RC=0
+  for pf_id in "${PF_IDS[@]}"; do
+    wait "${PF_PID[$pf_id]}" || PF_RC=1
+  done
+  PREFLIGHT_SHARD=last bash tests/battery.sh --preflight-only > .battery/preflight-shard.last.log 2>&1 || PF_RC=1
+  for pf_id in "${PF_IDS[@]}" last; do
+    while IFS= read -r pf_line; do
+      case "$pf_line" in "preflights only — no suite was run"*) ;; *) printf '%s\n' "$pf_line" ;; esac
+    done < ".battery/preflight-shard.$pf_id.log"
+  done
+  # PREMISE: every preflight this file holds ran, and ran once. A shard that
+  # stopped at a failure leaves the rest of its preflights unrun, and that is
+  # named here as well as failed; a header no shard printed, or one printed
+  # twice, is a sharding defect and refuses on its own.
+  PF_WANT=$(grep '^echo "═══ preflight:' tests/battery.sh | sed -e 's/^echo "//' -e 's/"$//' | LC_ALL=C sort)
+  PF_GOT=$(cat .battery/preflight-shard.*.log | grep '^═══ preflight:' | LC_ALL=C sort)
+  PF_N=$(printf '%s\n' "$PF_WANT" | grep -c .)
+  if [ "$PF_WANT" != "$PF_GOT" ]; then
+    echo ""
+    echo "FAIL  the preflight shards did not run every preflight exactly once"
+    echo "      (< not run, > run more than once or not in this file):"
+    diff <(printf '%s\n' "$PF_WANT") <(printf '%s\n' "$PF_GOT") | grep '^[<>]' | sed 's/^/        /'
+    PF_RC=1
+  fi
+  cat .battery/awk-calls.*.log > .battery/awk-calls.log
+  if [ "$PF_RC" -ne 0 ]; then
+    echo ""
+    echo "      (the shards ran for ${SECONDS}s)"
+    echo "BATTERY FAILED — preflight"
+    exit 1
+  fi
+  echo ""
+  echo "ok    all $PF_N preflights ran, each exactly once, in ${#PF_IDS[@]} shards side by side and a last,"
+  echo "      in ${SECONDS}s"
+  echo ""
+  echo "preflights only — no suite was run, by request (--preflight-only)"
+  exit 0
+fi
+
 
 # ── the awk recorder (ROADMAP O314) ─────────────────────────────────────────
 # Every awk call the preflight block makes goes through this function. It
@@ -153,7 +340,7 @@ if [ "$NO_PREFLIGHT" -eq 0 ]; then
 # requires that step. A call made by a CHILD script (`bash tests/<x>.sh`) is
 # not recorded, because the function is not exported.
 mkdir -p .battery
-AWK_REC="$PWD/.battery/awk-calls.log"
+AWK_REC="$PWD/.battery/awk-calls${PREFLIGHT_SHARD:+.$PREFLIGHT_SHARD}.log"
 awk() {
   command awk "$@"
   local rc=$? a prog="" skip=0
@@ -201,6 +388,7 @@ if ! grep -q '^[1-9]' "$AWK_REC"; then
 fi
 : > "$AWK_REC"
 trap awk_exit_report EXIT
+if pf_shard "line endings"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ── preflight: line endings over the WHOLE tree ─────────────────────────────
 # `.gitattributes` declares `* text=auto eol=lf` and says why: a CRLF shell
@@ -292,6 +480,7 @@ echo "ok    no CRLF outside crates/ (crates/ is gated by cargo test)"
 # `ROADMAP.md`, so a `cargo test` cannot read it. Cheap, and it makes "do not
 # forget" mechanical instead of remembered — which is this project's whole
 # position on inventories versus prose.
+fi  # (end of the line-endings shard wrapper — ROADMAP O439)
 fi  # pause the preflight block: the readers below are shared with the RUN
 
 # ---------------------------------------------------------------------------
@@ -562,6 +751,7 @@ suite_count() { grep -oE "^$1=[0-9]+" <<< "$SUITE_COUNTS" | head -1 | cut -d= -f
 LANDING="website/landing/index.html"
 
 if [ "$NO_PREFLIGHT" -eq 0 ]; then  # resume the preflight block
+if pf_shard "the test-count reader"; then  # ROADMAP O439: the shard that runs this preflight
 
 # The gate for it, run host-side because no image carries this script. Both
 # arms come from the filed shape: a log reports the same figure with and
@@ -777,6 +967,8 @@ else
   echo "ok    counts by pairing (cargo) and by counting summaries (suites);"
   echo "      a replayed tail or a doubled log is named, not absorbed"
 fi
+fi
+if pf_shard "the supply chain is pinned"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ── preflight: the supply chain is pinned (ROADMAP O294, O326, O327) ────────
 # Three filings, one class: code this tree runs, or that builds what it ships,
@@ -1008,15 +1200,20 @@ SC_FLOWIMG_RE='[{,][[:space:]]*image:[[:space:]]*"?([^",}[:space:]#]+)'
 SC_FROMFLAG_RE='(--from=|,from=)"?([^",[:space:]]+)'
 SC_RUNTIME_RE='^[Ff][Rr][Oo][Mm][[:space:]]+debian:([a-z]+)-slim([[:space:]]|$)'
 SC_MECH_RE='uses:[[:space:]]*"?[^"[:space:]]*(rust-toolchain|setup-rust|actions-rs)|^[[:space:]]*toolchain:|rustup[[:space:]]+(default|override|toolchain|install|update|target|set|run)([[:space:]]|$)|RUSTUP_TOOLCHAIN|(cargo|rustc)[[:space:]]+\+'
-sc_image_refs() {  # <line> — every image reference the line names, one per line
+# It fills SC_REFS rather than printing, and the caller reads the array: called
+# through `< <(…)` it cost a process per LINE of every file it reads, which on
+# Git Bash was most of this preflight's 651 s measured on 2026-10-13 (ROADMAP
+# O439) and on CI's runner a fraction of a second. Same matches, same order.
+sc_image_refs() {  # <line> — sets SC_REFS to every image reference the line names
   local ln=$1 rest
-  if [[ $ln =~ $SC_FROM_RE ]]; then printf '%s\n' "${BASH_REMATCH[3]}"
-  elif [[ $ln =~ $SC_IMGKEY_RE ]]; then printf '%s\n' "${BASH_REMATCH[3]}"
+  SC_REFS=()
+  if [[ $ln =~ $SC_FROM_RE ]]; then SC_REFS+=("${BASH_REMATCH[3]}")
+  elif [[ $ln =~ $SC_IMGKEY_RE ]]; then SC_REFS+=("${BASH_REMATCH[3]}")
   fi
-  if [[ $ln =~ $SC_FLOWIMG_RE ]]; then printf '%s\n' "${BASH_REMATCH[1]}"; fi
+  if [[ $ln =~ $SC_FLOWIMG_RE ]]; then SC_REFS+=("${BASH_REMATCH[1]}"); fi
   rest=$ln
   while [[ $rest =~ $SC_FROMFLAG_RE ]]; do
-    printf '%s\n' "${BASH_REMATCH[2]}"
+    SC_REFS+=("${BASH_REMATCH[2]}")
     rest=${rest#*"${BASH_REMATCH[0]}"}
   done
 }
@@ -1028,7 +1225,8 @@ sc_images() {  # <pinned version> <runtime distribution> <file>...
     while IFS= read -r ln || [ -n "$ln" ]; do
       n=$((n + 1))
       case "${ln#"${ln%%[![:space:]]*}"}" in "#"*) continue ;; esac
-      while IFS= read -r ref; do
+      sc_image_refs "$ln"
+      for ref in "${SC_REFS[@]}"; do
         [ -n "$ref" ] || continue
         base=${ref%%@*}
         case "$base" in *'$'*) continue ;; esac
@@ -1050,7 +1248,7 @@ sc_images() {  # <pinned version> <runtime distribution> <file>...
         elif [ "$tag" != "$want-slim-$dist" ] && [ "$tag" != "$want-$dist" ]; then
           echo "  $f:$n: $ref is not built on $dist, the runtime stage's distribution; name rust:$want-slim-$dist"
         fi
-      done < <(sc_image_refs "$ln")
+      done
     done < "$f"
   done
   echo "examined=$seen"
@@ -1358,6 +1556,8 @@ fi
 echo "ok    rust $SC_PIN on $SC_DIST everywhere ($SC_I_N image(s), $SC_N_N native cargo job(s) through the script);"
 echo "      $SC_A_T third-party action(s) by SHA in $SC_A_N uses: across $SC_P_N workflow(s) of $SC_P_J job(s),"
 echo "      no workflow-level write; $SC_C_N container launch(es) by digest, read-only and offline"
+fi
+if pf_shard "former-name trace"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ---------------------------------------------------------------------------
 # The former-name trace check, INVOKED (ROADMAP O10).
@@ -1444,6 +1644,8 @@ fi
 # a caller, so both lines are passed through verbatim.
 echo "ok    the former name is absent from tracked content"
 echo "$NOTRACE_OUT" | grep -E '^  (files scanned|pdf streams):' | sed 's/^  /      /'
+fi
+if pf_shard "ROADMAP headings"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ROADMAP O47 (round-four #36). This gate was ONE-DIRECTIONAL: it flagged a
 # body saying CLOSED under a heading that did not, and could not flag the
@@ -2976,6 +3178,8 @@ if [ "$RT_WIN" = "-" ]; then rt_window_note="no release is untagged"
 else rt_window_note="$RT_WIN is released and not yet tagged: its entries are judged on this tree, the converse against every tag"; fi
 echo "ok    the tree agrees with what each release tag shipped ($RT_NT release tag(s),"
 echo "      $RT_NREAD snapshot(s), $RT_NE entries under release sections); $rt_window_note"
+fi
+if pf_shard "compose project names"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ── preflight: every compose file DECLARES its project name ────────────────
 # Undeclared, Compose derives the project from the DIRECTORY, so every
@@ -3023,6 +3227,8 @@ if [ -n "$COMPOSE_BAD" ]; then
   exit 1
 fi
 echo "ok    all $COMPOSE_N compose files declare a project name"
+fi
+if pf_shard "CA pins are readable by the engine"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ── preflight: every published figure has an inventory row ─────────────────
 # **A number in prose is a claim about the moment someone last counted**, and
@@ -3161,6 +3367,8 @@ if [ "$CA_FAIL" -ne 0 ]; then
 fi
 echo "ok    $CA_SEEN declared CA pin(s) on engine services, none inside a"
 echo "      root-only PKI tree, across:$CA_FILES"
+fi
+if pf_shard "every shipped serve-http recipe runs init first"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ── preflight: every shipped serve-http recipe runs init first ─────────────
 # ROADMAP O199 and O200, the class O172 closed for one recipe. `serve-http`
@@ -3432,6 +3640,8 @@ if [ -n "$IF_BAD" ]; then
 fi
 echo "ok    $IF_SEEN serve-http command(s) run init first, its failure stopping"
 echo "      the start, across:$IF_FILES"
+fi
+if pf_shard "destructive compose scope"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ── preflight: a destructive compose teardown names the project it destroys ─
 # ROADMAP M12. A compose teardown carrying the volumes flag removes every
@@ -3518,6 +3728,8 @@ if [ "$TD_FAIL" -ne 0 ]; then
 fi
 echo "ok    $TD_TOTAL destructive compose teardown(s) in tests/, every one"
 echo "      scoped to a project it names"
+fi
+if pf_shard "checks capture the binary, then match"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ── preflight: a check captures the binary, then matches (ROADMAP O287) ─────
 # Under `set -o pipefail` a pipeline's status is its producer's whenever the
@@ -3555,11 +3767,17 @@ echo "      scoped to a project it names"
 # a variable or by `eval`; and a grep PATTERN after `--` that looks like an
 # option is read as one, which refuses rather than misses.
 # ps_split <text> <mode>: split shell text at depth 0 — outside quotes, `$(…)`,
-# `(…)` and `{…}` — into pieces, one per line of output, each line
+# `(…)` and `{…}` — into pieces, one element of the array PS_SPLIT each,
 # `<separator-before>\t<piece>`. mode `elem` splits at `;`, `&&`, `||` and a
-# lone `&`; mode `stage` splits at `|` and `|&`.
+# lone `&`; mode `stage` splits at `|` and `|&`. It fills an array, and
+# ps_unsubst a variable, rather than printing for `< <(…)` and `$(…)` to read:
+# a subshell per call cost a process creation per candidate line, element and
+# stage, which on Git Bash was most of this preflight's 149 s measured on
+# 2026-10-13 (ROADMAP O439). The same pieces, in the same order; the probe below
+# drives the same code.
 ps_split() {
   local s="$1" mode="$2" i=0 n=${#1} ch nx q="" stack="" piece="" sep="" esc=0
+  PS_SPLIT=()
   local before_close='[[:space:];]' before_amp='[>|]'
   while [ "$i" -lt "$n" ]; do
     ch=${s:i:1}; nx=${s:i+1:1}
@@ -3588,25 +3806,25 @@ ps_split() {
     if [ -z "$stack" ]; then
       if [ "$mode" = elem ]; then
         if [ "$ch$nx" = '&&' ] || [ "$ch$nx" = '||' ]; then
-          printf '%s\t%s\n' "$sep" "$piece"; sep="$ch$nx"; piece=""; i=$((i + 2)); continue
+          PS_SPLIT+=("$sep"$'\t'"$piece"); sep="$ch$nx"; piece=""; i=$((i + 2)); continue
         fi
-        if [ "$ch" = ';' ]; then printf '%s\t%s\n' "$sep" "$piece"; sep=';'; piece=""; i=$((i + 1)); continue; fi
+        if [ "$ch" = ';' ]; then PS_SPLIT+=("$sep"$'\t'"$piece"); sep=';'; piece=""; i=$((i + 1)); continue; fi
         if [ "$ch" = '&' ] && [ "$nx" != '>' ] && [[ ${piece: -1} != $before_amp ]]; then
-          printf '%s\t%s\n' "$sep" "$piece"; sep='&'; piece=""; i=$((i + 1)); continue
+          PS_SPLIT+=("$sep"$'\t'"$piece"); sep='&'; piece=""; i=$((i + 1)); continue
         fi
         if [ "$ch$nx" = '|&' ]; then piece+='|&'; i=$((i + 2)); continue; fi
       else
-        if [ "$ch$nx" = '|&' ]; then printf '%s\t%s\n' "$sep" "$piece"; sep='|&'; piece=""; i=$((i + 2)); continue; fi
-        if [ "$ch" = '|' ] && [ "$nx" != '|' ]; then printf '%s\t%s\n' "$sep" "$piece"; sep='|'; piece=""; i=$((i + 1)); continue; fi
+        if [ "$ch$nx" = '|&' ]; then PS_SPLIT+=("$sep"$'\t'"$piece"); sep='|&'; piece=""; i=$((i + 2)); continue; fi
+        if [ "$ch" = '|' ] && [ "$nx" != '|' ]; then PS_SPLIT+=("$sep"$'\t'"$piece"); sep='|'; piece=""; i=$((i + 1)); continue; fi
         if [ "$ch$nx" = '||' ]; then piece+='||'; i=$((i + 2)); continue; fi
       fi
     fi
     piece+=$ch; i=$((i + 1))
   done
-  printf '%s\t%s\n' "$sep" "$piece"
+  PS_SPLIT+=("$sep"$'\t'"$piece")
 }
 
-# ps_unsubst <text>: the text with every `$(…)` body removed.
+# ps_unsubst <text>: PS_UNSUBST is the text with every `$(…)` body removed.
 ps_unsubst() {
   local s="$1" i=0 n=${#1} ch nx out="" depth=0 q=""
   while [ "$i" -lt "$n" ]; do
@@ -3620,7 +3838,7 @@ ps_unsubst() {
     fi
     i=$((i + 1))
   done
-  printf '%s' "$out"
+  PS_UNSUBST=$out
 }
 
 # ps_early <stage text>: is this stage a reader that may exit before its
@@ -3667,7 +3885,7 @@ ps_line() {
   local lead='^[[:space:]]*(if|elif|while|until|!)[[:space:]]'
   local status_read='\$\?|PIPESTATUS'
   local wword="(^|[^A-Za-z0-9_\$-])($wre)([[:space:];)}]|\$)"
-  mapfile -t E < <(ps_split "$text" elem)
+  ps_split "$text" elem; E=("${PS_SPLIT[@]}")
   for ((k = 0; k < ${#E[@]}; k++)); do
     sep=${E[k]%%$'\t'*}; elem=${E[k]#*$'\t'}
     consumed=$outer
@@ -3690,7 +3908,7 @@ ps_line() {
       ps_line "${BASH_REMATCH[2]}" 1 "$prod" "$wre" && return 0
     fi
     [ "$consumed" = 1 ] || continue
-    mapfile -t S < <(ps_split "$elem" stage)
+    ps_split "$elem" stage; S=("${PS_SPLIT[@]}")
     nstage=${#S[@]}
     if [ "$nstage" -lt 2 ]; then
       # A lone group: its body is a list of its own.
@@ -3702,7 +3920,7 @@ ps_line() {
     fi
     local pi=-1 j st
     for ((j = 0; j < nstage; j++)); do
-      st=$(ps_unsubst "${S[j]#*$'\t'}")
+      ps_unsubst "${S[j]#*$'\t'}"; st=$PS_UNSUBST
       if [ "$pi" -lt 0 ]; then
         if [[ $st =~ $prod ]] || { [ -n "$wre" ] && [[ $st =~ $wword ]]; }; then
           pi=$j
@@ -3871,7 +4089,9 @@ fi
 echo "ok    ${#PS_FILES[@]} harness script(s): no status-consuming pipeline feeds a binary,"
 echo "      or a function that runs one, into a reader that may leave first; the"
 echo "      scanner refused every probe shape and exempted every exempt one"
-unset -f pipe_scan ps_line ps_early ps_unsubst ps_split
+unset -f pipe_scan ps_line ps_early ps_unsubst ps_split; unset PS_SPLIT PS_UNSUBST
+fi
+if pf_shard "published figures"; then  # ROADMAP O439: the shard that runs this preflight
 
 echo "═══ preflight: published figures ═══"
 
@@ -4059,6 +4279,8 @@ if [ "$FIG_FAIL" -ne 0 ]; then
 fi
 echo "ok    $TILE_N published tiles, each with a row; derived values and"
 echo "      cross-surface suite counts agree"
+fi
+if pf_shard "handover freshness"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ── preflight: the handover has not drifted ────────────────────────────────
 # `.handover/` is gitignored on purpose and MUST stay so — 1.6 GB of working
@@ -4222,6 +4444,8 @@ else
   echo "ok    handover names HEAD ($HO_SHORT): SESSION_START top paragraph, NEXT_SESSION first row, NEXT_PROMPT $HO_NP"
   echo "      not examined: whether those words are true, text below the first block/row, AUDIT_CONTINUATION content (existence only)"
 fi
+fi
+if pf_shard "context-check derivation"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ── preflight: context-check derives THIS checkout's slug ───────────────────
 # ROADMAP O106's residual. `tests/context-check.sh` is how the context-budget
@@ -4284,6 +4508,8 @@ if [ "$CD_FAIL" -ne 0 ]; then
 fi
 echo "$CD_OUT"
 echo "      (a copy outside this checkout, and a copy with a two-line root, both refuse)"
+fi
+if pf_shard "CI verdict covers every job"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ── preflight: the CI verdict job depends on EVERY job ─────────────────────
 # A required status check resolves against ONE context. That context is the
@@ -4343,8 +4569,9 @@ for j in $CI_JOBS; do
     *) CI_BAD="$CI_BAD\n        job '$j' is outside ${VERDICT_JOB}'s needs: it can go red under a green verdict" ;;
   esac
 done
+CI_JOBS_W=" $(printf '%s ' $CI_JOBS) "   # once, not once per need (ROADMAP O439)
 for n in $CI_NEEDS; do
-  case " $(printf '%s ' $CI_JOBS) " in
+  case "$CI_JOBS_W" in
     *" $n "*) ;;
     *) CI_BAD="$CI_BAD\n        ${VERDICT_JOB} needs '$n', which is not a job in $CI" ;;
   esac
@@ -4357,6 +4584,8 @@ if [ -n "$CI_BAD" ]; then
   exit 1
 fi
 echo "ok    $VERDICT_JOB needs all $CI_NEEDS_N other job(s) of $CI_N"
+fi
+if pf_shard "version surfaces"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ── preflight: every version surface states the version the tree IS ────────
 # **A version in prose is the same class of claim as a count in prose**, and
@@ -4542,6 +4771,8 @@ if [ "$VER_FAIL" -ne 0 ]; then
   exit 1
 fi
 echo "ok    every version surface agrees with the workspace ($WS_VERSION), over $VER_FILE_N file(s)"
+fi
+if pf_shard "measured retrieval claims carry their configuration"; then  # ROADMAP O439: the shard that runs this preflight
 
 # ── preflight: a figure in prose is counted against the tree ───────────────
 # ROADMAP O42, and it was filed because `CLAUDE.md` claimed "seven host-side
@@ -4668,6 +4899,8 @@ if [ "$MRC_FAIL" -ne 0 ]; then
 fi
 echo "ok    both measured retrieval sections in $MRC_DOC carry their dataset,"
 echo "      embedder, scope and metric, and the room_cap reconciliation stands"
+fi
+if pf_shard "lint parity (compose vs CI)"; then  # ROADMAP O439: the shard that runs this preflight
 
 echo "═══ preflight: lint parity (compose vs CI) ═══"
 # **`lint` is defined TWICE and the two can disagree** (ROADMAP O84).
@@ -4718,6 +4951,8 @@ else
   echo "BATTERY FAILED — preflight"
   exit 1
 fi
+fi
+if pf_shard "model leg parity"; then  # ROADMAP O439: the shard that runs this preflight
 
 echo "═══ preflight: model leg parity ═══"
 # ROADMAP O134a. The two model-crate legs must RUN their crate's tests, not
@@ -4832,8 +5067,15 @@ mlp_array() { # mlp_array KEY -> the path entries of a top-level TOML array in C
 MLP_MEMBERS=$(mlp_array members)
 MLP_DEFAULTS=$(mlp_array default-members)
 MLP_NONDEFAULT=""
+# The membership tests in this preflight are bash string and regex matches, not
+# a `printf | grep` pipeline each: on Git Bash every pipeline stage is a process
+# creation, and this preflight's loops made some three hundred of them — most of
+# its 148 s measured on 2026-10-13 (ROADMAP O439). Same questions, same answers.
 for m in $MLP_MEMBERS; do
-  printf '%s\n' "$MLP_DEFAULTS" | grep -qxF "$m" || MLP_NONDEFAULT="$MLP_NONDEFAULT ${m##*/}"
+  case $'\n'"$MLP_DEFAULTS"$'\n' in
+    *$'\n'"$m"$'\n'*) ;;
+    *) MLP_NONDEFAULT="$MLP_NONDEFAULT ${m##*/}" ;;
+  esac
 done
 for want in undercroft-embed-onnx undercroft-embed-ort; do
   case " $MLP_NONDEFAULT " in
@@ -4922,6 +5164,10 @@ printf '%s\n' "$MLP_TARGETS" | grep -q '^crates/undercroft-cli/Cargo.toml|bin|un
   MLP_FAIL=1
 }
 MLP_RF_TESTS=""
+# The services whose block names any `--test` at all, by `mlp_block`'s own
+# partition (a block runs from its key to the next service key): only they can
+# name a target, so only they are read for one.
+MLP_TEST_SVCS=$(awk '/^  [a-z0-9-]+:$/ { svc = $1; sub(/:$/, "", svc); next } svc != "" && /--test/ { print svc }' docker-compose.yml | sort -u)
 while IFS='|' read -r file kind name path rf; do
   [ -n "$rf" ] || continue
   if [ "$kind" != "test" ]; then
@@ -4932,6 +5178,7 @@ while IFS='|' read -r file kind name path rf; do
   MLP_RF_TESTS="$MLP_RF_TESTS $name"
   seen=0
   for svc in $MLP_SERVICES; do
+    case $'\n'"$MLP_TEST_SVCS"$'\n' in *$'\n'"$svc"$'\n'*) ;; *) continue ;; esac
     seg=$(mlp_block "$svc" | sed 's/&&/\n/g' | grep -E -- "--test[ =]$name([^A-Za-z0-9_]|$)" || true)
     [ -n "$seg" ] || continue
     seen=$((seen + 1))
@@ -4989,10 +5236,12 @@ for leg in onnx-build ort-build; do
     case "$seg" in *"cargo test"*) ;; *) continue ;; esac
     for m in $MLP_DEFAULTS; do
       crate="${m##*/}"
-      printf '%s\n' "$seg" | grep -qE -- "-p[ =]$crate([^A-Za-z0-9_-]|$)" || continue
+      re_p="-p[ =]${crate}([^A-Za-z0-9_-]|\$)"
+      [[ $seg =~ $re_p ]] || continue
       named=0
       for t in $MLP_RF_TESTS; do
-        printf '%s\n' "$seg" | grep -qE -- "--test[ =]$t([^A-Za-z0-9_]|$)" && named=1
+        re_t="--test[ =]${t}([^A-Za-z0-9_]|\$)"
+        [[ $seg =~ $re_t ]] && named=1
       done
       if [ "$named" -ne 1 ]; then
         echo "FAIL  $leg runs cargo test over the default member $crate without naming a required-features"
@@ -5014,6 +5263,8 @@ if [ "$MLP_FAIL" -ne 0 ]; then
 fi
 echo "ok    both model legs run their own crate's tests, and only their own;"
 echo "      the O157 join runs in ort-build alone, named, with its required features"
+fi
+if pf_shard "vendored crates are pinned"; then  # ROADMAP O439: the shard that runs this preflight
 
 echo "═══ preflight: vendored crates are pinned ═══"
 # ROADMAP O114. `vendor/` holds a patched copy of a third-party crate taken
@@ -5071,6 +5322,8 @@ if ! grep -q 'UNDERCROFT PATCH' vendor/tiny_http/src/util/equal_reader.rs \
   exit 1
 fi
 echo "ok    vendor/ is pinned ($VENDOR_N files, both directions) and carries the O114 patch"
+fi
+if pf_shard "the hierarchy word names one level"; then  # ROADMAP O439: the shard that runs this preflight
 
 echo "═══ preflight: the hierarchy word names one level ═══"
 # ROADMAP O112, ruled A: "p-a-l-a-c-e" denotes the INSTALLATION (a p... contains
@@ -5216,10 +5469,19 @@ if [ -z "$(hier_scan "$HIER_PROBE")" ]; then
 fi
 rm -f "$HIER_PROBE"
 # Direction 2: every allowed shape must still match something.
+# The tree is walked ONCE, for every line that matches any allowance (`-a`, so
+# a match in a binary file is a line here as it was a match for `-q`); each
+# allowance is then asked of those lines alone. Same question — does anything
+# in the scope match it — without a recursive walk of the whole scope per
+# allowance, ninety-odd walks that were most of this preflight's 116 s on Git
+# Bash, measured 2026-10-13 (ROADMAP O439).
 HIER_FAIL=0
+HIER_ARGS=()
+for row in "${HIER_ALLOW[@]}"; do HIER_ARGS+=(-e "${row%%::*}"); done
+HIER_SEEN=$(grep -rhaiE "${HIER_ARGS[@]}" -- $HIER_SCOPE 2>/dev/null || true)
 for row in "${HIER_ALLOW[@]}"; do
   pat="${row%%::*}"; why="${row#*::}"
-  if ! grep -rqiE -- "$pat" $HIER_SCOPE 2>/dev/null; then
+  if ! grep -qiE -- "$pat" <<< "$HIER_SEEN"; then
     echo "FAIL  the allowance \"$pat\" ($why) matches nothing any more --"
     echo "      a stale allowance reads as a checked exemption while covering nothing"
     HIER_FAIL=1
@@ -5239,6 +5501,8 @@ if [ "$HIER_FAIL" -ne 0 ]; then
   exit 1
 fi
 echo "ok    ${#HIER_ALLOW[@]} allowed installation-level shapes, all live; no per-vault use"
+fi
+if pf_shard "the heritage name sits where a name can sit"; then  # ROADMAP O439: the shard that runs this preflight
 
 echo "═══ preflight: the heritage name sits where a name can sit ═══"
 # ROADMAP O133. The commit this guide holds up as the FIX for the five classes
@@ -5327,6 +5591,8 @@ if [ "$HERITAGE_FAIL" -ne 0 ]; then
   echo ""; echo "BATTERY FAILED -- preflight"; exit 1
 fi
 echo "ok    ${#HERITAGE_ALLOW[@]} contexts where the heritage name may sit, all live"
+fi
+if pf_shard "fonts are openly licensed"; then  # ROADMAP O439: the shard that runs this preflight
 
 echo "═══ preflight: fonts are openly licensed ═══"
 # ROADMAP O189, decided by the maintainer on 2026-09-15: no proprietary font is
@@ -5672,30 +5938,36 @@ fi
 FONT_DECL_FILES=$(printf '%s\n' "$FONT_NAMES" | cut -d: -f1 | sort -u | grep -c . || true)
 echo "ok    $FONT_NAMES_N family names in the font declarations of $FONT_DECL_FILES files,"
 echo "      every one openly licensed, generic or a var() reference"
+fi
+if pf_shard "prose figures"; then  # ROADMAP O439: the shard that runs this preflight
 
 echo "═══ preflight: prose figures ═══"
 
+# pf_word <word>: PF_WORD is the number the word names, or the word itself. It
+# sets a variable rather than printing for `$(…)` to read, because a subshell
+# per word read cost a process creation each, which on Git Bash is about a
+# second (ROADMAP O439). Same answers; the probe below drives it.
 pf_word() {
   case "$1" in
-    one) echo 1;; two) echo 2;; three) echo 3;; four) echo 4;; five) echo 5;;
-    six) echo 6;; seven) echo 7;; eight) echo 8;; nine) echo 9;; ten) echo 10;;
-    eleven) echo 11;; twelve) echo 12;; thirteen) echo 13;; fourteen) echo 14;;
-    fifteen) echo 15;; sixteen) echo 16;; seventeen) echo 17;;
-    eighteen) echo 18;; nineteen) echo 19;; twenty) echo 20;;
-    thirty) echo 30;; forty) echo 40;; fifty) echo 50;; sixty) echo 60;;
-    seventy) echo 70;; eighty) echo 80;; ninety) echo 90;;
+    one) PF_WORD=1;; two) PF_WORD=2;; three) PF_WORD=3;; four) PF_WORD=4;; five) PF_WORD=5;;
+    six) PF_WORD=6;; seven) PF_WORD=7;; eight) PF_WORD=8;; nine) PF_WORD=9;; ten) PF_WORD=10;;
+    eleven) PF_WORD=11;; twelve) PF_WORD=12;; thirteen) PF_WORD=13;; fourteen) PF_WORD=14;;
+    fifteen) PF_WORD=15;; sixteen) PF_WORD=16;; seventeen) PF_WORD=17;;
+    eighteen) PF_WORD=18;; nineteen) PF_WORD=19;; twenty) PF_WORD=20;;
+    thirty) PF_WORD=30;; forty) PF_WORD=40;; fifty) PF_WORD=50;; sixty) PF_WORD=60;;
+    seventy) PF_WORD=70;; eighty) PF_WORD=80;; ninety) PF_WORD=90;;
     # A compound tens word, `twenty-one` to `ninety-nine`. The reader stopped
     # at twenty until the preflight count passed it (ROADMAP O314); any other
     # hyphenated word (`host-side`, `two-phase`) is not a number and comes back
     # unchanged, so it is never read as a claim.
     *-*)
       local t u
-      t=$(pf_word "${1%%-*}"); u=$(pf_word "${1#*-}")
+      pf_word "${1%%-*}"; t=$PF_WORD; pf_word "${1#*-}"; u=$PF_WORD
       case "$t:$u" in
-        [2-9]0:[1-9]) echo $((t + u));;
-        *) echo "$1";;
+        [2-9]0:[1-9]) PF_WORD=$((t + u));;
+        *) PF_WORD=$1;;
       esac;;
-    *) echo "$1";;
+    *) PF_WORD=$1;;
   esac
 }
 # PREMISE: the reader is what decides whether a published word is a claim, so
@@ -5703,8 +5975,9 @@ pf_word() {
 # hyphenated words that must NOT read as numbers.
 for pf_probe in "twenty:20" "twenty-one:21" "ninety-nine:99" "host-side:host-side" \
                 "two-phase:two-phase" "one-two:one-two"; do
-  if [ "$(pf_word "${pf_probe%%:*}")" != "${pf_probe#*:}" ]; then
-    echo "FAIL  premise: pf_word reads '${pf_probe%%:*}' as '$(pf_word "${pf_probe%%:*}")', not"
+  pf_word "${pf_probe%%:*}"
+  if [ "$PF_WORD" != "${pf_probe#*:}" ]; then
+    echo "FAIL  premise: pf_word reads '${pf_probe%%:*}' as '$PF_WORD', not"
     echo "      '${pf_probe#*:}' — every number word the figure gates read goes through it."
     echo ""; echo "BATTERY FAILED — preflight"; exit 1
   fi
@@ -5744,12 +6017,18 @@ PF_RECON=$(awk '
     for (m = 1; m <= ns; m++) delete sufs[m]
   }' "$PF_ARCH" | sort -u)
 
+# The page's full names, read ONCE: every `<code>UNDERCROFT_…</code>` it
+# carries. A variable is written out in full exactly when its token is among
+# them — the question the per-variable `grep -q "<code>$v</code>"` asked,
+# without a process creation per variable, which on Git Bash was most of this
+# preflight's time (ROADMAP O439).
+PF_ARCH_CODES=$(grep -oE '<code>UNDERCROFT_[A-Z0-9_]+</code>' "$PF_ARCH" | sort -u)
 PF_ENV_FULL=0; PF_ENV_ABBREV=0; PF_ENV_ABSENT=0; PF_ABSENT_LIST=""
 while IFS= read -r v; do
   [ -z "$v" ] && continue
-  if grep -q "<code>$v</code>" "$PF_ARCH"; then
+  if [[ $'\n'"$PF_ARCH_CODES"$'\n' == *$'\n'"<code>$v</code>"$'\n'* ]]; then
     PF_ENV_FULL=$((PF_ENV_FULL + 1))
-  elif printf '%s\n' "$PF_RECON" | grep -qx "$v"; then
+  elif [[ $'\n'"$PF_RECON"$'\n' == *$'\n'"$v"$'\n'* ]]; then
     PF_ENV_ABBREV=$((PF_ENV_ABBREV + 1))
   else
     PF_ENV_ABSENT=$((PF_ENV_ABSENT + 1)); PF_ABSENT_LIST="$PF_ABSENT_LIST $v"
@@ -5923,7 +6202,7 @@ PROSE_FIGURES=(
 PROSE_FAIL=0
 for row in "${PROSE_FIGURES[@]}"; do
   IFS='|' read -r label pfile pat truth <<< "$row"
-  raw=$(sed -nE "$pat" "$pfile" | head -1)
+  raw=$(sed -nE "$pat" "$pfile"); raw=${raw%%$'\n'*}
   if [ -z "$raw" ]; then
     echo "FAIL  $label: the reader found no published figure in $pfile."
     echo "      Either the sentence was reworded (update the row) or it was"
@@ -5931,7 +6210,7 @@ for row in "${PROSE_FIGURES[@]}"; do
     PROSE_FAIL=1
     continue
   fi
-  got=$(pf_word "$raw")
+  pf_word "$raw"; got=$PF_WORD
   if [ "$got" != "$truth" ]; then
     echo "FAIL  $label: $pfile publishes $raw, the tree measures $truth"
     PROSE_FAIL=1
@@ -6413,9 +6692,23 @@ PV_SEEN=0
 for row in "${PV_FIGURES[@]}"; do
   pv_name=${row%%|*}; pv_rest=${row#*|}
   pv_re=${pv_rest%|*}; pv_truth=${pv_rest##*|}
-  # every occurrence, because the same figure is repeated across diagrams
-  pv_found=$(printf '%s' "$PV_TXT" | grep -oE "$pv_re" | grep -oE '[0-9]+' | sort -u)
-  pv_count=$(printf '%s\n' "$pv_found" | grep -c . || true)
+  # every occurrence, because the same figure is repeated across diagrams —
+  # one grep per row, the digit runs and their de-duplication in the shell
+  # (ROADMAP O439: a process creation is about a second on Git Bash, and this
+  # was five per row). `[0-9]+` matches leftmost-longest, so each pass takes
+  # the next whole run, exactly the runs `grep -oE '[0-9]+'` printed.
+  pv_found=""
+  pv_count=0
+  while IFS= read -r pv_m; do
+    while [[ $pv_m =~ [0-9]+ ]]; do
+      pv_d=${BASH_REMATCH[0]}
+      pv_m=${pv_m#*"$pv_d"}
+      case $'\n'"$pv_found"$'\n' in
+        *$'\n'"$pv_d"$'\n'*) ;;
+        *) pv_found="$pv_found${pv_found:+$'\n'}$pv_d"; pv_count=$((pv_count + 1)) ;;
+      esac
+    done
+  done < <(grep -oE "$pv_re" <<< "$PV_TXT")
   if [ "$pv_count" -eq 0 ]; then
     echo "FAIL  platform-views: found NO '$pv_name' figure to check."
     echo "      Either the set stopped publishing it (drop this row) or the"
@@ -6456,7 +6749,7 @@ for row in "${PV_WORD_FIGURES[@]}"; do
   pv_word_seen=0
   for pv_w in $(printf '%s' "$PV_TXT" | grep -oiE "$pv_re" | tr 'A-Z' 'a-z' \
                 | tr -cs 'a-z-' '\n' | sort -u); do
-    pv_n=$(pf_word "$pv_w")
+    pf_word "$pv_w"; pv_n=$PF_WORD
     case $pv_n in ''|*[!0-9]*) continue;; esac   # not a number word — not a claim
     pv_word_seen=$((pv_word_seen + 1))
     if [ "$pv_n" != "$pv_truth" ]; then
@@ -6477,6 +6770,15 @@ if [ "$PV_FAIL" -ne 0 ]; then
 fi
 echo "ok    platform-views' $PV_SEEN published figures agree with the tree"
 echo "      (counts only — a relational claim in prose is NOT gated; see O74)"
+fi
+if pf_shard "awk ran every program it was given"; then  # ROADMAP O439: the shard that runs this preflight
+# The last shard reads every shard's awk record: they are appended to its own
+# before this preflight reads it (ROADMAP O439).
+if [ "${PREFLIGHT_SHARD:-}" = last ]; then
+  for pf_f in .battery/awk-calls.[0-9]*.log; do
+    [ -f "$pf_f" ] && cat "$pf_f" >> "$AWK_REC"
+  done
+fi
 
 # ── preflight: awk ran every program it was given (ROADMAP O314) ────────────
 # The awk recorder's verdict (its definition opens this block), read LAST so it
@@ -6588,6 +6890,7 @@ echo "ok    CI's preflight job runs this block again under Debian 12's mawk 1.3.
 echo "      in a step that is exactly the one this preflight holds (image digest, binary sha256)"
 unset -f awk awk_failures awk_exit_report
 
+fi  # (end of the last preflight's shard wrapper — ROADMAP O439)
 fi  # end of the host-side preflight block (`--no-preflight` skips it)
 
 if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
@@ -6596,7 +6899,111 @@ if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
   exit 0
 fi
 
-for suite in "${SUITES[@]}"; do
+# ════════════════════════════════════════════════════════════════════════════
+# THE RUN (ROADMAP O439): each image built once, every suite at once
+# ════════════════════════════════════════════════════════════════════════════
+# Measured before this: a full local battery ran about forty minutes of suites
+# serially after fifteen of preflights, and CI's slowest leg took up to
+# seventeen and a half — chiefly because every suite built its own image and
+# compiled the same workspace again, and the telemetry suite compiled two more
+# binaries at run time. Now:
+#
+#   * Every suite that needs a binary or the toolchain runs on ONE build of the
+#     Dockerfile's battery stages, made once per battery: `battery-core`
+#     (`builder` and the premise) for test, lint, e2e, orchestrator-e2e and
+#     backends-e2e, and `battery` (that, the telemetry binaries and mdBook) for
+#     e2e-telemetry and site, BuildKit computing what the two share once; the
+#     model legs run on its `models` stage. Which image a suite runs on is read
+#     from its own service's `target:` in docker-compose.yml, the one place it
+#     is declared.
+#   * Every suite starts as soon as what it needs exists, and they run side by
+#     side, each into its own log under .battery/. One suite named, or
+#     `--serial`, keeps the old shape: one at a time, streamed to the terminal
+#     and the log through `tee`.
+#   * The preflights run beside them, as a second process of this script with
+#     `--preflight-only` (started at the top), and their exit code folds into
+#     the verdict below.
+#
+# The verdict is unchanged in kind. A suite's exit code is captured WITHOUT a
+# pipe when the suites run side by side — a redirect into its log and `wait` —
+# and through `tee` and PIPESTATUS[0] when they run serially, as before.
+# Nothing is parsed to decide it.
+#
+# FRESHNESS is proved, not assumed. A shared, cached image is exactly how a run
+# could test a binary from before the change, so every suite on one of these
+# images runs `undercroft-battery-premise` first, inside its own container: the
+# image's recorded tree digest must equal BATTERY_EXPECT_TREE, computed here
+# over the checkout by the same script the build ran (`tests/tree-digest.sh`),
+# and every binary the build recorded must hash to its record. A mismatch is a
+# PREMISE FAILURE and the suite exits 1 having run nothing.
+#
+# BATTERY_PREBUILT=1 is CI's: its workflow built and loaded the image under
+# BATTERY_CORE_IMAGE / BATTERY_IMAGE / BATTERY_MODELS_IMAGE, so this run does
+# not build it, and
+# the premise is what proves they are this checkout's. Without it the build
+# always runs (`--build`, kept), and the layer cache decides how much of it is
+# work.
+
+declare -A SUITE_KIND=() KIND_SVC=() IMAGE_RC=() IMAGE_PID=() IMAGE_T0=() SUITE_PID=() SUITE_T0=() SUITE_RC=()
+for s in "${SUITES[@]}"; do
+  k=$(service_target "$s")
+  case "$k" in
+    battery-core|battery|models)
+      SUITE_KIND[$s]=$k
+      [ -n "${KIND_SVC[$k]:-}" ] || KIND_SVC[$k]=$s ;;
+    *) SUITE_KIND[$s]="" ;;
+  esac
+done
+kind_image() {
+  case "$1" in
+    battery-core) printf '%s' "$BATTERY_CORE_IMAGE" ;;
+    models)       printf '%s' "$BATTERY_MODELS_IMAGE" ;;
+    *)            printf '%s' "$BATTERY_IMAGE" ;;
+  esac
+}
+
+# The tree under test, by the one definition the image's build record uses.
+# Computed even when no suite needs an image: `tests/tls-pins.sh` reads it too.
+mkdir -p .battery
+if ! BATTERY_EXPECT_TREE=$(bash tests/tree-digest.sh); then
+  echo "FAIL  tests/tree-digest.sh could not digest this tree, so no suite could prove"
+  echo "      that the image it runs on was built from it."
+  echo ""
+  echo "BATTERY FAILED"
+  exit 1
+fi
+export BATTERY_EXPECT_TREE
+# One tag per WORKTREE, so two worktrees' batteries never run each other's
+# image: they share the compose project, and so would share a fixed tag. A
+# re-run in the same worktree replaces its own tag, as `--build` always did.
+BATTERY_WT=$(printf '%s' "$PWD" | sha256sum | cut -c1-12)
+export BATTERY_CORE_IMAGE="${BATTERY_CORE_IMAGE:-undercroft-battery-core:wt-$BATTERY_WT}"
+export BATTERY_IMAGE="${BATTERY_IMAGE:-undercroft-battery:wt-$BATTERY_WT}"
+export BATTERY_MODELS_IMAGE="${BATTERY_MODELS_IMAGE:-undercroft-models:wt-$BATTERY_WT}"
+echo ""
+echo "tree under test: $BATTERY_EXPECT_TREE"
+
+build_kind() {  # <kind> — the build's exit code is this function's
+  local k=$1
+  if [ "${BATTERY_PREBUILT:-0}" = 1 ]; then
+    if docker image inspect "$(kind_image "$k")" >/dev/null 2>&1; then
+      echo "BATTERY_PREBUILT=1: the $k image $(kind_image "$k") was built before this run;"
+      echo "the premise in every suite proves it is this tree's"
+      return 0
+    fi
+    echo "BATTERY_PREBUILT=1, and there is no image $(kind_image "$k") to run — nothing built it"
+    return 1
+  fi
+  docker compose --progress plain build "${KIND_SVC[$k]}"
+}
+
+run_suite() {  # <suite> — the suite's exit code is this function's
+  local s=$1 k=${SUITE_KIND[$1]:-}
+  if [ -n "$k" ] && [ "${IMAGE_RC[$k]:-1}" != 0 ]; then
+    echo "the $k image did not build (exit ${IMAGE_RC[$k]:-none}), so $s did not run;"
+    echo "the build's own log is .battery/image-$k.log"
+    return 1
+  fi
   # `tests/e2e-backends.sh` asserts exact record counts and therefore assumes
   # FRESH backends; a second run against warm volumes flakes. Documented in
   # CLAUDE.md, mechanised here so nobody has to remember it.
@@ -6628,39 +7035,153 @@ for suite in "${SUITES[@]}"; do
   # not carried one file over to the battery's own teardown. Not silenced:
   # a reset that fails leaves warm backends, and this suite's failure mode is
   # then an unexplainable count assertion.
-  if [ "$suite" = "backends-e2e" ]; then
+  if [ "$s" = "backends-e2e" ]; then
     docker compose rm -sfv \
       qdrant chroma pgvector milvus weaviate backends-tls || true
   fi
-
-  echo ""
-  echo "═══ $suite ═══"
   # `tls-pins` brings real Caddy terminators up and reads their volumes as
   # the engine uid, so it DRIVES docker rather than running inside a
   # container — the same reason this script is the one thing that runs on
   # the host. As a compose service it would need docker-in-docker to check
-  # a permission question that needs no build at all.
-  if [ "$suite" = "tls-pins" ]; then
-    mkdir -p .battery
-    bash tests/tls-pins.sh 2>&1 | tee ".battery/$suite.log"
-    code=${PIPESTATUS[0]}
-    NAMES+=("$suite")
-    CODES+=("$code")
-    [ "$code" -eq 0 ] || OVERALL=1
-    continue
+  # a permission question that needs no build at all. It builds the two engine
+  # images its stacks ship, and proves each is this tree's (its own premise).
+  if [ "$s" = "tls-pins" ]; then
+    bash tests/tls-pins.sh
+    return
   fi
-  # No pipe. A pipeline's exit status is its LAST command's, which is how a
-  # `| grep` or `| tail` silently turns a failing suite into a passing one —
-  # the hazard CLAUDE.md records as "never let a pipeline's tail mask an exit
-  # code you depend on". Output goes straight to the terminal and to a log.
-  mkdir -p .battery
-  docker compose run --rm --build "$suite" 2>&1 | tee ".battery/$suite.log"
-  # ${PIPESTATUS[0]} is the compose exit code, not tee's.
-  code=${PIPESTATUS[0]}
+  # A suite on a battery image runs that image without `--build`: the build
+  # above already ran over this tree, and the premise in the container proves
+  # it (`docker compose run` has no `--no-build`; without `--build` it uses the
+  # image the tag names, and builds one only where none exists). Any other
+  # suite builds its own, as every suite did before.
+  if [ -n "$k" ]; then
+    docker compose run --rm "$s"
+  else
+    docker compose run --rm --build "$s"
+  fi
+}
+
+if [ "$SERIAL" -eq 1 ] || [ "${#SUITES[@]}" -eq 1 ]; then
+  # SERIALLY: the shape every run had before O439, and CI's legs (one suite
+  # each). ${PIPESTATUS[0]} is the function's exit code, not tee's — the
+  # function runs as the pipeline's first stage.
+  for k in battery-core battery models; do
+    [ -n "${KIND_SVC[$k]:-}" ] || continue
+    echo ""
+    echo "═══ image: $k ($(kind_image "$k")) ═══"
+    build_kind "$k" 2>&1 | tee ".battery/image-$k.log"
+    IMAGE_RC[$k]=${PIPESTATUS[0]}
+  done
+  for suite in "${SUITES[@]}"; do
+    echo ""
+    echo "═══ $suite ═══"
+    run_suite "$suite" 2>&1 | tee ".battery/$suite.log"
+    SUITE_RC[$suite]=${PIPESTATUS[0]}
+  done
+else
+  # SIDE BY SIDE. Each job is a subshell whose output is REDIRECTED into its
+  # log, and its exit code is collected with `wait` once `kill -0` says it has
+  # gone — watching the process, never a sentinel in its log. The wait is
+  # BOUNDED: past BATTERY_TIMEOUT_SECONDS whatever is still running is reported
+  # by name, stopped, and fails the battery with exit 124.
+  BATTERY_TIMEOUT_SECONDS=${BATTERY_TIMEOUT_SECONDS:-7200}
+  launch() {  # <suite>
+    ( run_suite "$1" ) > ".battery/$1.log" 2>&1 &
+    SUITE_PID[$1]=$!
+    SUITE_T0[$1]=$SECONDS
+    echo "  started   $1"
+  }
+  RUN_T0=$SECONDS
+  echo ""
+  echo "═══ the run: images built once, every suite side by side, each into .battery/<suite>.log ═══"
+  for k in battery-core battery models; do
+    [ -n "${KIND_SVC[$k]:-}" ] || continue
+    ( build_kind "$k" ) > ".battery/image-$k.log" 2>&1 &
+    IMAGE_PID[$k]=$!
+    IMAGE_T0[$k]=$SECONDS
+    echo "  building  the $k image $(kind_image "$k") (.battery/image-$k.log)"
+  done
+  for s in "${SUITES[@]}"; do
+    [ -z "${SUITE_KIND[$s]}" ] && launch "$s"
+  done
+  while :; do
+    for k in "${!IMAGE_PID[@]}"; do
+      kill -0 "${IMAGE_PID[$k]}" 2>/dev/null && continue
+      wait "${IMAGE_PID[$k]}"
+      IMAGE_RC[$k]=$?
+      unset "IMAGE_PID[$k]"
+      if [ "${IMAGE_RC[$k]}" -eq 0 ]; then
+        echo "  built     the $k image in $((SECONDS - IMAGE_T0[$k]))s"
+      else
+        echo "  FAILED    the $k image, exit ${IMAGE_RC[$k]}, in $((SECONDS - IMAGE_T0[$k]))s — its last lines:"
+        tail -n 40 ".battery/image-$k.log" | sed 's/^/      | /'
+      fi
+      for s in "${SUITES[@]}"; do
+        [ "${SUITE_KIND[$s]}" = "$k" ] && launch "$s"
+      done
+    done
+    for s in "${!SUITE_PID[@]}"; do
+      kill -0 "${SUITE_PID[$s]}" 2>/dev/null && continue
+      wait "${SUITE_PID[$s]}"
+      SUITE_RC[$s]=$?
+      unset "SUITE_PID[$s]"
+      printf '  finished  %-18s exit %-3s in %ss\n' "$s" "${SUITE_RC[$s]}" "$((SECONDS - SUITE_T0[$s]))"
+      if [ "${SUITE_RC[$s]}" -ne 0 ]; then
+        echo "            its last lines (.battery/$s.log):"
+        tail -n 40 ".battery/$s.log" | sed 's/^/      | /'
+      fi
+    done
+    [ "${#IMAGE_PID[@]}" -eq 0 ] && [ "${#SUITE_PID[@]}" -eq 0 ] && break
+    if [ $((SECONDS - RUN_T0)) -gt "$BATTERY_TIMEOUT_SECONDS" ]; then
+      echo "FAIL  the run passed BATTERY_TIMEOUT_SECONDS=$BATTERY_TIMEOUT_SECONDS with these still running:"
+      for k in "${!IMAGE_PID[@]}"; do
+        echo "        the $k image build"; kill "${IMAGE_PID[$k]}" 2>/dev/null; IMAGE_RC[$k]=124
+      done
+      for s in "${!SUITE_PID[@]}"; do
+        echo "        $s"; kill "${SUITE_PID[$s]}" 2>/dev/null; SUITE_RC[$s]=124
+      done
+      echo "      A wait that cannot time out is a hang; these are failures, not unfinished runs."
+      IMAGE_PID=(); SUITE_PID=()
+      break
+    fi
+    sleep 2
+  done
+  echo "  the run took $((SECONDS - RUN_T0))s"
+fi
+for suite in "${SUITES[@]}"; do
+  code=${SUITE_RC[$suite]:-1}
   NAMES+=("$suite")
   CODES+=("$code")
   [ "$code" -eq 0 ] || OVERALL=1
 done
+
+# The preflights' verdict, from the process that ran them beside the suites —
+# watched by its PID and bounded like the suites.
+PREFLIGHT_RC=""
+if [ -n "$PREFLIGHT_PID" ]; then
+  PF_T0=$SECONDS
+  if kill -0 "$PREFLIGHT_PID" 2>/dev/null; then
+    echo ""
+    echo "waiting for the preflights (.battery/preflight.log) …"
+  fi
+  while kill -0 "$PREFLIGHT_PID" 2>/dev/null; do
+    if [ $((SECONDS - PF_T0)) -gt "${BATTERY_TIMEOUT_SECONDS:-7200}" ]; then
+      echo "FAIL  the preflights were still running past BATTERY_TIMEOUT_SECONDS; stopped."
+      kill "$PREFLIGHT_PID" 2>/dev/null
+      break
+    fi
+    sleep 2
+  done
+  wait "$PREFLIGHT_PID"
+  PREFLIGHT_RC=$?
+  echo ""
+  echo "═══ preflights — run beside the suites by \`bash tests/battery.sh --preflight-only\`:"
+  # Their own time is the log's last lines: the time this run collects them is
+  # not it, since they may have finished long before the suites did.
+  echo "    exit $PREFLIGHT_RC ═══"
+  cat .battery/preflight.log
+  [ "$PREFLIGHT_RC" -eq 0 ] || OVERALL=1
+fi
 
 echo ""
 echo "════════════════════════════════════════════════════"
@@ -6946,8 +7467,17 @@ if [ -n "$FIGURE_DRIFT" ]; then
   OVERALL=1
 fi
 
+if [ -n "$PREFLIGHT_RC" ] && [ "$PREFLIGHT_RC" -ne 0 ]; then
+  echo ""
+  echo "PREFLIGHTS FAILED — \`bash tests/battery.sh --preflight-only\` exited $PREFLIGHT_RC beside"
+  echo "the suites; its whole log is printed above and kept in .battery/preflight.log."
+fi
 if [ "$OVERALL" -eq 0 ]; then
-  echo "BATTERY OK — every suite exited 0"
+  if [ -n "$PREFLIGHT_RC" ]; then
+    echo "BATTERY OK — every suite and the preflights exited 0"
+  else
+    echo "BATTERY OK — every suite exited 0"
+  fi
 else
   echo "BATTERY FAILED — see the non-zero codes above; logs in .battery/"
 fi

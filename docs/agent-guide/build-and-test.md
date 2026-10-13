@@ -236,7 +236,13 @@ bash tests/tls-pins.sh                # CA pins readable + both stacks start (32
                                       # **Since ROADMAP O199** it also replaces the
                                       # observability engine over a volume whose
                                       # `vaults/default` is a regular file, and requires
-                                      # init's own error in the log, not serve-http's
+                                      # init's own error in the log, not serve-http's.
+                                      # **Since ROADMAP O439** it BUILDS both engine
+                                      # images on every run, side by side: `up -d`
+                                      # builds only a missing tag, so the local figures
+                                      # above timed engines built weeks earlier. Each
+                                      # boot proves its engine is the binary its build
+                                      # recorded from the tree under test
 docker compose run --rm arch-check    # TWO verifications, one service: the
                                       # architecture reference is what
                                       # diagrams/ and its own headings derive
@@ -393,14 +399,106 @@ mawk 1.3.4 20200120, the oldest awk the tree's own images run, brought in by
 image digest and binary sha256 and asserted through the same PATH lookup, in a
 step the last preflight requires to be exactly what it executes; and the
 script records the exit status of every awk call its PREFLIGHT BLOCK makes
-(not the post-run phase, not a child script), its last preflight failing on
-any that did not succeed. That is the general detector for a reader that fails
+(not the post-run phase, and of a child script only its own shards, each
+recording its own and the last merging them — ROADMAP O439), its last
+preflight failing on any that did not succeed. That is the general detector for a reader that fails
 OPEN: a mutation planted in one made mawk print `syntax error` while the gate
 printed `ok`, and with the recorder in place the same plant fails the pass and
 names the program. So a program here runs under both:
 no three-argument `match()`, no `gensub`, no `IGNORECASE`, no interval
 expression, and no exit status used as an answer. **No comment states what
 CI's awk IS** — the step prints it, and a runner image moves.
+
+**One image, every suite at once, the preflights beside them (ROADMAP
+O439).** Measured on 2026-10-13 before it: a full local battery ran its
+host-side preflights for 911 s (fifteen minutes, on the maintainer's Git Bash,
+where every one of their processes costs a Windows process creation) and then
+its suites one after another for about forty more, each building its own image
+over a workspace compiled from nothing, the telemetry suite compiling two more
+binaries at run time and `site` compiling mdBook; CI's legs took eight to
+seventeen and a half minutes each, about seven and a half of every one spent
+building the same image. Measured after it, on the same host beside other
+agents' builds: 780 s for a full battery after a one-line change to
+`undercroft-core`, every crate recompiled, and 726 s with every image stage
+rebuilt — ROADMAP O439 has each suite's figure. Now:
+
+* **The dependency layer.** The Dockerfile's `skeleton` stage copies the
+  workspace's manifests, the lock and `vendor/` with every target root stubbed,
+  and `deps` compiles every dependency of the release and test builds over it;
+  `deps-telemetry` and `deps-models` do the same for the telemetry binaries and
+  the model legs. None depends
+  on a source file, so a source edit reaches none of them. Each ends by
+  deleting every workspace member's artifacts (`cargo clean -p`, the members
+  named from their manifests), so no stub can be "fresh" to cargo and linked
+  into a binary — a COPY keeps the host's mtimes — and `builder` refuses to
+  build when one is left, or when the layer holds no compiled dependency.
+* **Built once.** Every suite that needs a binary or the toolchain runs on one
+  of two images cut from ONE `builder`: `battery-core` — `builder` and the
+  premise below — for `test`, `lint`, `e2e`, `orchestrator-e2e` and
+  `backends-e2e`, and `battery`, which adds the telemetry binaries the
+  `telemetry` stage compiles beside `builder` and mdBook, for `e2e-telemetry`
+  and `site`. Two images rather than one so the five suites on `battery-core`
+  start while the telemetry binaries are still compiling; BuildKit computes
+  what the two share once. Each is tagged per WORKTREE
+  (`undercroft-battery-core:wt-<hash of the path>`), so two worktrees'
+  batteries never run each other's image. The model legs run on the `models`
+  stage the same way. Which image a suite needs is its compose service's own
+  `target:`; `bash tests/battery.sh --image-of <suite>` prints it.
+* **Side by side.** With two or more suites, the battery builds each image it
+  needs once, starts every suite the moment its image exists — a suite with
+  none at once — and runs them in parallel, each into `.battery/<suite>.log`
+  (a redirect, never a pipe; its exit code collected with `wait` once `kill -0`
+  says it has gone, every wait bounded by `BATTERY_TIMEOUT_SECONDS`, default
+  7200). A failing suite's last forty lines are printed as it finishes.
+  `--serial`, or a single suite, keeps the old shape: one at a time, streamed
+  through `tee`, the exit code from PIPESTATUS.
+* **The preflights beside them, in shards.** A run with suites starts the
+  preflights as a second process of the same script, `bash tests/battery.sh
+  --preflight-only` — the code CI's preflight job runs — into
+  `.battery/preflight.log`, prints that log whole at the end, and folds its
+  exit code into the verdict. On Git Bash it starts them at AboveNormal
+  priority (`nice -n -5`, which every process they create inherits), so a host
+  saturated by compiles does not starve them. `--preflight-only` itself runs
+  them in shards — five processes of the script side by side, by the
+  `PF_SHARDS` table that keeps the preflights reading one another's variables
+  together, then the last preflight alone, which reads the awk record the
+  others wrote (each shard keeps its own, and the last merges them) — and its
+  coordinator refuses a run where any preflight ran twice or not at all,
+  comparing the headers every shard printed with the ones the file holds.
+  Eight readers that started a process per item start one per question now,
+  with the same answers. Measured on that host: 911 s one after another
+  before this unit; in shards, 397 s alone and 535 s and 320 s beside two
+  full runs — the host's load from other work, which moved between runs,
+  moved each figure as much as the change did. The cost, stated: a preflight
+  failure no longer stops the suites, so it is reported when the run ends.
+* **Freshness is proved, not trusted.** The build records the digest of the
+  tree it copied (`tests/tree-digest.sh`, the ONE definition, run by the
+  battery over the checkout as well) and the sha256 of every binary it built.
+  Every service on a battery or model image names `undercroft-battery-premise`
+  ahead of its command; inside the suite's own container it refuses — exit 1,
+  `PREMISE FAILURE`, the suite never run — an image whose recorded tree is not
+  `BATTERY_EXPECT_TREE` or a binary that is not the one recorded, then execs the
+  suite. That is the doctrine's "prove the binary is fresh" made general: it
+  ties every binary to the whole tree rather than to one symbol. Run by hand
+  with no expectation it says it compared nothing, and runs.
+* **CI builds, then says so.** `BATTERY_PREBUILT=1` (with
+  `BATTERY_CORE_IMAGE`, `BATTERY_IMAGE` and `BATTERY_MODELS_IMAGE`) makes the
+  battery build nothing: CI's legs build and load the image themselves over
+  the Actions layer cache, and the premise is what proves it is the
+  checkout's (`ci-and-release.md`).
+
+`tests/tls-pins.sh` got the same proof, and needed it more: it booted engine
+images with `up -d`, which builds only a MISSING tag, and its throwaway
+projects' tags outlive `down -v` — so every run after a machine's first started
+that run's engine, six and three weeks old on the maintainer's machine when
+found. It now builds both engine images on every run, side by side, and each
+boot compares its running engine's sha256 with the record the Dockerfile's
+`build-record` stage exports from the same build. Its throwaway projects are
+the CHECKOUT's too (`tlspins-stack-<digest of the path>` and its siblings): they
+were fixed names, so two worktrees running the suite at once tore down each
+other's stacks, which failed 5 and 3 checks of two correct trees in the same
+second on 2026-10-13. It prints how long each engine build and each deployment
+took, as notes rather than checks.
 
 **`--no-preflight` is the mirror image and it is what CI's SUITE legs use**
 (ROADMAP M13). Every matrix leg and the `tls-pins` job run
