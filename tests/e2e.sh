@@ -2335,17 +2335,36 @@ fi
 # leaves the tag verifying. On an hmac-only vault content at rest is the
 # plaintext; the 0x1f arrives by `import`, which carries content as exported
 # (the save surfaces strip control characters). The move is plain SQL.
+#
+# **Since ROADMAP O406 the move needs a vault still on version-1 row tags**:
+# on a vault that has switched, the version-2 canonical length-prefixes every
+# field, so the same move breaks the tag (the O406 block below). A vault stays
+# on version 1 while its switch is withheld, and one way is the one an
+# operator meets: another process holds the vault from its first writable
+# open. Here that holder is a `sqlite3` reader with an open read transaction,
+# so the database is created in WAL mode first for it to hold; once the moved
+# row exists, `verify`'s finding withholds every later switch by itself.
 O231_HOME="$(mktemp -d)"; O231_DIR="$(mktemp -d)"
 o231() { env UNDERCROFT_HOME="$O231_HOME" "$BIN" "$@"; }
 o231 init >/dev/null 2>&1
 o231 vault create plain --level hmac-only >/dev/null 2>&1
+O231_DB="$O231_HOME/vaults/plain/vault.db"
+sqlite3 "$O231_DB" "PRAGMA journal_mode=WAL;" >/dev/null
+mkfifo "$O231_DIR/hold"
+sqlite3 "$O231_DB" < "$O231_DIR/hold" >/dev/null 2>&1 &
+O231_HOLDER=$!
+exec 7>"$O231_DIR/hold"
+echo "BEGIN; SELECT count(*) FROM sqlite_master;" >&7
+sleep 0.5
 o231 remember "the sluice opens at dawn" --vault plain --wing canal --room gates >/dev/null 2>&1
 o231 remember "the weir was rebuilt in may" --vault plain --wing canal --room gates >/dev/null 2>&1
 O231_EXP="$(o231 export --vault plain 2>/dev/null)"
 grep -F '"drawer"' <<<"$O231_EXP" | grep -F 'the sluice opens' \
   | sed 's/the sluice opens/the sluice\\u001fopens/' > "$O231_DIR/one.jsonl"
 o231 import "$O231_DIR/one.jsonl" --vault plain >/dev/null 2>&1
-O231_DB="$O231_HOME/vaults/plain/vault.db"
+check "O231: premise — a reader holds the vault, so it stays on version-1 tags" 0 \
+  "is WITHHELD because another process has the vault open" -- \
+  env UNDERCROFT_HOME="$O231_HOME" "$BIN" stats --vault plain
 O231_ID="$(sqlite3 "$O231_DB" "SELECT id FROM drawers WHERE instr(content, x'1f') > 0")"
 O231_TAG="$(sqlite3 "$O231_DB" "SELECT hex(tag) FROM drawers WHERE id = '$O231_ID'")"
 sqlite3 "$O231_DB" "UPDATE drawers SET meta_json = meta_json || char(31) || \
@@ -2358,6 +2377,7 @@ if [ -n "$O231_ID" ] \
 else
   echo "FAIL  O231: premise — the boundary moved, the tag never written (id '$O231_ID')"; FAIL=$((FAIL+1))
 fi
+echo "COMMIT;" >&7; exec 7>&-; wait "$O231_HOLDER" 2>/dev/null
 check "O231: premise — every read refuses the drawer" 1 "corrupt row $O231_ID" -- \
   env UNDERCROFT_HOME="$O231_HOME" "$BIN" drawer get "$O231_ID" --vault plain
 check "O231: verify names it and fails, exit 2" 2 "UNREADABLE: $O231_ID: its HMAC verifies" -- \
@@ -2405,6 +2425,38 @@ check "O231: drawer delete removes it" 0 "Deleted drawer" -- \
   env UNDERCROFT_HOME="$O231_HOME" "$BIN" drawer delete "$O231_ID" --vault plain
 check "O231: and the vault verifies again" 0 "VERIFY OK" -- \
   env UNDERCROFT_HOME="$O231_HOME" "$BIN" verify --vault plain
+
+# ── ROADMAP O406: on a vault that has switched, the same move is tampering ─
+# The O231 move above verifies only on version-1 row tags. Once a vault has
+# switched, its tags cover a table-domained, length-prefixed canonical, so
+# moving the meta/content boundary without the key breaks the tag: `verify`
+# names a record whose HMAC fails (exit 2) on the CLI and over MCP.
+O406_HOME="$(mktemp -d)"; O406_DIR="$(mktemp -d)"
+o406() { env UNDERCROFT_HOME="$O406_HOME" "$BIN" "$@"; }
+o406 init >/dev/null 2>&1
+o406 vault create plain --level hmac-only >/dev/null 2>&1
+o406 remember "the sluice opens at dawn" --vault plain --wing canal --room gates >/dev/null 2>&1
+grep -F '"drawer"' <<<"$(o406 export --vault plain 2>/dev/null)" | grep -F 'the sluice opens' \
+  | sed 's/the sluice opens/the sluice\\u001fopens/' > "$O406_DIR/one.jsonl"
+o406 import "$O406_DIR/one.jsonl" --vault plain >/dev/null 2>&1
+O406_DB="$O406_HOME/vaults/plain/vault.db"
+O406_ID="$(sqlite3 "$O406_DB" "SELECT id FROM drawers WHERE instr(content, x'1f') > 0")"
+sqlite3 "$O406_DB" "UPDATE drawers SET meta_json = meta_json || char(31) || \
+  CAST(substr(content, 1, instr(content, x'1f') - 1) AS TEXT), \
+  content = substr(content, instr(content, x'1f') + 1) WHERE id = '$O406_ID'"
+check "O406: on a switched vault the keyless move fails its HMAC, exit 2" 2 "TAMPERED: $O406_ID" -- \
+  env UNDERCROFT_HOME="$O406_HOME" "$BIN" verify --vault plain
+O406_MCP2="$(printf '%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"undercroft_verify","arguments":{}}}' \
+  | env UNDERCROFT_HOME="$O406_HOME" "$BIN" serve-mcp --vault plain 2>/dev/null)"
+if [ -n "$O406_ID" ] && grep -qF '"isError":true' <<<"$O406_MCP2" \
+   && grep -qF 'hmac failures: 1' <<<"$O406_MCP2"; then
+  echo "ok    O406: and MCP verify counts it an HMAC failure"; PASS=$((PASS+1))
+else
+  echo "FAIL  O406: and MCP verify counts it an HMAC failure (id '$O406_ID')"
+  echo "$O406_MCP2" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 
 # ── ROADMAP O269: `verify` reads the file the rows live in ────────────────
 # `verify` walked tags and the chain and never the database's structure, so a

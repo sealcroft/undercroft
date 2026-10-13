@@ -19699,10 +19699,13 @@ a search and `trust list` served. A rotation for comparison: 1,349 ms and 821 ms
 size the switching open costs the order of a rotation, as `UPGRADING.md` says.
 
 **Surfaces.** CLI `verify` prints `identity:` and `field shapes:`, MCP `undercroft_verify` counts
-both, `/v1` carries `identity` and `shapes`, the admin console renders both; eight `e2e` checks were
-added and NOT run as a suite (the battery is the integrator's) — the six CLI and MCP ones were
-exercised by hand against this build's release binary and print what they match; the two `/v1` ones
-were not. Tests added: 17 in `undercroft-store`'s lib, 6 in
+both, `/v1` carries `identity` and `shapes`, the admin console renders both; eleven `e2e` checks were
+added, and the whole suite ran against this build's release binary: 912 passed, 0 failed. Three of them
+came from the integrated battery's first run, where O231's block failed seven checks: its fixture is
+the keyless meta/content move this entry closes, so on a walked vault the move broke the tag. That
+block now builds its row on a vault a `sqlite3` reader holds from its first open — the switch withheld,
+the vault on version-1 tags, every O231 verdict as before — and two checks assert that on a switched
+vault the same move is an HMAC failure, exit 2, on the CLI and over MCP. Tests added: 17 in `undercroft-store`'s lib, 6 in
 `undercroft-vault`'s, 1 in the CLI's binary target and 1 in `tests/cli.rs`; one removed from
 `undercroft-core`'s with the dead canonical it tested.
 

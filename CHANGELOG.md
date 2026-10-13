@@ -2844,7 +2844,7 @@ file did not grow, the next open took 74 and 48 ms, and `verify` stayed `VERIFY 
 table at both levels with every reader after it; withheld over each moved row and beside a holder; the crash
 after the raise; a version-1 manifest beside the commitment; a receipt and a witness from before the walk;
 the encoder over every byte value; ids and labels byte-identical and every tag changed across the walk — and
-eight `e2e` checks; counterfactuals for the boundary withheld from the policy scans, the walk without its
+eleven `e2e` checks, O231's moved onto a vault a reader keeps on version-1 tags; counterfactuals for the boundary withheld from the policy scans, the walk without its
 verify-first and version 2 inside `Vault::tag` each turn a test red. Released 1.6.0 and 1.6.1, built from
 their tags, refuse a walked vault before any byte moves, a deferred promote and the crash after the raise
 included; raising after the COMMIT instead — the order the ruling rejected — let both write.
