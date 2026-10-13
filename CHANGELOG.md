@@ -2905,8 +2905,16 @@ failing three of its checks — and each now ends in a digest of the checkout's 
 image they run with `docker buildx bake` from the suite's own service in `docker-compose.yml` — the
 definition a local battery builds — over the dependency layers earlier runs left in the Actions cache, one
 leg per cache scope writing them, and run the battery with `BATTERY_PREBUILT=1`; no job is added and the
-verdict still needs every job. CI's new wall-clock is
-measured by the pull request's first runs, not here.
+verdict still needs every job. CI's new wall-clock is measured by the pull request's first runs, not
+here.
+
+Side by side, load during a battery is the normal case, and it found the suites' fixed windows: two full
+batteries failed `e2e-telemetry` (59/3 and 61/1) whose five live-stream checks read a `curl --max-time 3`
+or `4` window against a 2-second sampler. Each now waits for the server's `: connected` line before its
+trigger and reads until every frame it asserts has arrived, bounded at 30 s, failing with what did arrive;
+the fixed sleeps in `tests/e2e.sh` that stood for a server start, a server's exit or a reader's lock wait
+for that event the same way. Under CPU and fsync load the old script failed 3 of 3 runs and the new one
+passed 10 of 10.
 
 ## 1.6.1 — 2026-09-22
 

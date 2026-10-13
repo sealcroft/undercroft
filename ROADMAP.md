@@ -54161,6 +54161,40 @@ ignored, `e2e` 901, `orchestrator-e2e` 201, `e2e-telemetry` 62, `backends-e2e` 1
   the Actions cache, so CI would gain nothing from it. A layer is content-addressed, safe across worktrees,
   and exported.
 
+#### `e2e-telemetry` under the parallel battery — a defect this unit exposed and owns (2026-10-13)
+
+After `main` (O406) was merged in, two full batteries at `f2219d3` failed `e2e-telemetry` 59/3 and 61/1 — "no
+sample frame", and on a sealed vault a stream that read nothing at all — while the suite passed alone, 62/0 in
+51 s. Its five live-stream blocks read through FIXED windows: `curl --max-time 3` or `4`, after a `sleep 1`
+meant to let the subscription begin, against a sampler that ticks every 2,000 ms. Running the suites side by
+side makes load during a run the normal case, and under it the window closed before the subscription began or
+before the first tick. The suite was always this fragile; this unit is what made load ordinary, so it is this
+unit's defect.
+
+- **Each block now waits for its frame.** The reader starts with a 30 s deadline (`STREAM_DEADLINE`); the
+  block's trigger runs only after the server's own `: connected` line, which `run_sse` writes once the
+  subscription is registered, so nothing the trigger emits can be missed; then it reads until every pattern
+  it asserts is in the stream, or the deadline passes. The assertions are unchanged and each fails printing
+  what did arrive. One stream per block and the awaited patterns ARE the asserted ones, so no retry can pass
+  on another frame. No product behaviour changed; the sampler's interval is not touched by the test.
+- **The same audit over the other suites.** In `tests/e2e.sh`, sleeps that stood for an event became bounded
+  waits for it: six server starts (`/healthz`, 30 s), a server's exit, and the O231 reader's lock — a marker
+  `sqlite3` prints only once its read transaction has begun, where a `sleep 0.5` stood. The telemetry
+  script's remaining start-up polls and request timeouts were widened to the same 30 s;
+  `tests/e2e-orchestrator.sh` already polls everywhere; and `tests/e2e-backends.sh`'s one fixed sleep waits for
+  Milvus to SHOW a delete, which load can only lengthen, so it cannot redden a fixed tree.
+- **Measured.** A CPU burner alone (48 busy loops on the 24-core Docker VM) did NOT reproduce the failure — the
+  script as it stood passed 3 of 3 under it, and so did the fixed one 10 of 10 — which is why that load is not
+  the evidence. CPU AND fsync pressure did, as a battery's compiles and SQLite writes make it: 24 busy loops
+  and six writers looping `dd … conv=fsync`. Under it the script as it stood failed 3 of 3 (59/3, 61/1, 61/1:
+  "no sample frame" every time, and once a sealed stream that read nothing — the batteries' failure); the
+  fixed one passed 10 of 10 at 62/0, 70 to 99 s each. On a scratch copy where the stream server's sampler ticks
+  every ten minutes and the sealed block saves nothing — two frames that never come — the fixed script failed
+  the three checks those frames carry, in a 68 s run of which the two 30 s deadlines are most, each printing
+  what HAD arrived (the `: connected` line, the frames that did come, the pings). A fourth check,
+  `stats/history`, failed with them because the slowed sampler wrote no sample at all; it runs after the
+  plain block has now SEEN a sample, which makes it deterministic as well.
+
 #### CI: the expected shape, and what to watch
 
 Not measured — the unit could not push, and a workflow's time exists only on a pushed branch. Expected, from
