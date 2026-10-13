@@ -243,7 +243,26 @@ The `IRREGULAR` pair count in it is read by the `prose figures` preflight in
   `drawer_fde` + `fde_meta`; opt-in inverted tier via
   `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept
   default-off by its measured containment gate), experimental in-memory
-  HNSW (hnsw.rs, `hnsw` feature), transactional audit chain (`chain_meta` + `chain_append`,
+  HNSW (hnsw.rs, `hnsw` feature), **every row tag's canonical in ONE module
+  (rows.rs, ROADMAP O406)** — one builder per tagged table, each taking the
+  `RowFormat` it builds in as a required argument, the version-1 recipes
+  private to it, and a source gate (`only_this_module_makes_a_row_canonical`)
+  that no other production file of the crate calls the vault crate's two
+  `pub` canonical constructors; `Vault::tag` takes bare bytes and stays the
+  record-only canonicals' door, held by review alone —
+  **the tag regime and its one walk (retag.rs)**: a vault's row tags are in
+  the format its `migrate/tag-v2` commitment says (exact label, `MIN(seq)`,
+  O233's shape), read once per handle; a writable open walks a version-1
+  vault ONCE, after A10, U12 and O233's switch, under O257's exclusive hold,
+  verify-first on `walk_blockers()` (any finding or error — its preconditions
+  and the graph secret's read included — withholds, never fails the open,
+  and says why on `unhealed`; the verify runs under the hold, so `OPEN_HELD`
+  names the walk), then raises `vault.json` to version 2 BEFORE one
+  transaction re-tags every row through the per-table re-tag the rotation
+  shares (`retag_rows`/`apply_retagged`) and appends the commitment; one
+  rewrite boundary, `max(this key's rotation, the commitment)`, feeds O234's
+  arms and both O230 policy scans — and **the exact legs (exact.rs)**,
+  transactional audit chain (`chain_meta` + `chain_append`,
   and **chain.rs, the chain's one owner since ROADMAP O233**: the regime, the
   committed head and one streaming replay for `verify`, reconciliation and a
   rotation. The version-2 step folds each record's LABEL and TIME with its
@@ -345,10 +364,17 @@ The `IRREGULAR` pair count in it is read by the `prose figures` preflight in
   anchor is read BEFORE the snapshot everywhere, because read after the pin
   it names heads the rows never produced (counterfactual: false refusals at
   exactly the pinning statement)),
-  verify (**`VerifyReport` is the whole verdict and it has TEN legs**: record
+  verify (**`VerifyReport` is the whole verdict and it has TWELVE legs**: record
   HMACs, the chain replay, the label commitment (O233), drawer supersession
   receipts, **KG fact receipts**, orphan graph labels, mirror drift,
-  **declared-policy drift**, **version replay (O234)**, **storage (O269)**.
+  **declared-policy drift**, **version replay (O234)**, **storage (O269)**,
+  and **identity and field shapes (O406)** — what a moved field boundary or
+  a tag carried between tables MOVES, since a tag check cannot see either: a
+  fact whose id its decoded words do not derive (also refused at the fact
+  read doors, one decision), one id naming rows in two tables, and a covered
+  field of a shape no write produces. Both fail `ok()` (P15b found no hit on
+  any real corpus), block no rotation (a rotation keeps the framing) and
+  withhold the version-2 walk (`walk_blockers`).
   **The tenth runs FIRST and reads the FILE, not the rows**: SQLite's full
   `PRAGMA integrity_check` inside `verify_in`'s one snapshot — so inside
   `backup create`'s pin, the rotation's hold and `repair`'s closing verify —
@@ -480,7 +506,12 @@ The `IRREGULAR` pair count in it is read by the `prose figures` preflight in
   (tamper-failing rows SKIPPED, not laundered) and **the migration ends in a
   VACUUM** — an in-place UPDATE leaves the old row images in freed pages, so
   the words were still in the FILE until it did; any future at-rest
-  migration needs the same, and a gate that reads bytes rather than rows),
+  migration needs the same, and a gate that reads bytes rather than rows —
+  **PROPOSED with O406, for the maintainer's approval in its PR**: scoped to a
+  migration that REMOVES confidential bytes, as O406's ruling refuted the
+  unscoped clause for its row-tag walk, which removes none (content and meta
+  are not rewritten, and every version-1 tag already sits verbatim in
+  `audit.tag`), so runs no VACUUM, and gates on what it MOVES),
   **and neither is a DIGEST of a drawer's words (U12, 2026-08-06)**:
   `kg_triples.source_fp` and `drawers.supersedes_fp` were unkeyed
   `sha256(verbatim content)` in clear columns — the same confirmation
@@ -598,7 +629,7 @@ The `IRREGULAR` pair count in it is read by the `prose figures` preflight in
   anything is removed), opened WRITABLE with the surface's one embedder
   factory (`EmbedderFor` — what is swapped in is the verified post-migration
   state; a read-only open refuses every older schema), verified over all
-  ten legs — `PRAGMA integrity_check` among them as the storage leg since
+  twelve legs — `PRAGMA integrity_check` among them as the storage leg since
   O269, which deleted the second check this door ran beside it (`verify` read
   no index: a flipped index byte passed it on four of seven pages, and
   `quick_check` on all seven) — so a refused archive's report, printed on

@@ -1422,11 +1422,11 @@ impl Tenancy {
         ))
     }
 
-    /// `POST /v1/vaults/{id}/verify` — the whole `VerifyReport`, all ten
+    /// `POST /v1/vaults/{id}/verify` — the whole `VerifyReport`, all twelve
     /// legs: every record's HMAC, the chain replay, the label commitment
     /// (ROADMAP O233), drawer supersession receipts, KG fact receipts, orphan
     /// graph labels, mirror drift, declared-policy drift, version replay
-    /// (O234) and storage (O269). Read-only despite the verb (POST because it is
+    /// (O234), storage (O269), and identity and field shapes (O406). Read-only despite the verb (POST because it is
     /// an expensive action, not a resource read).
     ///
     /// `ok` is the vault's whole verdict, the same one CLI `verify` exits
@@ -1555,6 +1555,11 @@ impl Tenancy {
             // `integrity_check` returned that is not `ok`, and every leg a
             // corruption code stopped.
             "storage": report.storage,
+            // ROADMAP O406 item 8: a fact whose id its own fields do not
+            // derive, one id naming rows in two tables, and a covered field
+            // holding a shape no write produces — rows whose tag verifies.
+            "identity": report.identity,
+            "shapes": report.shapes,
             "supersessions": {
                 "verified": count(V::Verified),
                 "source_changed": count(V::SourceChanged),

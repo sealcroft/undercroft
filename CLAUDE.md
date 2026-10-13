@@ -422,8 +422,9 @@ to fix.
   counted both ways.** (`invariants-storage.md`)
 - **An at-rest migration marks itself complete only when it IS complete**:
   its marker written LAST and only on a clean walk, what is pending reported on
-  `VaultStats.unhealed`, with a VACUUM and a byte-reading gate.
-  (`invariants-storage.md`)
+  `VaultStats.unhealed`, with a VACUUM and a byte-reading gate (PROPOSED with
+  O406, for the maintainer's approval in its PR: those two when it removes
+  confidential bytes). (`invariants-storage.md`)
 - **A struct is not a surface**: a hand-projected report goes into
   `parity.rs::HAND_PROJECTED` when it is created. (`invariants-surfaces.md`)
 - Cross-vault access must fail cryptographically (AAD binds vault id), not

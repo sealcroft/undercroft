@@ -269,10 +269,20 @@ fn distil_one(
             if dated.is_some() {
                 rep.dated_from_text += 1;
             }
-            let fact_date = dated
-                .as_ref()
-                .and_then(|m| m.resolved.clone())
-                .or_else(|| d.meta.content_date.clone());
+            // The note's own date is the fallback only where it can be a
+            // validity bound: a `content_date` is the writer's string (an
+            // MCP save takes any), and the graph refuses an empty bound or
+            // one holding a control byte (ROADMAP O406 item 10), so carrying
+            // one through would make one such drawer abort every refine run
+            // that reaches it. Such a date is no date, and the fact is
+            // written open, as it is for an undated note. Whether a bound
+            // must parse as a date at all is O420's.
+            let fact_date = dated.as_ref().and_then(|m| m.resolved.clone()).or_else(|| {
+                d.meta
+                    .content_date
+                    .clone()
+                    .filter(|c| !c.is_empty() && !c.bytes().any(|b| b < 0x20))
+            });
             // Where the fact rests. The quote is checked against the note
             // the same way the `when` span is; what the note does not
             // contain is not evidence. A fact with no quotable support is
@@ -929,6 +939,59 @@ mod tests {
             "premise: every drawer was sent"
         );
         assert_eq!(egress_records(&rw).len(), 1, "premise: and it was recorded");
+    }
+
+    /// **A note whose own date cannot be a validity bound is distilled
+    /// undated** (ROADMAP O406 item 10). The graph refuses an empty
+    /// `valid_from` and one holding a control byte; a `content_date` is the
+    /// writer's string, so carrying it through as the fact's date made one
+    /// such drawer abort every run that reached it. Counterfactual: without
+    /// the filter in `refine_one` this run returns `Invalid` at the first
+    /// drawer.
+    #[test]
+    fn a_note_dated_with_no_date_is_distilled_undated() {
+        const TRIPLE: &str = r#"[{"subject":"release","predicate":"leaves","object":"on friday"}]"#;
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("acme", SecurityLevel::Sealed).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
+        for (i, date) in ["", "2026-05-01\u{1f}x"].iter().enumerate() {
+            store
+                .upsert(
+                    &Drawer::new(
+                        "ops",
+                        "r",
+                        format!("the release train leaves on friday, take {i}"),
+                        None,
+                        i as u32,
+                        "test",
+                    )
+                    .with_content_date(Some((*date).to_string())),
+                )
+                .unwrap();
+        }
+        let (llm, _srv, sent) = stub_llm(TRIPLE);
+        let rep = refine(&mut store, &llm, &opts(Some("ops")))
+            .expect("a note dated with no date is distilled, not refused");
+        assert_eq!(
+            sent.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "premise: both drawers reached the extractor"
+        );
+        assert_eq!(rep.failed, 0);
+        let facts = store
+            .kg_query_entity(
+                "release",
+                None,
+                "outgoing",
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgQuery),
+            )
+            .unwrap();
+        assert!(!facts.is_empty(), "premise: the fact was written");
+        assert!(
+            facts.iter().all(|t| t.valid_from.is_none()),
+            "the fact is open where its note carried no usable date: {facts:?}"
+        );
     }
 
     /// **A refine that selected nothing records nothing** (ROADMAP O95, the

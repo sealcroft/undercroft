@@ -351,6 +351,33 @@ check "kg query shows current"    0 "globex"                         -- "$BIN" k
 check "kg as-of shows history"    0 "acme"                           -- "$BIN" kg query alice --as-of 2024-06-15
 check "kg timeline"               0 "acme"                           -- "$BIN" kg timeline --entity alice
 check "kg stats"                  0 "triples: 2"                     -- "$BIN" kg stats
+# ROADMAP O406: the vault's row tags are in the version-2 format from its
+# first writable open — its manifest says version 2 — and `verify` carries the
+# identity and field-shape legs, by line on the CLI and by count over MCP. A
+# validity bound is a date: an empty one is refused on both surfaces that
+# write a fact, and an absent one is the open window it always was.
+check "O406: the walked vault's manifest is version 2" 0 '"version": 2' -- \
+  cat "$UNDERCROFT_HOME/vaults/default/vault.json"
+check "O406: verify names the identity leg"     0 "identity:        0"  -- "$BIN" verify
+check "O406: verify names the field-shape leg"  0 "field shapes:    0"  -- "$BIN" verify
+check "O406: kg add refuses an empty bound"     1 "empty or holds a control character" -- \
+  "$BIN" kg add alice works_at initech --to ""
+O406_MCP="$(printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"undercroft_kg_add","arguments":{"subject":"alice","predicate":"works_at","object":"initech","valid_to":""}}}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"undercroft_verify","arguments":{}}}' \
+  | "$BIN" serve-mcp 2>/dev/null)"
+if grep -F '"id":2' <<<"$O406_MCP" | grep -qF '"isError":true' \
+   && grep -qF 'empty or holds a control character' <<<"$O406_MCP"; then
+  echo "ok    O406: MCP kg_add refuses an empty bound"; PASS=$((PASS+1))
+else
+  echo "FAIL  O406: MCP kg_add refuses an empty bound"; echo "$O406_MCP" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+if grep -qF 'identity: 0' <<<"$O406_MCP" && grep -qF 'shapes: 0' <<<"$O406_MCP"; then
+  echo "ok    O406: MCP verify counts the identity and shape legs"; PASS=$((PASS+1))
+else
+  echo "FAIL  O406: MCP verify counts the identity and shape legs"; echo "$O406_MCP" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 # U12: the receipt summary must NAME every verdict it counts. `unreceipted`
 # was tallied into a bucket the summary line never printed — invisible until
 # U12 made it reachable for a fact (a citation with no binding: a plain
@@ -2308,17 +2335,36 @@ fi
 # leaves the tag verifying. On an hmac-only vault content at rest is the
 # plaintext; the 0x1f arrives by `import`, which carries content as exported
 # (the save surfaces strip control characters). The move is plain SQL.
+#
+# **Since ROADMAP O406 the move needs a vault still on version-1 row tags**:
+# on a vault that has switched, the version-2 canonical length-prefixes every
+# field, so the same move breaks the tag (the O406 block below). A vault stays
+# on version 1 while its switch is withheld, and one way is the one an
+# operator meets: another process holds the vault from its first writable
+# open. Here that holder is a `sqlite3` reader with an open read transaction,
+# so the database is created in WAL mode first for it to hold; once the moved
+# row exists, `verify`'s finding withholds every later switch by itself.
 O231_HOME="$(mktemp -d)"; O231_DIR="$(mktemp -d)"
 o231() { env UNDERCROFT_HOME="$O231_HOME" "$BIN" "$@"; }
 o231 init >/dev/null 2>&1
 o231 vault create plain --level hmac-only >/dev/null 2>&1
+O231_DB="$O231_HOME/vaults/plain/vault.db"
+sqlite3 "$O231_DB" "PRAGMA journal_mode=WAL;" >/dev/null
+mkfifo "$O231_DIR/hold"
+sqlite3 "$O231_DB" < "$O231_DIR/hold" >/dev/null 2>&1 &
+O231_HOLDER=$!
+exec 7>"$O231_DIR/hold"
+echo "BEGIN; SELECT count(*) FROM sqlite_master;" >&7
+sleep 0.5
 o231 remember "the sluice opens at dawn" --vault plain --wing canal --room gates >/dev/null 2>&1
 o231 remember "the weir was rebuilt in may" --vault plain --wing canal --room gates >/dev/null 2>&1
 O231_EXP="$(o231 export --vault plain 2>/dev/null)"
 grep -F '"drawer"' <<<"$O231_EXP" | grep -F 'the sluice opens' \
   | sed 's/the sluice opens/the sluice\\u001fopens/' > "$O231_DIR/one.jsonl"
 o231 import "$O231_DIR/one.jsonl" --vault plain >/dev/null 2>&1
-O231_DB="$O231_HOME/vaults/plain/vault.db"
+check "O231: premise — a reader holds the vault, so it stays on version-1 tags" 0 \
+  "is WITHHELD because another process has the vault open" -- \
+  env UNDERCROFT_HOME="$O231_HOME" "$BIN" stats --vault plain
 O231_ID="$(sqlite3 "$O231_DB" "SELECT id FROM drawers WHERE instr(content, x'1f') > 0")"
 O231_TAG="$(sqlite3 "$O231_DB" "SELECT hex(tag) FROM drawers WHERE id = '$O231_ID'")"
 sqlite3 "$O231_DB" "UPDATE drawers SET meta_json = meta_json || char(31) || \
@@ -2331,6 +2377,7 @@ if [ -n "$O231_ID" ] \
 else
   echo "FAIL  O231: premise — the boundary moved, the tag never written (id '$O231_ID')"; FAIL=$((FAIL+1))
 fi
+echo "COMMIT;" >&7; exec 7>&-; wait "$O231_HOLDER" 2>/dev/null
 check "O231: premise — every read refuses the drawer" 1 "corrupt row $O231_ID" -- \
   env UNDERCROFT_HOME="$O231_HOME" "$BIN" drawer get "$O231_ID" --vault plain
 check "O231: verify names it and fails, exit 2" 2 "UNREADABLE: $O231_ID: its HMAC verifies" -- \
@@ -2378,6 +2425,38 @@ check "O231: drawer delete removes it" 0 "Deleted drawer" -- \
   env UNDERCROFT_HOME="$O231_HOME" "$BIN" drawer delete "$O231_ID" --vault plain
 check "O231: and the vault verifies again" 0 "VERIFY OK" -- \
   env UNDERCROFT_HOME="$O231_HOME" "$BIN" verify --vault plain
+
+# ── ROADMAP O406: on a vault that has switched, the same move is tampering ─
+# The O231 move above verifies only on version-1 row tags. Once a vault has
+# switched, its tags cover a table-domained, length-prefixed canonical, so
+# moving the meta/content boundary without the key breaks the tag: `verify`
+# names a record whose HMAC fails (exit 2) on the CLI and over MCP.
+O406_HOME="$(mktemp -d)"; O406_DIR="$(mktemp -d)"
+o406() { env UNDERCROFT_HOME="$O406_HOME" "$BIN" "$@"; }
+o406 init >/dev/null 2>&1
+o406 vault create plain --level hmac-only >/dev/null 2>&1
+o406 remember "the sluice opens at dawn" --vault plain --wing canal --room gates >/dev/null 2>&1
+grep -F '"drawer"' <<<"$(o406 export --vault plain 2>/dev/null)" | grep -F 'the sluice opens' \
+  | sed 's/the sluice opens/the sluice\\u001fopens/' > "$O406_DIR/one.jsonl"
+o406 import "$O406_DIR/one.jsonl" --vault plain >/dev/null 2>&1
+O406_DB="$O406_HOME/vaults/plain/vault.db"
+O406_ID="$(sqlite3 "$O406_DB" "SELECT id FROM drawers WHERE instr(content, x'1f') > 0")"
+sqlite3 "$O406_DB" "UPDATE drawers SET meta_json = meta_json || char(31) || \
+  CAST(substr(content, 1, instr(content, x'1f') - 1) AS TEXT), \
+  content = substr(content, instr(content, x'1f') + 1) WHERE id = '$O406_ID'"
+check "O406: on a switched vault the keyless move fails its HMAC, exit 2" 2 "TAMPERED: $O406_ID" -- \
+  env UNDERCROFT_HOME="$O406_HOME" "$BIN" verify --vault plain
+O406_MCP2="$(printf '%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"undercroft_verify","arguments":{}}}' \
+  | env UNDERCROFT_HOME="$O406_HOME" "$BIN" serve-mcp --vault plain 2>/dev/null)"
+if [ -n "$O406_ID" ] && grep -qF '"isError":true' <<<"$O406_MCP2" \
+   && grep -qF 'hmac failures: 1' <<<"$O406_MCP2"; then
+  echo "ok    O406: and MCP verify counts it an HMAC failure"; PASS=$((PASS+1))
+else
+  echo "FAIL  O406: and MCP verify counts it an HMAC failure (id '$O406_ID')"
+  echo "$O406_MCP2" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 
 # ── ROADMAP O269: `verify` reads the file the rows live in ────────────────
 # `verify` walked tags and the chain and never the database's structure, so a
@@ -4465,6 +4544,12 @@ rest_body "verify after rotate" '"ok":true'       -- -X POST "$API/vaults/acme/v
 # ROADMAP O233: the eighth leg reaches the wire, and a rotation keeps the
 # labels it bound — the commitment is preserved verbatim.
 rest_body "O233: /v1 verify names the label commitment" '"label_commitment":"intact"' -- \
+  -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
+# ROADMAP O406: the identity and field-shape legs reach the wire, empty on a
+# rotated vault — a rotation keeps the tag regime and re-tags in it.
+rest_body "O406: /v1 verify carries the identity leg" '"identity":[]' -- \
+  -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
+rest_body "O406: /v1 verify carries the field-shape leg" '"shapes":[]' -- \
   -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
 # ROADMAP O234: the version leg reaches the wire too — and this vault has just
 # been ROTATED, which re-tags every row and records nothing per row, so a leg

@@ -77,6 +77,120 @@ or when they could never be presented.
 
 ## 1.7.0 (unreleased)
 
+### after this release has opened a vault writable, 1.6.1 refuses it as too new and 1.6.0 or older answers `ManifestTampered` — upgrade read-only replicas with or before the writer (O406)
+
+**Who is affected:** anyone who runs an older binary against a vault this
+release has opened writable: a downgrade, a mixed fleet where a 1.6.x replica
+or server keeps serving a vault a newer writer has opened, a restored backup
+taken after the upgrade and opened by an older binary.
+
+**Symptom:** on **1.6.1**, every command on the vault exits 1 with *"this
+vault's manifest is version 2, and this build of Undercroft understands up to
+version 1 — upgrade Undercroft to open it (ROADMAP O238)"* (`/v1`: 409 with no
+`class`). On **1.6.0 or older** it exits **2** with *"vault manifest failed
+integrity verification — possible tampering"* — **that message is the fence,
+not tampering.** Both refuse at unlock, on both postures and on every command
+— measured on a walked sealed and hmac-only vault, one in a deferred key
+rotation, and one whose walk crashed after the raise: neither moved a byte of
+`vault.db`, its `-wal`, `vault.json` or `vault.json.next`. The vault is intact
+and this release opens and verifies it; restoring a backup over it would throw
+away every write since the backup.
+
+**Cause:** every row tag in a vault — drawers, facts, entities, receipts,
+tunnels, trust and retention policies, the mirror marker — joined its fields
+with a separator byte and no lengths, under one key, so a writer WITHOUT the
+key could move a field boundary, or carry one table's row and tag onto
+another's, and the tag still verified (ROADMAP O406; measured, a drawer forged
+from a fact an agent wrote was served by `get` and `wake_up` under `VERIFY
+OK`). At its first writable open this release re-tags every row in an
+unambiguous, table-domained format under a key of its own, in one
+transaction, and first raises `vault.json` to version 2 — the fence 1.6.1
+shipped for exactly this (O238). An older binary would read every re-tagged
+row as tampered, and a writable one would append rows in the old format, so it
+must not open the vault; a version-2 manifest is what stops it.
+
+**Fix:** run this release, and upgrade read-only replicas **with or before**
+the writer — a replica left on 1.6.x stops at its next open. There is no
+supported downgrade after the first writable open: to go back, restore a
+backup taken **before** the upgrade (which loses what was written since), or
+`undercroft export` the vault with this release and `import` it with the older
+one into a new vault — an export carries the fields and no tags, so the older
+build tags them in its own format (measured: a 1.6.1 import of this release's
+export verifies OK and answers the same graph query). An export carries
+drawers, facts, entities and tunnels and nothing else: re-declare trust and
+retention policies on the older side, and keep the original vault, which holds
+the audit history. `undercroft config check` opens no database and cannot see
+whether a vault has switched; `undercroft --read-only verify` with this
+release is the pre-flight, and its `unhealed` notes say when a vault has not.
+
+### `kg add` and `undercroft_kg_add` refuse an empty `valid_from` or `valid_to`, and one holding a control character (O406)
+
+**Symptom:** a fact added with `kg add … --from ""` or `--to ""` (MCP
+`undercroft_kg_add`: `"valid_from": ""` or `"valid_to": ""`), or with a date
+holding a control character such as a newline, is refused — exit 1 on the
+CLI, an MCP error — with *"valid_to "" is empty or holds a control character;
+a validity bound is a date — omit it for an open window (ROADMAP O406)"*.
+Before this release it was stored. `/v1` has no fact-writing route but
+`refine`, which writes a note's own date as its facts' `valid_from` only
+where that date is neither empty nor holds a control character, and writes
+the fact open otherwise, so a run is not refused.
+
+**Cause:** both bounds are documented as dates. An empty `valid_to` read as a
+closed window with no date — the fact stopped being an approved canonical
+answer — while the old tag could not tell it from an absent one (ROADMAP
+O406), and a control character is a field separator in the old row format.
+
+**Fix:** omit the bound for an open window; give a date otherwise. Facts
+already stored with `''` keep it and read exactly as before; an import keeps
+what its payload says. `undercroft config check` cannot see this: it is input,
+not a declaration.
+
+### the switch to the new row format is withheld, and says why, while `verify` has a finding or another process holds the vault (O406)
+
+**Symptom:** after the upgrade, `undercroft stats` and the open's warnings
+carry a line *"this vault's row tags are still in the version-1 format … the
+switch to the version-2 row canonical (ROADMAP O406) is WITHHELD because …"*,
+and older binaries still open the vault. Nothing fails; the vault keeps
+working on the old format.
+
+**Cause:** the switch re-tags every row, which binds whatever the columns hold.
+So it runs only over a vault `verify` passes on every leg it would bind — a
+failed HMAC, a broken chain, a forged receipt, a replayed or policy row, a
+drawer whose meta does not parse or a row no read takes, a fact whose id its
+own fields do not derive, one id in two tables, a field of a shape no write
+produces, damage `integrity_check` names — and only while no other process
+has the vault open, since every process on one vault must agree on its
+format. It also waits for a staged `vault.json.next` and for the at-rest
+migrations before it (A10, U12, the audit chain's switch). **A deployment that
+keeps a reader attached stays on the old format until both restart
+together.**
+
+**Fix:** read the reason. A finding: `undercroft verify --vault <name>`
+names it, and the usual remedies apply (restore, or `drawer delete` the named
+row); the next writable open walks. A holder: stop it — a `serve-http` or
+`serve-mcp`, a read-only replica, `daemon --watch` — and open the vault once
+with this release. `undercroft config check` cannot see either.
+
+### the first writable open of each existing vault re-tags every row, once (O406)
+
+**Symptom:** the first writable open of each vault after the upgrade takes
+longer than usual and grows the WAL, once; later opens are as before.
+
+**Cause:** the switch above, one transaction over every tagged row, plus a
+`verify` before it in the same hold. Measured on the LoCoMo feed mined into
+64 wings (5,445 records), the switching open took 858 ms on a sealed vault and
+966 ms on an hmac-only one, against 1,349 ms and 821 ms for a key rotation of
+the same vault, and the database file did not grow; the figures at ~10⁵
+records are still owed (ROADMAP O437). A vault whose switch is withheld by a
+`verify` finding pays that `verify` again at every writable open until the
+finding is cleared, and it runs holding the vault alone: an open arriving
+meanwhile waits up to its 5 s busy timeout and past it answers `another
+process holds this vault exclusively …`, which names the switch.
+
+**Fix:** none needed. On a large vault, schedule the first open of the new
+binary like a key rotation — the two cost the same order — and expect a
+`verify`'s time before it.
+
 ### every process that writes one vault must run the same build (O254)
 
 **Symptom:** none a check can show you, which is why it is listed. With a

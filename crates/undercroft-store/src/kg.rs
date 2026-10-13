@@ -19,7 +19,8 @@ use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::{chain_append, Namespace, StoreError, VaultStore};
+use crate::{chain_append, rows, Namespace, StoreError, VaultStore};
+use undercroft_vault::{RowCanonical, RowFormat};
 
 // The screened-field inventory moved to `admission::SCREENED_FIELDS` in O29
 // and gained an owner key, because it had to span two tables: it was scoped
@@ -231,12 +232,7 @@ fn triple_id(
     valid_from: Option<&str>,
 ) -> String {
     if !matches!(vault.level(), undercroft_vault::SecurityLevel::Sealed) {
-        let mut h = Sha256::new();
-        for part in [subject, predicate, object, valid_from.unwrap_or("")] {
-            h.update(part.as_bytes());
-            h.update([0x1f]);
-        }
-        return hex::encode(&h.finalize()[..16]);
+        return unkeyed_triple_id(subject, predicate, object, valid_from);
     }
     let mut buf = Vec::with_capacity(subject.len() + predicate.len() + object.len() + 64);
     buf.extend_from_slice(b"kgtriple");
@@ -245,6 +241,62 @@ fn triple_id(
         buf.extend_from_slice(part.as_bytes());
     }
     hex::encode(&keyed(secret, &buf)[..16])
+}
+
+/// The unkeyed fact id: an hmac-only vault's recipe, and the one every fact
+/// a sealed vault wrote before A10 still carries until that walk re-derives
+/// it. Unchanged (A10 ruled it may not move), `unwrap_or("")` included.
+fn unkeyed_triple_id(
+    subject: &str,
+    predicate: &str,
+    object: &str,
+    valid_from: Option<&str>,
+) -> String {
+    let mut h = Sha256::new();
+    for part in [subject, predicate, object, valid_from.unwrap_or("")] {
+        h.update(part.as_bytes());
+        h.update([0x1f]);
+    }
+    hex::encode(&h.finalize()[..16])
+}
+
+/// **Whether a fact's id is the one its decoded words derive** — ROADMAP
+/// O406 item 8(a), the ONE decision `verify` and the fact read doors take
+/// (O234's one-decision shape; the read half because a substitution is
+/// consumed at read, `lookup_canonical` included — O237's lesson).
+///
+/// Every move a reader can construct over a fact's columns that keeps its
+/// tag changes the object or `valid_from`, both inside the id, or lands on a
+/// field the shape leg covers; and no write path rewrites an object in place
+/// (`kg_invalidate` re-seals the same plaintext, an import and A10's walk
+/// re-derive the id). So a mismatch is exact. **Shape-aware**: a sealed
+/// vault's fact with no `terms` blob is one A10's walk has not yet re-derived,
+/// and carries the unkeyed recipe.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fact_id_holds(
+    vault: &undercroft_vault::Vault,
+    secret: &[u8; 32],
+    blinded: bool,
+    subject: &str,
+    predicate: &str,
+    object: &str,
+    valid_from: Option<&str>,
+    id: &str,
+) -> bool {
+    let derived = if blinded {
+        triple_id(vault, secret, subject, predicate, object, valid_from)
+    } else {
+        unkeyed_triple_id(subject, predicate, object, valid_from)
+    };
+    derived == id
+}
+
+/// What ROADMAP O406's exact legs found about one fact.
+enum FactExact {
+    /// A covered field no read takes, for O269's arm (item 8(d)).
+    Undecodable(String),
+    /// Whether the id moved (item 8(a)), and the shape findings (item 8(b)).
+    Findings { id_moved: bool, shape: Vec<String> },
 }
 
 /// The sealed (subject, predicate) pair — where the WORDS live once the
@@ -297,244 +349,10 @@ fn kg_terms_from_rest(
     Ok((subject, predicate))
 }
 
-/// Canonical bytes of the sealed terms blob, as a fourth extension on the
-/// `support`/`authority`/`extractor` precedent: appended only when the blob
-/// exists, so every fact written before A10 keeps byte-identical canonical
-/// bytes and is not re-tagged by the mere existence of this feature.
-///
-/// It is inside the tag because the blind columns alone are not enough: an
-/// offline attacker who could swap one fact's sealed terms for another's
-/// would move a fact's meaning without touching a column the tag covers.
-pub(crate) fn terms_ext(terms: Option<&[u8]>) -> Option<Vec<u8>> {
-    terms.map(|t| t.to_vec())
-}
-
 fn now_rfc3339() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .expect("rfc3339 now")
-}
-
-// Every field of a triple that the tamper tag covers, so the argument list is
-// the fact itself rather than an assortment. Splitting it would only move the
-// coupling somewhere less obvious.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn triple_canonical(
-    id: &str,
-    subject: &str,
-    predicate: &str,
-    object_at_rest: &[u8],
-    valid_from: &Option<String>,
-    valid_to: &Option<String>,
-    confidence: f64,
-    support_at_rest: Option<&[u8]>,
-    authority: Option<&[u8]>,
-    extractor: Option<&[u8]>,
-    terms: Option<&[u8]>,
-) -> Vec<u8> {
-    triple_canonical_bytes(
-        id.as_bytes(),
-        subject.as_bytes(),
-        predicate.as_bytes(),
-        object_at_rest,
-        valid_from.as_deref().map(str::as_bytes),
-        valid_to.as_deref().map(str::as_bytes),
-        confidence,
-        support_at_rest,
-        authority,
-        extractor,
-        terms,
-    )
-}
-
-/// [`triple_canonical`]'s ONE body, over the stored BYTES, so `verify` can
-/// check a fact's tag over a column that does not decode (ROADMAP O269 item
-/// 2). The typed entry point above is an adapter onto it, never a second
-/// recipe.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn triple_canonical_bytes(
-    id: &[u8],
-    subject: &[u8],
-    predicate: &[u8],
-    object_at_rest: &[u8],
-    valid_from: Option<&[u8]>,
-    valid_to: Option<&[u8]>,
-    confidence: f64,
-    support_at_rest: Option<&[u8]>,
-    authority: Option<&[u8]>,
-    extractor: Option<&[u8]>,
-    terms: Option<&[u8]>,
-) -> Vec<u8> {
-    let mut out = Vec::new();
-    // `unwrap_or("")`: an absent bound and an empty one are ONE byte string
-    // here, so a tag cannot tell a NULL `valid_to` from `''` — and the two do
-    // not read alike (ROADMAP O406, measured: `''` on an approved
-    // canonical fact keeps its tag while `lookup_canonical` stops finding it).
-    for part in [
-        id,
-        subject,
-        predicate,
-        valid_from.unwrap_or(b""),
-        valid_to.unwrap_or(b""),
-    ] {
-        out.extend_from_slice(part);
-        out.push(0x1f);
-    }
-    out.extend_from_slice(&confidence.to_le_bytes());
-    out.push(0x1f);
-    out.extend_from_slice(object_at_rest);
-    // Appended only when a grounding evaluation exists. Every fact written
-    // before grounding did has none, so its canonical bytes are unchanged to
-    // the byte and its tag still verifies — no re-tagging, no rewrite of a
-    // tamper-evident table, no chain churn. The separator goes inside the
-    // branch for the same reason.
-    if let Some(sup) = support_at_rest {
-        out.push(0x1f);
-        out.extend_from_slice(sup);
-    }
-    // The authority tier rides the same precedent — and under a DIFFERENT
-    // separator (0x1e), which tells a reader of a well-formed canonical
-    // which extension follows. It does NOT stop a boundary moving: the
-    // object, support and extension bytes may themselves hold 0x1c–0x1f and
-    // nothing records a length, so `object‖0x1f‖support` re-read as an
-    // object with no support keeps the canonical and the tag (ROADMAP
-    // O406, measured on both security levels).
-    if let Some(auth) = authority {
-        out.push(0x1e);
-        out.extend_from_slice(auth);
-    }
-    // Extractor identity takes the third separator (0x1d) under the same
-    // rule: a fact that never recorded its extractor keeps byte-identical
-    // canonical bytes, and no extension can alias another's position.
-    if let Some(ext) = extractor {
-        out.push(0x1d);
-        out.extend_from_slice(ext);
-    }
-    // Sealed subject/predicate take the FOURTH separator (0x1c), same
-    // precedent and the same rule: a fact whose columns hold the words
-    // (an hmac-only vault, or any fact written before A10 and not yet
-    // migrated) has no blob here and keeps byte-identical canonical bytes.
-    // It is covered because the blind columns alone are not enough — an
-    // attacker who swapped one fact's sealed terms for another's would move
-    // a fact's meaning without touching a column the tag covers.
-    if let Some(terms) = terms {
-        out.push(0x1c);
-        out.extend_from_slice(terms);
-    }
-    out
-}
-
-/// Canonical bytes of the extractor identity, or `None` when none was ever
-/// recorded — the `support`/authority precedent, so facts written before
-/// extractor identity existed are never re-tagged.
-///
-/// Inside the fact's HMAC on purpose: which model claimed a fact is
-/// provenance an offline attacker must not be able to rewrite — a flipped
-/// column fails `verify_tag` on read, exactly like a flipped
-/// `review_state`.
-pub(crate) fn extractor_ext(extractor: Option<&str>) -> Option<Vec<u8>> {
-    extractor_ext_bytes(extractor.map(str::as_bytes))
-}
-
-/// [`extractor_ext`]'s one body, over bytes (ROADMAP O269 item 2).
-pub(crate) fn extractor_ext_bytes(extractor: Option<&[u8]>) -> Option<Vec<u8>> {
-    extractor.map(|e| {
-        let mut out = vec![0x1f];
-        out.extend_from_slice(e);
-        out
-    })
-}
-
-/// Canonical bytes of the authority tier, or `None` when no field was ever
-/// declared — a fact never placed on the tier keeps its canonical bytes
-/// unchanged to the byte (the `support` precedent), so nothing written
-/// before the tier existed is re-tagged.
-///
-/// The three fields are inside the fact's HMAC on purpose: an offline
-/// attacker must not be able to promote poison to `approved`/`canonical`
-/// by flipping a column — a flipped row fails `verify_tag` on read.
-pub(crate) fn authority_ext(
-    authority_class: Option<&str>,
-    review_state: Option<&str>,
-    canonical_key: Option<&str>,
-) -> Option<Vec<u8>> {
-    authority_ext_bytes(
-        authority_class.map(str::as_bytes),
-        review_state.map(str::as_bytes),
-        canonical_key.map(str::as_bytes),
-    )
-}
-
-/// [`authority_ext`]'s one body, over bytes (ROADMAP O269 item 2).
-pub(crate) fn authority_ext_bytes(
-    authority_class: Option<&[u8]>,
-    review_state: Option<&[u8]>,
-    canonical_key: Option<&[u8]>,
-) -> Option<Vec<u8>> {
-    if authority_class.is_none() && review_state.is_none() && canonical_key.is_none() {
-        return None;
-    }
-    let mut out = Vec::new();
-    for part in [
-        authority_class.unwrap_or(b""),
-        review_state.unwrap_or(b""),
-        canonical_key.unwrap_or(b""),
-    ] {
-        out.push(0x1f);
-        out.extend_from_slice(part);
-    }
-    Some(out)
-}
-
-/// Canonical bytes of an entity row. ONE definition, and now genuinely one:
-/// the tag over these fields is written in three places here and verified in
-/// four (plus `rotate.rs`), and a canonical that drifts between them reports tampering on a row
-/// nobody touched. `rotate.rs` used to build its own inline copy — same bytes
-/// at the time, which is exactly why it was safe right up until this gained
-/// the extension below, at which point rotation would have silently kept
-/// computing the old shape and marked every entity tampered. It calls this
-/// now.
-///
-/// **`name_rest` is the FIFTH extension (0x1b), on the
-/// `support`/authority/extractor/terms precedent**, and it is inside the tag
-/// for the reason the others are: on a sealed vault the `name` column holds
-/// only a blind index, so the WORD lives in `name_rest` alone. Leaving it
-/// outside the canonical meant an offline attacker could erase or swap one
-/// entity's sealed name — changing what the row MEANS, or destroying it
-/// outright — and `kg_verify` would report nothing, while the triple
-/// counterpart (`terms`) was covered from the start. Appended only when the
-/// blob exists, so an hmac-only vault and any entity written before A10 keep
-/// byte-identical canonical bytes and are not re-tagged by this existing.
-pub(crate) fn entity_canonical(
-    id: impl AsRef<[u8]>,
-    name: impl AsRef<[u8]>,
-    etype: impl AsRef<[u8]>,
-    created_at: impl AsRef<[u8]>,
-    name_rest: Option<&[u8]>,
-) -> Vec<u8> {
-    // Over BYTES, so `verify` checks a tag over a column that does not decode
-    // through this one builder (ROADMAP O269 item 2); byte for byte the
-    // `format!` it replaces.
-    let mut out = Vec::new();
-    for (i, part) in [
-        id.as_ref(),
-        name.as_ref(),
-        etype.as_ref(),
-        created_at.as_ref(),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        if i > 0 {
-            out.push(0x1f);
-        }
-        out.extend_from_slice(part);
-    }
-    if let Some(blob) = name_rest {
-        out.push(0x1b);
-        out.extend_from_slice(blob);
-    }
-    out
 }
 
 /// An entity's id.
@@ -610,6 +428,7 @@ fn entity_name_from_rest(
 fn ensure_entity_in(
     tx: &rusqlite::Transaction<'_>,
     vault: &undercroft_vault::Vault,
+    fmt: RowFormat,
     secret: &[u8; 32],
     name: &str,
     at: &str,
@@ -631,8 +450,8 @@ fn ensure_entity_in(
     // The canonical covers what is AT REST, so a flipped column still fails
     // verification — and on a sealed vault that is the blind value, which
     // is what the column holds.
-    let canonical = entity_canonical(&id, &name_at_rest, "unknown", at, name_rest.as_deref());
-    let tag = vault.tag(&canonical);
+    let canonical = rows::entity(fmt, &id, &name_at_rest, "unknown", at, name_rest.as_deref());
+    let tag = vault.row_tag(&canonical);
     tx.execute(
         "INSERT INTO kg_entities (id, name, etype, tag, created_at, name_rest)          VALUES (?1, ?2, 'unknown', ?3, ?4, ?5)",
         params![id, name_at_rest, tag.as_slice(), at, name_rest],
@@ -879,26 +698,6 @@ pub(crate) fn fp_matches(
     } else {
         keyed_content_fp(vault, secret, content) == stored
     }
-}
-
-/// Canonical bytes of a **receipt**: the tamper-covered binding of a
-/// distilled fact to the verbatim drawer it was derived from. Keyed with
-/// the vault mac (like every other tag), so an offline attacker cannot
-/// swap the citation or the source fingerprint without failing
-/// `verify_tag`. The triple id is inside the binding, so a receipt cannot
-/// be moved to a different fact.
-pub(crate) fn receipt_canonical(
-    triple_id: &str,
-    source_drawer_id: &str,
-    source_fp: &[u8],
-) -> Vec<u8> {
-    let mut out = Vec::new();
-    out.extend_from_slice(triple_id.as_bytes());
-    out.push(0x1f);
-    out.extend_from_slice(source_drawer_id.as_bytes());
-    out.push(0x1f);
-    out.extend_from_slice(source_fp);
-    out
 }
 
 /// Outcome of verifying one fact's receipt against its cited source.
@@ -1401,7 +1200,11 @@ impl VaultStore {
             if row.terms.is_some() {
                 continue;
             }
-            if self.vault.verify_tag(&row.canonical(), &row.tag).is_err() {
+            if self
+                .vault
+                .verify_row_tag(&row.canonical(self.row_format()), &row.tag)
+                .is_err()
+            {
                 skipped += 1;
                 continue;
             }
@@ -1448,29 +1251,22 @@ impl VaultStore {
             let subj_at_rest = kg_term_at_rest(&self.vault, &secret, "s", &subject);
             let pred_at_rest = kg_term_at_rest(&self.vault, &secret, "p", &predicate);
             let terms = kg_terms_at_rest(&self.vault, &new_id, &subject, &predicate);
-            let auth = authority_ext(
-                row.authority_class.as_deref(),
-                row.review_state.as_deref(),
-                row.canonical_key.as_deref(),
-            );
-            let ext = extractor_ext(row.extractor.as_deref());
-            let tag = self.vault.tag(&triple_canonical(
-                &new_id,
-                &subj_at_rest,
-                &pred_at_rest,
-                &new_object,
-                &row.valid_from,
-                &row.valid_to,
-                row.confidence,
-                new_support.as_deref(),
-                auth.as_deref(),
-                ext.as_deref(),
-                terms_ext(terms.as_deref()).as_deref(),
+            let tag = self.vault.row_tag(&rows::fact(
+                self.row_format(),
+                &rows::FactFields {
+                    id: new_id.as_bytes(),
+                    subject: subj_at_rest.as_bytes(),
+                    predicate: pred_at_rest.as_bytes(),
+                    object: &new_object,
+                    support: new_support.as_deref(),
+                    terms: terms.as_deref(),
+                    ..row.fields()
+                },
             ));
             let new_receipt = match (&receipt, &row.source_drawer_id, &src_fp) {
                 (Some(_), Some(did), Some(fp)) => Some(
                     self.vault
-                        .tag(&receipt_canonical(&new_id, did, fp))
+                        .row_tag(&rows::fact_receipt(self.row_format(), &new_id, did, fp))
                         .to_vec(),
                 ),
                 _ => None,
@@ -1516,7 +1312,10 @@ impl VaultStore {
             // written under.
             if self
                 .vault
-                .verify_tag(&entity_canonical(&id, &name, &etype, &created, None), &tag)
+                .verify_row_tag(
+                    &rows::entity(self.row_format(), &id, &name, &etype, &created, None),
+                    &tag,
+                )
                 .is_err()
             {
                 skipped += 1;
@@ -1526,7 +1325,8 @@ impl VaultStore {
             let (blind, sealed) = entity_name_at_rest(&self.vault, &secret, &name);
             // The NEW sealed name is what the new tag covers, the way the
             // triple arm covers its new `terms`.
-            let new_tag = self.vault.tag(&entity_canonical(
+            let new_tag = self.vault.row_tag(&rows::entity(
+                self.row_format(),
                 &new_id,
                 &blind,
                 &etype,
@@ -1747,6 +1547,25 @@ impl VaultStore {
     /// rather than declared done. The retry is safe because the walk is
     /// idempotent per row: a keyed value carries [`CONTENT_FP_KEYED`] and is
     /// skipped on sight.
+    /// Whether U12's re-key has nothing left to do here — the version-2
+    /// row-tag walk waits on it (ROADMAP O406 item 5), since it re-tags
+    /// receipts. Done on every hmac-only vault, and on a sealed one when its
+    /// marker names this version: the shape of [`Self::kg_blind_complete`].
+    pub(crate) fn content_fp_complete(&self) -> Result<bool, StoreError> {
+        if !matches!(self.vault.level(), undercroft_vault::SecurityLevel::Sealed) {
+            return Ok(true);
+        }
+        let done: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'content_fp_version'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(done.as_deref() == Some(CONTENT_FP_VERSION))
+    }
+
     pub(crate) fn rekey_content_fingerprints(&mut self) -> Result<(), StoreError> {
         // hmac-only vaults keep plaintext by the operator's explicit choice,
         // so a digest of it discloses nothing they have not already
@@ -1801,7 +1620,10 @@ impl VaultStore {
             if let Some(r) = &receipt {
                 if self
                     .vault
-                    .verify_tag(&crate::supersession_canonical(&id, &old_id, &fp), r)
+                    .verify_row_tag(
+                        &rows::supersession(self.row_format.get(), &id, &old_id, &fp),
+                        r,
+                    )
                     .is_err()
                 {
                     skipped += 1;
@@ -1811,7 +1633,12 @@ impl VaultStore {
             let new_fp = keyed_fp_of_digest(&self.vault, &secret, &fp);
             let new_receipt = receipt.map(|_| {
                 self.vault
-                    .tag(&crate::supersession_canonical(&id, &old_id, &new_fp))
+                    .row_tag(&rows::supersession(
+                        self.row_format.get(),
+                        &id,
+                        &old_id,
+                        &new_fp,
+                    ))
                     .to_vec()
             });
             tx.execute(
@@ -1840,7 +1667,7 @@ impl VaultStore {
             if let (Some(did), Some(r)) = (&did, &receipt) {
                 if self
                     .vault
-                    .verify_tag(&receipt_canonical(&id, did, &fp), r)
+                    .verify_row_tag(&rows::fact_receipt(self.row_format.get(), &id, did, &fp), r)
                     .is_err()
                 {
                     skipped += 1;
@@ -1851,7 +1678,12 @@ impl VaultStore {
             let new_receipt = match (&did, &receipt) {
                 (Some(did), Some(_)) => Some(
                     self.vault
-                        .tag(&receipt_canonical(&id, did, &new_fp))
+                        .row_tag(&rows::fact_receipt(
+                            self.row_format.get(),
+                            &id,
+                            did,
+                            &new_fp,
+                        ))
                         .to_vec(),
                 ),
                 _ => receipt,
@@ -2267,6 +2099,27 @@ impl VaultStore {
                  confidence is a probability"
             )));
         }
+        // ROADMAP O419: the database returns a stored `-0.0` as `+0.0`, so a
+        // tag over the `-0.0` written failed on its next read — in either
+        // tag format, since a version-1 tag must stay the released bytes. The
+        // value is stored as it will be read, and tagged as stored.
+        let confidence = stored_confidence(confidence);
+        // ROADMAP O406 item 10: a validity bound is a date (MCP documents
+        // both as "ISO date"), so an EMPTY one or one holding a control byte
+        // is refused here, at the graph's one write path. An empty `valid_to`
+        // read as a closed window with no date, and it was writable; a control
+        // byte is a field separator in the version-1 canonical. An import
+        // keeps what its payload says — refusing there would refuse restores.
+        for (what, bound) in [("valid_from", valid_from), ("valid_to", valid_to)] {
+            if let Some(b) = bound {
+                if b.is_empty() || b.bytes().any(|c| c < 0x20) {
+                    return Err(StoreError::Invalid(format!(
+                        "{what} {b:?} is empty or holds a control character; a validity bound \
+                         is a date — omit it for an open window (ROADMAP O406)"
+                    )));
+                }
+            }
+        }
         // The object is content and reaches the agent verbatim — screened
         // and bounded here, at the graph's one write path.
         self.screen_kg_record(
@@ -2303,36 +2156,53 @@ impl VaultStore {
                 self.vault
                     .content_at_rest(&format!("kg/{id}/support"), &bytes)
             });
-        let ext = extractor_ext(extractor);
-        let tag = self.vault.tag(&triple_canonical(
-            &id,
-            &subj_at_rest,
-            &pred_at_rest,
-            &object_rest,
-            &vf,
-            &vt,
-            confidence,
-            support_rest.as_deref(),
-            // A new fact is never born on the authority tier: placement is
-            // a separate, audited declaration (`kg_set_authority`).
-            None,
-            ext.as_deref(),
-            terms_ext(terms.as_deref()).as_deref(),
+        // Tagged over the row AS IT WILL BE STORED (ROADMAP O406 item 1): every
+        // column the upsert below writes is the one tagged here, `valid_from`
+        // included — it was left out of the `ON CONFLICT` SET list while the
+        // tag covered the incoming value, so a re-add carrying a different
+        // spelling of the same id kept the old column under a tag over the
+        // new one (O417's self-inflicted `TagFailed`).
+        let tag = self.vault.row_tag(&rows::fact(
+            self.row_format.get(),
+            &rows::FactFields {
+                id: id.as_bytes(),
+                subject: subj_at_rest.as_bytes(),
+                predicate: pred_at_rest.as_bytes(),
+                object: &object_rest,
+                valid_from: vf.as_deref().map(str::as_bytes),
+                valid_to: vt.as_deref().map(str::as_bytes),
+                confidence,
+                support: support_rest.as_deref(),
+                // A new fact is never born on the authority tier: placement
+                // is a separate, audited declaration (`kg_set_authority`).
+                authority_class: None,
+                review_state: None,
+                canonical_key: None,
+                extractor: extractor.map(str::as_bytes),
+                terms: terms.as_deref(),
+            },
         ));
         // Receipt: a separate keyed tag over (triple id, citation, source
         // fingerprint). Kept distinct from the triple tag so it composes
         // without touching the fact's own canonical, and so legacy facts
         // (no receipt) are unaffected.
-        let receipt_tag = source_fp
-            .as_ref()
-            .zip(source_drawer_id)
-            .map(|(fp, did)| self.vault.tag(&receipt_canonical(&id, did, fp)));
+        let receipt_tag = source_fp.as_ref().zip(source_drawer_id).map(|(fp, did)| {
+            self.vault
+                .row_tag(&rows::fact_receipt(self.row_format.get(), &id, did, fp))
+        });
         let now = now_rfc3339();
         let tx = self.conn.transaction()?;
         // The entity the fact is ABOUT is created in the same transaction as
         // the fact: it used to be written first on the bare connection, so a
         // triple insert that failed left an orphan entity behind.
-        let entity = ensure_entity_in(&tx, &self.vault, &secret, subject, &now)?;
+        let entity = ensure_entity_in(
+            &tx,
+            &self.vault,
+            self.row_format.get(),
+            &secret,
+            subject,
+            &now,
+        )?;
         tx.execute(
             "INSERT INTO kg_triples (id, subject, predicate, object, valid_from, valid_to,
                                      confidence, source_drawer_id, tag, extracted_at,
@@ -2340,6 +2210,12 @@ impl VaultStore {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(id) DO UPDATE SET
                  object = excluded.object,
+                 -- ROADMAP O406 item 1: the tag below covers `valid_from`, so
+                 -- the row keeps the value the tag covers. Out of this list,
+                 -- a re-add spelling a NULL date as `''` (one id, the id
+                 -- recipe reads both as empty) kept NULL under a tag over
+                 -- `''` — a row failing its own tag (O417).
+                 valid_from = excluded.valid_from,
                  valid_to = excluded.valid_to,
                  confidence = excluded.confidence,
                  source_drawer_id = excluded.source_drawer_id,
@@ -2438,7 +2314,10 @@ impl VaultStore {
         for (id, did, fp, tag) in rows {
             if self
                 .vault
-                .verify_tag(&receipt_canonical(&id, &did, &fp), &tag)
+                .verify_row_tag(
+                    &rows::fact_receipt(self.row_format.get(), &id, &did, &fp),
+                    &tag,
+                )
                 .is_err()
             {
                 return Ok(true);
@@ -2527,7 +2406,10 @@ impl VaultStore {
                 (Some(did), Some(fp), Some(tag)) => {
                     let v = if self
                         .vault
-                        .verify_tag(&receipt_canonical(&id, &did, &fp), &tag)
+                        .verify_row_tag(
+                            &rows::fact_receipt(self.row_format.get(), &id, &did, &fp),
+                            &tag,
+                        )
                         .is_err()
                     {
                         ReceiptVerdict::Tampered
@@ -2656,9 +2538,16 @@ impl VaultStore {
             // The canonical covers what is AT REST, which on a sealed vault
             // is the blind index — verify against that, then decrypt the
             // word for the caller (A10).
-            let canonical = entity_canonical(&id, &name, &etype, &created, name_rest.as_deref());
+            let canonical = rows::entity(
+                self.row_format.get(),
+                &id,
+                &name,
+                &etype,
+                &created,
+                name_rest.as_deref(),
+            );
             self.vault
-                .verify_tag(&canonical, &tag)
+                .verify_row_tag(&canonical, &tag)
                 .map_err(|_| StoreError::Integrity(id.clone()))?;
             f((
                 entity_name_from_rest(&self.vault, &name, name_rest.as_deref())?,
@@ -2686,6 +2575,7 @@ impl VaultStore {
     /// record over such a holder is refused — `kg_set_authority` owns that
     /// row, in both directions.
     pub fn kg_import(&mut self, exp: &TripleExport) -> Result<String, StoreError> {
+        // `confidence` is normalised as `kg_add_inner` does (ROADMAP O419).
         let secret = self.kg_secret()?;
         let t = &exp.triple;
         undercroft_core::validate_name(&t.subject, "subject")
@@ -2784,24 +2674,25 @@ impl VaultStore {
                 self.vault
                     .content_at_rest(&format!("kg/{id}/support"), &bytes)
             });
-        let auth = authority_ext(
-            t.authority_class.as_deref(),
-            t.review_state.as_deref(),
-            t.canonical_key.as_deref(),
-        );
-        let ext = extractor_ext(t.extractor.as_deref());
-        let tag = self.vault.tag(&triple_canonical(
-            &id,
-            &subj_at_rest,
-            &pred_at_rest,
-            &object_rest,
-            &t.valid_from,
-            &t.valid_to,
-            t.confidence,
-            support_rest.as_deref(),
-            auth.as_deref(),
-            ext.as_deref(),
-            terms_ext(terms.as_deref()).as_deref(),
+        // Over the row as the upsert below stores it (ROADMAP O406 item 1),
+        // `valid_from` included: the payload's value is kept, `''` and all.
+        let tag = self.vault.row_tag(&rows::fact(
+            self.row_format.get(),
+            &rows::FactFields {
+                id: id.as_bytes(),
+                subject: subj_at_rest.as_bytes(),
+                predicate: pred_at_rest.as_bytes(),
+                object: &object_rest,
+                valid_from: t.valid_from.as_deref().map(str::as_bytes),
+                valid_to: t.valid_to.as_deref().map(str::as_bytes),
+                confidence: stored_confidence(t.confidence),
+                support: support_rest.as_deref(),
+                authority_class: t.authority_class.as_deref().map(str::as_bytes),
+                review_state: t.review_state.as_deref().map(str::as_bytes),
+                canonical_key: t.canonical_key.as_deref().map(str::as_bytes),
+                extractor: t.extractor.as_deref().map(str::as_bytes),
+                terms: terms.as_deref(),
+            },
         ));
         // The payload's fingerprint is still parsed — garbage owes a 400 —
         // but it is deliberately NOT stored. Since U12 the value is keyed
@@ -2837,10 +2728,20 @@ impl VaultStore {
         let receipt_tag = source_fp
             .as_ref()
             .zip(t.source_drawer_id.as_deref())
-            .map(|(fp, did)| self.vault.tag(&receipt_canonical(&id, did, fp)));
+            .map(|(fp, did)| {
+                self.vault
+                    .row_tag(&rows::fact_receipt(self.row_format.get(), &id, did, fp))
+            });
         let now = now_rfc3339();
         let tx = self.conn.transaction()?;
-        let entity = ensure_entity_in(&tx, &self.vault, &secret, &t.subject, &now)?;
+        let entity = ensure_entity_in(
+            &tx,
+            &self.vault,
+            self.row_format.get(),
+            &secret,
+            &t.subject,
+            &now,
+        )?;
         tx.execute(
             "INSERT INTO kg_triples (id, subject, predicate, object, valid_from, valid_to,
                                      confidence, source_drawer_id, tag, extracted_at,
@@ -2851,6 +2752,12 @@ impl VaultStore {
                      ?18)
              ON CONFLICT(id) DO UPDATE SET
                  object = excluded.object,
+                 -- ROADMAP O406 item 1: the tag below covers `valid_from`, so
+                 -- the row keeps the value the tag covers. Out of this list,
+                 -- a re-add spelling a NULL date as `''` (one id, the id
+                 -- recipe reads both as empty) kept NULL under a tag over
+                 -- `''` — a row failing its own tag (O417).
+                 valid_from = excluded.valid_from,
                  valid_to = excluded.valid_to,
                  confidence = excluded.confidence,
                  source_drawer_id = excluded.source_drawer_id,
@@ -2870,7 +2777,7 @@ impl VaultStore {
                 object_rest,
                 t.valid_from,
                 t.valid_to,
-                t.confidence,
+                stored_confidence(t.confidence),
                 t.source_drawer_id,
                 tag.as_slice(),
                 // extracted_at is provenance from the source vault, kept.
@@ -2944,7 +2851,8 @@ impl VaultStore {
         let tx = self.conn.transaction()?;
         // Anchoring takes the LAST chain state; `records` counts what to
         // report, since one call can both create and refine.
-        let mut anchor = ensure_entity_in(&tx, &self.vault, &secret, name, &now)?;
+        let mut anchor =
+            ensure_entity_in(&tx, &self.vault, self.row_format.get(), &secret, name, &now)?;
         let mut records = usize::from(anchor.is_some());
         if etype != "unknown" {
             // By the AT-REST name, which on a sealed vault is the blind
@@ -2967,9 +2875,15 @@ impl VaultStore {
             if let Some((id, cur, created, name_rest)) = existing {
                 if cur == "unknown" {
                     // The canonical covers what is at rest.
-                    let canonical =
-                        entity_canonical(&id, &name_at_rest, etype, &created, name_rest.as_deref());
-                    let tag = self.vault.tag(&canonical);
+                    let canonical = rows::entity(
+                        self.row_format.get(),
+                        &id,
+                        &name_at_rest,
+                        etype,
+                        &created,
+                        name_rest.as_deref(),
+                    );
+                    let tag = self.vault.row_tag(&canonical);
                     tx.execute(
                         "UPDATE kg_entities SET etype = ?1, tag = ?2 WHERE id = ?3",
                         params![etype, tag.as_slice(), id],
@@ -3030,32 +2944,20 @@ impl VaultStore {
         for held in holders {
             // Never launder a tampered row into a freshly tagged one.
             self.vault
-                .verify_tag(&held.canonical(), &held.tag)
+                .verify_row_tag(&held.canonical(self.row_format.get()), &held.tag)
                 .map_err(|_| StoreError::Integrity(format!("kg/{}", held.id)))?;
             let ended = now_rfc3339();
             let vt = Some(ended.clone());
-            let auth = authority_ext(
-                held.authority_class.as_deref(),
-                held.review_state.as_deref(),
-                held.canonical_key.as_deref(),
-            );
-            let ext = extractor_ext(held.extractor.as_deref());
             // `held.subject`/`predicate` are already the AT-REST values and
             // `held.terms` the sealed words: both ride through untouched,
             // exactly like `support` and the authority fields. Closing a
             // window does not change what a fact is about.
-            let tag = self.vault.tag(&triple_canonical(
-                &held.id,
-                &held.subject,
-                &held.predicate,
-                &held.object,
-                &held.valid_from,
-                &vt,
-                held.confidence,
-                held.support.as_deref(),
-                auth.as_deref(),
-                ext.as_deref(),
-                terms_ext(held.terms.as_deref()).as_deref(),
+            let tag = self.vault.row_tag(&rows::fact(
+                self.row_format.get(),
+                &rows::FactFields {
+                    valid_to: vt.as_deref().map(str::as_bytes),
+                    ..held.fields()
+                },
             ));
             let tx = self.conn.transaction()?;
             tx.execute(
@@ -3115,7 +3017,7 @@ impl VaultStore {
             .triple_row(triple_id)?
             .ok_or_else(|| bad("no such fact".into()))?;
         self.vault
-            .verify_tag(&row.canonical(), &row.tag)
+            .verify_row_tag(&row.canonical(self.row_format.get()), &row.tag)
             .map_err(|_| StoreError::Integrity(format!("kg/{triple_id}")))?;
 
         if authority_class == "canonical" && review_state == "approved" {
@@ -3123,20 +3025,14 @@ impl VaultStore {
             self.close_other_canonical_holders(key, triple_id)?;
         }
 
-        let auth = authority_ext(Some(authority_class), Some(review_state), canonical_key);
-        let ext = extractor_ext(row.extractor.as_deref());
-        let tag = self.vault.tag(&triple_canonical(
-            &row.id,
-            &row.subject,
-            &row.predicate,
-            &row.object,
-            &row.valid_from,
-            &row.valid_to,
-            row.confidence,
-            row.support.as_deref(),
-            auth.as_deref(),
-            ext.as_deref(),
-            terms_ext(row.terms.as_deref()).as_deref(),
+        let tag = self.vault.row_tag(&rows::fact(
+            self.row_format.get(),
+            &rows::FactFields {
+                authority_class: Some(authority_class.as_bytes()),
+                review_state: Some(review_state.as_bytes()),
+                canonical_key: canonical_key.map(str::as_bytes),
+                ..row.fields()
+            },
         ));
         let now = now_rfc3339();
         let tx = self.conn.transaction()?;
@@ -3243,7 +3139,7 @@ impl VaultStore {
 
     fn decode_triple(&self, row: TripleRow) -> Result<Triple, StoreError> {
         self.vault
-            .verify_tag(&row.canonical(), &row.tag)
+            .verify_row_tag(&row.canonical(self.row_format.get()), &row.tag)
             .map_err(|_| {
                 undercroft_obs::hmac_verify_failed("kg");
                 undercroft_obs::event_hmac_fail(
@@ -3279,11 +3175,39 @@ impl VaultStore {
         // in the columns (A10). Every read reaches a `Triple` through here,
         // so this is the one place that has to know.
         let (subject, predicate) = row.terms(&self.vault)?;
+        let object = String::from_utf8(object).map_err(|e| StoreError::CorruptRow {
+            id: row.id.clone(),
+            reason: e.to_string(),
+        })?;
+        // ROADMAP O406 item 8(a), the decision `verify` takes too: a fact
+        // whose fields were re-partitioned under a tag that still verifies is
+        // refused here, where `lookup_canonical` would have served it as the
+        // canonical answer.
+        let blinded = row.terms.is_some();
+        let secret = if blinded {
+            self.kg_secret()?
+        } else {
+            [0u8; 32]
+        };
+        if !fact_id_holds(
+            &self.vault,
+            &secret,
+            blinded,
+            &subject,
+            &predicate,
+            &object,
+            row.valid_from.as_deref(),
+            &row.id,
+        ) {
+            return Err(StoreError::IntegrityFinding(format!(
+                "kg/{}: the fact's id is not the one its subject, predicate, object and \
+                 valid_from derive — its covered fields were re-partitioned or replaced. \
+                 Nothing was returned; run `undercroft verify` (ROADMAP O406)",
+                row.id
+            )));
+        }
         Ok(Triple {
-            object: String::from_utf8(object).map_err(|e| StoreError::CorruptRow {
-                id: row.id.clone(),
-                reason: e.to_string(),
-            })?,
+            object,
             id: row.id,
             subject,
             predicate,
@@ -3477,12 +3401,6 @@ impl VaultStore {
             // Authority fields ride through unchanged, exactly like support:
             // closing a window is not a review, and dropping them from the
             // tag would report tampering on every promoted fact superseded.
-            let auth = authority_ext(
-                t.authority_class.as_deref(),
-                t.review_state.as_deref(),
-                t.canonical_key.as_deref(),
-            );
-            let ext = extractor_ext(t.extractor.as_deref());
             // `t` is a decoded Triple, so these are the WORDS — they have to
             // go back through the blind index before they can reach a
             // canonical, or the tag would cover something the column does
@@ -3492,18 +3410,23 @@ impl VaultStore {
             let subj_at_rest = kg_term_at_rest(&self.vault, &secret, "s", &t.subject);
             let pred_at_rest = kg_term_at_rest(&self.vault, &secret, "p", &t.predicate);
             let terms = kg_terms_at_rest(&self.vault, &t.id, &t.subject, &t.predicate);
-            let tag = self.vault.tag(&triple_canonical(
-                &t.id,
-                &subj_at_rest,
-                &pred_at_rest,
-                &object_rest,
-                &t.valid_from,
-                &vt,
-                t.confidence,
-                support_rest.as_deref(),
-                auth.as_deref(),
-                ext.as_deref(),
-                terms_ext(terms.as_deref()).as_deref(),
+            let tag = self.vault.row_tag(&rows::fact(
+                self.row_format.get(),
+                &rows::FactFields {
+                    id: t.id.as_bytes(),
+                    subject: subj_at_rest.as_bytes(),
+                    predicate: pred_at_rest.as_bytes(),
+                    object: &object_rest,
+                    valid_from: t.valid_from.as_deref().map(str::as_bytes),
+                    valid_to: vt.as_deref().map(str::as_bytes),
+                    confidence: t.confidence,
+                    support: support_rest.as_deref(),
+                    authority_class: t.authority_class.as_deref().map(str::as_bytes),
+                    review_state: t.review_state.as_deref().map(str::as_bytes),
+                    canonical_key: t.canonical_key.as_deref().map(str::as_bytes),
+                    extractor: t.extractor.as_deref().map(str::as_bytes),
+                    terms: terms.as_deref(),
+                },
             ));
             let tx = self.conn.transaction()?;
             tx.execute(
@@ -3669,9 +3592,16 @@ impl VaultStore {
             // The canonical covers what is AT REST — on a sealed vault the
             // blind index — so verification runs against the column and the
             // WORD is decrypted afterwards for the caller (A10).
-            let canonical = entity_canonical(&id, &name, &etype, &created, name_rest.as_deref());
+            let canonical = rows::entity(
+                self.row_format.get(),
+                &id,
+                &name,
+                &etype,
+                &created,
+                name_rest.as_deref(),
+            );
             self.vault
-                .verify_tag(&canonical, &tag)
+                .verify_row_tag(&canonical, &tag)
                 .map_err(|_| StoreError::Integrity(id.clone()))?;
             out.push((
                 entity_name_from_rest(&self.vault, &name, name_rest.as_deref())?,
@@ -3729,11 +3659,29 @@ impl VaultStore {
     /// they changed, [`crate::BadReason::Undecodable`] when the bytes the tag
     /// covers are intact and stored as what no read takes — and named by
     /// `seq` (facts) or `rowid` (entities) where its id does not decode.
+    #[cfg(test)]
     pub(crate) fn kg_verify(&self) -> Result<Vec<crate::BadRecord>, StoreError> {
+        Ok(self.kg_verify_full()?.bad)
+    }
+
+    /// [`kg_verify`](Self::kg_verify) with ROADMAP O406's exact legs over
+    /// every graph row whose tag verified and whose columns all decode:
+    /// (a) the fact's id re-derived from its decoded words, (b) the shapes
+    /// of its covered fields, and (d) a sealed field that does not open
+    /// under its own AAD — which goes through O269's arm, as an
+    /// [`crate::BadReason::Undecodable`] record. One walk: the tag check,
+    /// the opens and the re-derivation read each row once.
+    pub(crate) fn kg_verify_full(&self) -> Result<crate::exact::KgVerdict, StoreError> {
         use crate::{first_undecodable, text_of, value_bytes, BadRecord, Want};
         use rusqlite::types::ValueRef;
         let mut bad = Vec::new();
-        let sql = format!("SELECT {TRIPLE_COLUMNS}, seq FROM kg_triples ORDER BY seq");
+        let mut identity = Vec::new();
+        let mut shapes = Vec::new();
+        let sealed = matches!(self.vault.level(), undercroft_vault::SecurityLevel::Sealed);
+        // The graph secret, without minting one: `verify` warms it first, and
+        // a read-only handle with no secret holds no blinded row to re-derive.
+        let secret = *self.kg_secret.borrow();
+        let sql = format!("SELECT {TRIPLE_COLUMNS}, seq, receipt_tag FROM kg_triples ORDER BY seq");
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query([])?;
         // `TRIPLE_COLUMNS`, in order, with the class each read expects.
@@ -3794,31 +3742,54 @@ impl VaultStore {
                 ValueRef::Integer(n) => Some(n as f64),
                 _ => None,
             };
+            let fmt = self.row_format.get();
             let canonical = (|| {
-                let auth = authority_ext_bytes(opt(11)?, opt(12)?, opt(13)?);
-                let ext = extractor_ext_bytes(opt(14)?);
-                Some(triple_canonical_bytes(
-                    b(0)?,
-                    b(1)?,
-                    b(2)?,
-                    b(3)?,
-                    opt(4)?,
-                    opt(5)?,
-                    confidence?,
-                    opt(10)?,
-                    auth.as_deref(),
-                    ext.as_deref(),
-                    opt(15)?,
+                Some(rows::fact(
+                    fmt,
+                    &rows::FactFields {
+                        id: b(0)?,
+                        subject: b(1)?,
+                        predicate: b(2)?,
+                        object: b(3)?,
+                        valid_from: opt(4)?,
+                        valid_to: opt(5)?,
+                        confidence: confidence?,
+                        support: opt(10)?,
+                        authority_class: opt(11)?,
+                        review_state: opt(12)?,
+                        canonical_key: opt(13)?,
+                        extractor: opt(14)?,
+                        terms: opt(15)?,
+                    },
                 ))
             })();
             let verified = match (canonical, b(8)) {
-                (Some(c), Some(tag)) => self.vault.verify_tag(&c, tag).is_ok(),
+                (Some(c), Some(tag)) => self.vault.verify_row_tag(&c, tag).is_ok(),
                 _ => false,
             };
             match (verified, why) {
                 (false, _) => bad.push(BadRecord::tag_failed(name)),
                 (true, Some(why)) => bad.push(BadRecord::undecodable(name, why)),
-                (true, None) => {}
+                // ROADMAP O406 item 8, on a row whose tag verifies over
+                // columns that all decode — the only rows the exact legs can
+                // say anything new about.
+                (true, None) => {
+                    let row = TripleRow::from_cells(&cells);
+                    let receipted = !matches!(r.get_ref(17)?, ValueRef::Null);
+                    match self.fact_exact(&row, sealed, &secret, receipted)? {
+                        FactExact::Undecodable(why) => bad.push(BadRecord::undecodable(name, why)),
+                        FactExact::Findings { id_moved, shape } => {
+                            if id_moved {
+                                identity.push(format!(
+                                    "{name}: the fact's id is not the one its subject, predicate, \
+                                     object and valid_from derive — its covered fields were \
+                                     re-partitioned or replaced"
+                                ));
+                            }
+                            shapes.extend(shape.into_iter().map(|s| format!("{name}: {s}")));
+                        }
+                    }
+                }
             }
         }
         drop(rows);
@@ -3865,17 +3836,150 @@ impl VaultStore {
             ) {
                 (Some(id), Some(n), Some(e), Some(tag), Some(c), Some(rest)) => self
                     .vault
-                    .verify_tag(&entity_canonical(id, n, e, c, rest), tag)
+                    .verify_row_tag(&rows::entity(self.row_format.get(), id, n, e, c, rest), tag)
                     .is_ok(),
                 _ => false,
             };
             match (verified, why) {
                 (false, _) => bad.push(BadRecord::tag_failed(name)),
                 (true, Some(why)) => bad.push(BadRecord::undecodable(name, why)),
-                (true, None) => {}
+                // ROADMAP O406 item 8: (d) the sealed name opens under its own
+                // AAD, and (b) `created_at` is RFC 3339 — the one field a
+                // keyless writer can make carry another table's canonical.
+                (true, None) => {
+                    let (blind, created) = (
+                        text_of(&cells[1]).unwrap_or_default(),
+                        text_of(&cells[4]).unwrap_or_default(),
+                    );
+                    if let Some(Some(blob)) = name_rest {
+                        if entity_name_from_rest(&self.vault, blind, Some(blob)).is_err() {
+                            bad.push(BadRecord::undecodable(
+                                name,
+                                format!(
+                                    "column name_rest does not open under its own AAD \
+                                     (kgname/{blind})"
+                                ),
+                            ));
+                            continue;
+                        }
+                    }
+                    if OffsetDateTime::parse(created, &Rfc3339).is_err() {
+                        shapes.push(format!(
+                            "{name}: column created_at is not an RFC 3339 time, which every \
+                             write of an entity stamps"
+                        ));
+                    }
+                }
             }
         }
-        Ok(bad)
+        Ok(crate::exact::KgVerdict {
+            bad,
+            identity,
+            shapes,
+        })
+    }
+
+    /// ROADMAP O406 item 8 over ONE fact whose tag verified and whose columns
+    /// all decode: (d) its sealed fields open under their own AAD and its
+    /// object is UTF-8; (a) its id is the one its decoded words derive; (b)
+    /// the shapes of the fields its canonical covers. The fact read doors
+    /// take (a) through [`fact_id_holds`], the same decision.
+    fn fact_exact(
+        &self,
+        row: &TripleRow,
+        sealed: bool,
+        secret: &Option<[u8; 32]>,
+        receipted: bool,
+    ) -> Result<FactExact, StoreError> {
+        let id = &row.id;
+        let object = match self
+            .vault
+            .content_from_rest(&format!("kg/{id}"), &row.object)
+        {
+            Ok(o) => o,
+            Err(_) => {
+                return Ok(FactExact::Undecodable(format!(
+                    "column object does not open under its own AAD (kg/{id})"
+                )))
+            }
+        };
+        let Ok(object) = String::from_utf8(object) else {
+            return Ok(FactExact::Undecodable(
+                "column object holds bytes that are not UTF-8".into(),
+            ));
+        };
+        if let Some(sup) = &row.support {
+            if sealed
+                && self
+                    .vault
+                    .content_from_rest(&format!("kg/{id}/support"), sup)
+                    .is_err()
+            {
+                return Ok(FactExact::Undecodable(format!(
+                    "column support does not open under its own AAD (kg/{id}/support)"
+                )));
+            }
+        }
+        let (subject, predicate) = match &row.terms {
+            Some(blob) if sealed => match kg_terms_from_rest(&self.vault, id, blob) {
+                Ok(words) => words,
+                Err(_) => {
+                    return Ok(FactExact::Undecodable(format!(
+                        "column terms does not open under its own AAD (kgterms/{id})"
+                    )))
+                }
+            },
+            _ => (row.subject.clone(), row.predicate.clone()),
+        };
+        let secret = match (secret, row.terms.is_some() && sealed) {
+            (Some(s), _) => *s,
+            (None, false) => [0u8; 32],
+            (None, true) => self.kg_secret()?,
+        };
+        let id_moved = !fact_id_holds(
+            &self.vault,
+            &secret,
+            row.terms.is_some(),
+            &subject,
+            &predicate,
+            &object,
+            row.valid_from.as_deref(),
+            id,
+        );
+        let mut shape = Vec::new();
+        let c0 = |v: &Option<String>| v.as_deref().is_some_and(|s| s.bytes().any(|b| b < 0x20));
+        for (col, v) in [
+            ("valid_from", &row.valid_from),
+            ("valid_to", &row.valid_to),
+            ("extractor", &row.extractor),
+        ] {
+            if c0(v) {
+                shape.push(format!(
+                    "column {col} holds a control byte, which no write of a fact stores there"
+                ));
+            }
+        }
+        if let Some(key) = &row.canonical_key {
+            if undercroft_core::validate_name(key, "canonical_key").is_err() {
+                shape.push(
+                    "column canonical_key is not a name the authority tier accepts".to_string(),
+                );
+            }
+        }
+        if !sealed && row.terms.is_some() {
+            shape.push("column terms is set on a vault that seals no graph words".to_string());
+        }
+        if receipted
+            && !row
+                .source_drawer_id
+                .as_deref()
+                .is_some_and(crate::is_drawer_id)
+        {
+            shape.push(
+                "column source_drawer_id, which its receipt binds, is not a drawer id".to_string(),
+            );
+        }
+        Ok(FactExact::Findings { id_moved, shape })
     }
 
     /// Number of KG rows checked by `kg_verify` (for verify reporting) —
@@ -3958,28 +4062,66 @@ impl TripleRow {
         })
     }
 
-    /// Canonical bytes for this row, support and authority included when
-    /// present.
-    fn canonical(&self) -> Vec<u8> {
-        let auth = authority_ext(
-            self.authority_class.as_deref(),
-            self.review_state.as_deref(),
-            self.canonical_key.as_deref(),
-        );
-        let ext = extractor_ext(self.extractor.as_deref());
-        triple_canonical(
-            &self.id,
-            &self.subject,
-            &self.predicate,
-            &self.object,
-            &self.valid_from,
-            &self.valid_to,
-            self.confidence,
-            self.support.as_deref(),
-            auth.as_deref(),
-            ext.as_deref(),
-            self.terms.as_deref(),
-        )
+    /// A row from the cells `kg_verify_full` read by value type, once every
+    /// covered column has decoded. `source_drawer_id` is the receipt's and
+    /// may hold anything (the receipt leg owns it), so a value no read takes
+    /// there is `None` here rather than an error.
+    fn from_cells(cells: &[rusqlite::types::ValueRef<'_>]) -> Self {
+        use rusqlite::types::ValueRef;
+        let text = |i: usize| crate::text_of(&cells[i]).unwrap_or_default().to_string();
+        let opt_text = |i: usize| crate::text_of(&cells[i]).map(str::to_string);
+        let opt_blob = |i: usize| match cells[i] {
+            ValueRef::Blob(b) => Some(b.to_vec()),
+            _ => None,
+        };
+        TripleRow {
+            id: text(0),
+            subject: text(1),
+            predicate: text(2),
+            object: opt_blob(3).unwrap_or_default(),
+            valid_from: opt_text(4),
+            valid_to: opt_text(5),
+            confidence: match cells[6] {
+                ValueRef::Real(f) => f,
+                ValueRef::Integer(n) => n as f64,
+                _ => 0.0,
+            },
+            source_drawer_id: opt_text(7),
+            tag: opt_blob(8).unwrap_or_default(),
+            extracted_at: text(9),
+            support: opt_blob(10),
+            authority_class: opt_text(11),
+            review_state: opt_text(12),
+            canonical_key: opt_text(13),
+            extractor: opt_text(14),
+            terms: opt_blob(15),
+        }
+    }
+
+    /// Every field this row's tag covers, as stored — the argument a re-tag
+    /// that changes one of them overrides with struct-update syntax, so the
+    /// fields it does not mean to change cannot be dropped by omission.
+    fn fields(&self) -> rows::FactFields<'_> {
+        rows::FactFields {
+            id: self.id.as_bytes(),
+            subject: self.subject.as_bytes(),
+            predicate: self.predicate.as_bytes(),
+            object: &self.object,
+            valid_from: self.valid_from.as_deref().map(str::as_bytes),
+            valid_to: self.valid_to.as_deref().map(str::as_bytes),
+            confidence: self.confidence,
+            support: self.support.as_deref(),
+            authority_class: self.authority_class.as_deref().map(str::as_bytes),
+            review_state: self.review_state.as_deref().map(str::as_bytes),
+            canonical_key: self.canonical_key.as_deref().map(str::as_bytes),
+            extractor: self.extractor.as_deref().map(str::as_bytes),
+            terms: self.terms.as_deref(),
+        }
+    }
+
+    /// This row's canonical in `fmt` — the vault's tag regime.
+    fn canonical(&self, fmt: RowFormat) -> RowCanonical {
+        rows::fact(fmt, &self.fields())
     }
 
     /// The WORDS this row is about.
@@ -4001,6 +4143,17 @@ impl TripleRow {
 /// SHA-256 of the name. Test-only, and named rather than inlined because
 /// two tests plant pre-A10 rows and both must plant the same shape — the
 /// shape whose oracle A10 exists to close.
+/// A fact's `confidence` as the database will return it: SQLite reads a
+/// stored `-0.0` back as `+0.0`, so both write doors store and tag `+0.0`
+/// (ROADMAP O419). Every other value is returned unchanged.
+pub(crate) fn stored_confidence(c: f64) -> f64 {
+    if c == 0.0 {
+        0.0
+    } else {
+        c
+    }
+}
+
 #[cfg(test)]
 fn legacy_entity_id(name: &str) -> String {
     hex::encode(&Sha256::digest(name.as_bytes())[..16])
@@ -4441,18 +4594,23 @@ mod tests {
                 let legacy_object = s
                     .vault
                     .content_at_rest(&format!("kg/{legacy_id}"), object.as_bytes());
-                let tag = s.vault.tag(&super::triple_canonical(
-                    &legacy_id,
-                    &subject,
-                    &predicate,
-                    &legacy_object,
-                    &row.valid_from,
-                    &row.valid_to,
-                    row.confidence,
-                    None,
-                    None,
-                    None,
-                    None,
+                let tag = s.vault.row_tag(&super::rows::fact(
+                    s.row_format(),
+                    &super::rows::FactFields {
+                        id: legacy_id.as_bytes(),
+                        subject: subject.as_bytes(),
+                        predicate: predicate.as_bytes(),
+                        object: &legacy_object,
+                        valid_from: row.valid_from.as_deref().map(str::as_bytes),
+                        valid_to: row.valid_to.as_deref().map(str::as_bytes),
+                        confidence: row.confidence,
+                        support: None,
+                        authority_class: None,
+                        review_state: None,
+                        canonical_key: None,
+                        extractor: None,
+                        terms: None,
+                    },
                 ));
                 // Cross-check the recipe helper against the shape planted
                 // here, so `legacy_triple_id` cannot drift from it.
@@ -4509,8 +4667,13 @@ mod tests {
                 })
                 .unwrap();
             let eid = super::legacy_entity_id("alice");
-            let etag = s.vault.tag(&super::entity_canonical(
-                &eid, "alice", "unknown", &created, None,
+            let etag = s.vault.row_tag(&super::rows::entity(
+                s.row_format(),
+                &eid,
+                "alice",
+                "unknown",
+                &created,
+                None,
             ));
             s.conn
                 .execute(
@@ -6248,8 +6411,13 @@ mod tests {
         // A pre-upgrade entity: tagged, in the table, with no audit record.
         let id = super::legacy_entity_id("legacy");
         let created = "2020-01-01T00:00:00Z";
-        let tag = s.vault.tag(&super::entity_canonical(
-            &id, "legacy", "unknown", created, None,
+        let tag = s.vault.row_tag(&super::rows::entity(
+            s.row_format(),
+            &id,
+            "legacy",
+            "unknown",
+            created,
+            None,
         ));
         s.conn
             .execute(
@@ -6532,8 +6700,16 @@ mod tests {
         // no `chain_append` anywhere.
         let id = super::legacy_entity_id("legacy-corp");
         let created = "2020-01-01T00:00:00Z";
-        let canonical = format!("{id}legacy-corpunknown{created}");
-        let tag = s.vault().tag(canonical.as_bytes());
+        // In the vault's own row format (ROADMAP O406): every pre-A18 row a
+        // vault still holds is re-tagged by its walk, like every other row.
+        let tag = s.vault().row_tag(&super::rows::entity(
+            s.row_format(),
+            &id,
+            "legacy-corp",
+            "unknown",
+            created,
+            None,
+        ));
         s.conn
             .execute(
                 "INSERT INTO kg_entities (id, name, etype, tag, created_at)
@@ -7073,8 +7249,11 @@ mod tests {
         let legacy = super::content_fp(&cited.content);
         let sup_receipt = s
             .vault
-            .tag(&crate::supersession_canonical(
-                &newer.id, &cited.id, &legacy,
+            .row_tag(&crate::rows::supersession(
+                s.row_format(),
+                &newer.id,
+                &cited.id,
+                &legacy,
             ))
             .to_vec();
         s.conn
@@ -7085,7 +7264,12 @@ mod tests {
             .unwrap();
         let rcpt = s
             .vault
-            .tag(&super::receipt_canonical(&fact, &cited.id, &legacy))
+            .row_tag(&super::rows::fact_receipt(
+                s.row_format(),
+                &fact,
+                &cited.id,
+                &legacy,
+            ))
             .to_vec();
         s.conn
             .execute(

@@ -90,7 +90,16 @@ reference documents.
   cached, never the decision about which key file applies. `open_as` keeps
   deriving per call for library callers; a CLI source gate counts the
   binary's one open and its three holds;
-  seal.rs: AEAD + HMAC; lib.rs: VaultManager/Vault + manifest-as-rollback-
+  seal.rs: AEAD + HMAC + **the version-2 row encoder (ROADMAP O406)** —
+  `RowEncoder`, `RowCanonical`, `RowFormat`: a row tag is computed by
+  `Vault::row_tag` over a canonical that carries its own format, version 1
+  under `mac` byte for byte, version 2 (`undercroft.row.v2/<table>`,
+  length-prefixed fields, numbered TLV optionals where absent is not empty)
+  under a sixth HKDF subkey, `row`; `Vault::tag` stays the record-only
+  canonicals' key, so every erasure receipt still replays; the manifest MAC
+  canonical dispatches on `version` (2 since O406, a length-prefixed shape
+  1.6.0 cannot reproduce), and an anchor raises the version to what the
+  handle's regime needs and never lowers it; lib.rs: VaultManager/Vault + manifest-as-rollback-
   anchor + pure chain arithmetic + key rotation primitives
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
   vault.json.next staging, keycheck marker) + **the one manifest file

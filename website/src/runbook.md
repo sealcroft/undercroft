@@ -66,6 +66,8 @@ undercroft verify --vault <vault>
 # policy drift:    0
 # version replay:  0
 # storage:         0
+# identity:        0
+# field shapes:    0
 # VERIFY FAILED
 ```
 

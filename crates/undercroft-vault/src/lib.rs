@@ -39,6 +39,7 @@ use time::OffsetDateTime;
 
 use keys::{derive_vault_key, SecretKey, KEY_LEN};
 use seal::{chain_next, record_hmac, verify_hmac, SealError, HMAC_LEN};
+pub use seal::{RowCanonical, RowEncoder, RowFormat};
 
 /// Everything the vault layer can refuse: I/O, key and seal failures, a vault that is missing or already present, a manifest that is corrupt or fails its MAC, and an invalid name.
 #[derive(Debug, thiserror::Error)]
@@ -233,7 +234,22 @@ struct Manifest {
 /// different canonical and answer `ManifestTampered` on an intact vault. The
 /// fence has to be in the field before the format moves, or it reports
 /// tampering instead of age.
-pub const MANIFEST_VERSION: u32 = 1;
+///
+/// **Version 2 is ROADMAP O406's** — the version-2 row canonical. Two things
+/// make it a fence, and a bump of this constant is neither (O406's ruling,
+/// correcting O238's record): this constant reaches `create` alone, so an
+/// existing vault is raised EXPLICITLY, by the walk that re-tags its rows,
+/// before that walk's transaction; and a version-2 manifest is MAC'd over a
+/// version-2 canonical ([`Manifest::canonical`] dispatches on the version),
+/// so 1.6.1 and newer refuse it as age (`ManifestTooNew`, exit 1) while 1.6.0
+/// and older — which never read `version` — rebuild the version-1 shape,
+/// fail the MAC and answer `ManifestTampered` (exit 2) at unlock, before
+/// they read `vault.json.next` or open the database. That is the outcome
+/// O241 ruling 4 accepted, now that 1.6.1 shipped the fence first.
+pub const MANIFEST_VERSION: u32 = 2;
+
+/// The domain the version-2 manifest canonical begins with (ROADMAP O406).
+const MANIFEST_V2_DOMAIN: &[u8] = b"undercroft.manifest.v2";
 
 /// A vault's `vault.json` as read from disk: its exact bytes, verified under
 /// the reading handle's manifest key, and the anchor they name (ROADMAP O256).
@@ -247,6 +263,7 @@ pub struct VerifiedManifest {
     head: String,
     writes: u64,
     staged: bool,
+    version: u32,
 }
 
 impl VerifiedManifest {
@@ -265,6 +282,13 @@ impl VerifiedManifest {
     /// rows answer to (ROADMAP O266).
     pub fn is_staged(&self) -> bool {
         self.staged
+    }
+
+    /// The manifest format version these bytes declare, MAC-verified
+    /// (ROADMAP O406 item 6: a version-2 tag regime beside a version-1
+    /// manifest anchored at or past its commitment is a finding).
+    pub fn version(&self) -> u32 {
+        self.version
     }
 }
 
@@ -513,18 +537,40 @@ impl Manifest {
         Ok(manifest)
     }
 
+    /// The bytes the manifest MAC covers, **dispatched on the version**
+    /// (ROADMAP O406 item 7): version 1 (and 0) byte for byte what every
+    /// release wrote, version 2 and above a domain-led, length-prefixed
+    /// shape. The dispatch is what fences 1.6.0 and older, which build the
+    /// version-1 shape whatever `version` says and so fail this MAC.
     fn canonical(&self) -> Vec<u8> {
-        format!(
-            "{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}",
-            self.version,
-            self.id,
-            self.level,
-            self.salt_hex,
-            self.created_at,
-            self.writes,
-            self.chain_head_hex
-        )
-        .into_bytes()
+        if self.version < 2 {
+            return format!(
+                "{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}",
+                self.version,
+                self.id,
+                self.level,
+                self.salt_hex,
+                self.created_at,
+                self.writes,
+                self.chain_head_hex
+            )
+            .into_bytes();
+        }
+        let mut out = Vec::with_capacity(256);
+        for field in [
+            MANIFEST_V2_DOMAIN,
+            self.version.to_string().as_bytes(),
+            self.id.as_bytes(),
+            self.level.to_string().as_bytes(),
+            self.salt_hex.as_bytes(),
+            self.created_at.as_bytes(),
+            self.writes.to_string().as_bytes(),
+            self.chain_head_hex.as_bytes(),
+        ] {
+            out.extend_from_slice(&(field.len() as u64).to_le_bytes());
+            out.extend_from_slice(field);
+        }
+        out
     }
 }
 
@@ -1205,6 +1251,16 @@ pub mod fixture {
         vault.manifest.writes = writes;
         vault.save_manifest()
     }
+
+    /// Set the manifest version this handle writes next — LOWERING it
+    /// included, which no production path does (ROADMAP O406: the anchor
+    /// never lowers it). It is how a test turns a vault back into the
+    /// version-1 shape every release before O406 wrote; the next
+    /// [`write_anchor_unchecked`] writes it.
+    pub fn set_manifest_version(vault: &mut super::Vault, version: u32) {
+        vault.manifest.version = version;
+        vault.min_manifest_version = version;
+    }
 }
 
 /// An unlocked vault: derived keys + manifest state.
@@ -1225,6 +1281,18 @@ pub struct Vault {
     /// key for the reason `sample_key` is. The version-1 step stays on
     /// `mac_key`, which is what every chain written before O233 used.
     chain_key: SecretKey,
+    /// Keys every version-2 ROW tag (ROADMAP O406 item 2): a sixth HKDF
+    /// subkey, label `row`, re-derived by every rotation. Its own key rather
+    /// than `mac_key`, which keeps serving the record-only canonicals, the
+    /// fingerprints, the keycheck and the version-1 chain step byte for byte
+    /// — so every erasure receipt's keyed replay still answers `Verified` —
+    /// and so that no version-1 canonical a keyless writer builds from
+    /// columns it chose can ever verify as a version-2 one.
+    row_key: SecretKey,
+    /// The lowest manifest version this handle's anchors write (ROADMAP O406
+    /// item 6): 2 once its vault's rows are in the version-2 format. An
+    /// anchor RAISES the version on disk to this and never lowers it.
+    min_manifest_version: u32,
     manifest: Manifest,
     /// A pending key-rotation manifest (`vault.json.next`), attached at
     /// unlock when one exists so the store's open path can reconcile it
@@ -1529,7 +1597,13 @@ impl Vault {
         }
     }
 
-    /// HMAC tag for a record's canonical bytes.
+    /// HMAC tag for a RECORD-ONLY canonical — an audit record's own bytes
+    /// (`del`, `read`, `egress`, `admission`, `migrate`, `rotate`), a
+    /// fingerprint or a read-query digest — under the `mac` subkey, byte for
+    /// byte what it has always been. A ROW's tag goes through
+    /// [`row_tag`](Self::row_tag), which takes the format with the bytes
+    /// (ROADMAP O406 item 2: a version-2 canonical here would drop every
+    /// erasure receipt's keyed replay to `Recorded`).
     pub fn tag(&self, canonical: &[u8]) -> [u8; HMAC_LEN] {
         record_hmac(&self.mac_key, canonical)
     }
@@ -1537,6 +1611,42 @@ impl Vault {
     /// Verify a record tag (constant-time).
     pub fn verify_tag(&self, canonical: &[u8], tag: &[u8]) -> Result<(), VaultError> {
         Ok(verify_hmac(&self.mac_key, canonical, tag)?)
+    }
+
+    /// A ROW's tag (ROADMAP O406): a version-1 canonical under the `mac`
+    /// subkey, as every row was tagged before O406, and a version-2 one
+    /// under the `row` subkey. The canonical carries its own format, so the
+    /// key cannot be chosen apart from the encoding.
+    pub fn row_tag(&self, canonical: &RowCanonical) -> [u8; HMAC_LEN] {
+        record_hmac(self.row_key_for(canonical.format()), canonical.bytes())
+    }
+
+    /// Verify a row tag (constant-time) — see [`row_tag`](Self::row_tag).
+    pub fn verify_row_tag(&self, canonical: &RowCanonical, tag: &[u8]) -> Result<(), VaultError> {
+        Ok(verify_hmac(
+            self.row_key_for(canonical.format()),
+            canonical.bytes(),
+            tag,
+        )?)
+    }
+
+    fn row_key_for(&self, format: RowFormat) -> &SecretKey {
+        match format {
+            RowFormat::V1 => &self.mac_key,
+            RowFormat::V2 => &self.row_key,
+        }
+    }
+
+    /// Raise the manifest version this handle's anchors write to at least
+    /// `version` (ROADMAP O406 item 6) — what the store does once it has read
+    /// a version-2 tag regime from the database. Never lowers it.
+    pub fn require_manifest_version(&mut self, version: u32) {
+        self.min_manifest_version = self.min_manifest_version.max(version);
+    }
+
+    /// The manifest version this handle's unlock read (or `create` wrote).
+    pub fn manifest_version(&self) -> u32 {
+        self.manifest.version
     }
 
     /// A keyed pseudorandom rank for one *choice* — not an integrity claim.
@@ -1658,13 +1768,23 @@ impl Vault {
                 on_disk.writes
             )));
         }
-        if on_disk.chain_head_hex == head_hex && on_disk.writes == writes {
+        // ROADMAP O406 item 6: "the anchor door raises the version to what the
+        // regime requires and never lowers it" — so a stale version-1
+        // manifest below a vault's version-2 commitment is healed forward
+        // AND raised, and nothing this handle writes can take a version-2
+        // vault back to a manifest a released binary would open.
+        let version = on_disk.version.max(self.min_manifest_version);
+        if on_disk.chain_head_hex == head_hex
+            && on_disk.writes == writes
+            && on_disk.version == version
+        {
             self.manifest = on_disk;
             return Ok(Anchored::Current);
         }
         let mut next = on_disk.clone();
         next.chain_head_hex = head_hex.to_string();
         next.writes = writes;
+        next.version = version;
         next.manifest_mac_hex = hex::encode(record_hmac(&self.manifest_key, &next.canonical()));
         let json = serde_json::to_vec_pretty(&next)
             .map_err(|e| AnchorFault::Io(format!("serializing the manifest: {e}")))?;
@@ -1677,6 +1797,46 @@ impl Vault {
         undercroft_obs::chain_commit(records);
         undercroft_obs::event_chain_commit(self.id(), records);
         Ok(Anchored::Written { records })
+    }
+
+    /// **Raise `vault.json` to `version`, nothing else moving** (ROADMAP O406
+    /// item 5) — the version-2 walk's first write, made BEFORE the
+    /// transaction that re-tags the rows, so a crash between the two leaves
+    /// a version-2 manifest over a version-1 database (older binaries stay
+    /// fenced, this build retries the walk) and never the reverse, which a
+    /// released 1.6.1 would open, heal forward and write version-1 rows into.
+    ///
+    /// The anchor's checks, through the one writer: the manifest on disk is
+    /// read and MAC-verified under this handle's key, the database keycheck
+    /// must be this handle's, and its head and height are kept as found. The
+    /// caller holds the vault exclusively. A version at or below the one on
+    /// disk writes nothing; the handle's anchors write at least `version`
+    /// from here on.
+    pub fn raise_manifest_version(
+        &mut self,
+        version: u32,
+        db_keycheck: Option<&str>,
+    ) -> Result<(), AnchorFault> {
+        if db_keycheck != Some(self.keycheck.as_str()) {
+            return Err(AnchorFault::Integrity(
+                "the database's key-generation marker is not this handle's".into(),
+            ));
+        }
+        let on_disk = self.verified_disk_manifest()?;
+        self.min_manifest_version = self.min_manifest_version.max(version);
+        if on_disk.version >= version {
+            self.manifest = on_disk;
+            return Ok(());
+        }
+        let mut next = on_disk;
+        next.version = version;
+        next.manifest_mac_hex = hex::encode(record_hmac(&self.manifest_key, &next.canonical()));
+        let json = serde_json::to_vec_pretty(&next)
+            .map_err(|e| AnchorFault::Io(format!("serializing the manifest: {e}")))?;
+        write_manifest_file(&self.dir, MANIFEST_FILE, &json)
+            .map_err(|e| AnchorFault::Io(format!("writing vault.json: {e}")))?;
+        self.manifest = next;
+        Ok(())
     }
 
     /// The manifest on disk, parsed and MAC-verified under this handle's key,
@@ -2565,6 +2725,7 @@ impl Vault {
     pub fn verified_manifest(&self) -> Result<VerifiedManifest, VaultError> {
         match self.manifest_in_force() {
             Ok(m) => Ok(VerifiedManifest {
+                version: m.manifest.version,
                 head: m.manifest.chain_head_hex,
                 writes: m.manifest.writes,
                 bytes: m.bytes,
@@ -3012,6 +3173,8 @@ impl VaultManager {
             manifest_key: derive_vault_key(master, &salt, &id, "manifest"),
             sample_key: derive_vault_key(master, &salt, &id, "sample"),
             chain_key: derive_vault_key(master, &salt, &id, "chain"),
+            row_key: derive_vault_key(master, &salt, &id, "row"),
+            min_manifest_version: 1,
             level: manifest.level,
             id,
             dir,
@@ -3254,6 +3417,11 @@ mod tests {
             manifest_key: _,
             sample_key: _,
             chain_key: _,
+            // Derived like the four above, from the same generation (O406).
+            row_key: _,
+            // `1` on every unlock; raised by the store once it has read the
+            // database's tag regime through the proved file (O406).
+            min_manifest_version: _,
             keycheck: _,
             // `vault.json` as the unlock read it: its cached head feeds
             // `anchored_head`'s fall-back when the file is unreadable (O277),
@@ -3860,6 +4028,126 @@ mod tests {
         );
     }
 
+    /// **ROADMAP O406 item 7: a version-2 manifest fences BOTH older
+    /// builds.** 1.6.1 and newer read `version` first and refuse it as age;
+    /// 1.6.0 and older never read it and rebuild the version-1 canonical —
+    /// `"{version}\x1f{id}\x1f…"` — whatever it says, which this test does by
+    /// hand: that MAC does not match, so they answer `ManifestTampered` at
+    /// unlock. A version-1 manifest keeps the released canonical byte for byte.
+    #[test]
+    fn a_version_two_manifest_fences_both_older_builds() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("t", SecurityLevel::Sealed).unwrap();
+        let path = dir.path().join("vaults/t/vault.json");
+        let m = Manifest::parse(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(m.version, 2, "create writes this build's version");
+        let stored = hex::decode(&m.manifest_mac_hex).unwrap();
+        assert!(verify_hmac(&v.manifest_key, &m.canonical(), &stored).is_ok());
+        // What 1.6.0 computes over the same fields.
+        let as_160 = format!(
+            "{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}",
+            m.version, m.id, m.level, m.salt_hex, m.created_at, m.writes, m.chain_head_hex
+        );
+        assert!(
+            verify_hmac(&v.manifest_key, as_160.as_bytes(), &stored).is_err(),
+            "1.6.0's canonical must not reproduce a version-2 MAC"
+        );
+        // And a version-1 manifest is the released shape, unchanged.
+        let mut v1 = m.clone();
+        v1.version = 1;
+        assert_eq!(
+            v1.canonical(),
+            format!(
+                "1\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}",
+                v1.id, v1.level, v1.salt_hex, v1.created_at, v1.writes, v1.chain_head_hex
+            )
+            .into_bytes()
+        );
+    }
+
+    /// **ROADMAP O406 item 6: the anchor RAISES the version to what the
+    /// handle's regime requires and never lowers it**; the walk's raise
+    /// writes the version alone, under the anchor's own checks.
+    #[test]
+    fn the_anchor_raises_the_manifest_version_and_never_lowers_it() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        mgr.create("t", SecurityLevel::Sealed).unwrap();
+        let path = dir.path().join("vaults/t/vault.json");
+        let version_on_disk = || Manifest::parse(&fs::read(&path).unwrap()).unwrap().version;
+        let mut a = mgr.unlock("t").unwrap();
+        let kc = a.keycheck_hex();
+        // A released vault: version 1.
+        fixture::set_manifest_version(&mut a, 1);
+        fixture::write_anchor_unchecked(&mut a, "aa", 1).unwrap();
+        assert_eq!(version_on_disk(), 1, "premise: a version-1 manifest");
+        let mut a = mgr.unlock("t").unwrap();
+        // A handle whose regime needs nothing more leaves it.
+        a.anchor_manifest("bb", 2, Some(kc.as_str())).unwrap();
+        assert_eq!(version_on_disk(), 1);
+        // The raise: version only, head and height kept.
+        assert!(
+            a.raise_manifest_version(2, Some("not this generation"))
+                .is_err(),
+            "refused under a foreign keycheck"
+        );
+        assert_eq!(version_on_disk(), 1, "and nothing written");
+        a.raise_manifest_version(2, Some(kc.as_str())).unwrap();
+        let m = Manifest::parse(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            (m.version, m.chain_head_hex.as_str(), m.writes),
+            (2, "bb", 2)
+        );
+        // A fresh handle of a version-1 regime anchoring over it: never lower.
+        let mut b = mgr.unlock("t").unwrap();
+        assert_eq!(b.min_manifest_version, 1);
+        b.anchor_manifest("cc", 3, Some(kc.as_str())).unwrap();
+        assert_eq!(version_on_disk(), 2, "an anchor never lowers the version");
+        // And a stale version-1 manifest under a handle that requires 2 is
+        // raised by the next anchor.
+        fixture::set_manifest_version(&mut b, 1);
+        fixture::write_anchor_unchecked(&mut b, "cc", 3).unwrap();
+        let mut c = mgr.unlock("t").unwrap();
+        c.require_manifest_version(2);
+        c.anchor_manifest("dd", 4, Some(kc.as_str())).unwrap();
+        assert_eq!(version_on_disk(), 2, "raised with the heal");
+    }
+
+    /// **ROADMAP O406 item 2: a row's tag is keyed by its FORMAT.** Version 1
+    /// is `tag` byte for byte — every row written before O406 still verifies
+    /// — and version 2 is under the `row` subkey, so no version-1 canonical
+    /// verifies as a version-2 one over the same bytes.
+    #[test]
+    fn a_row_tag_is_keyed_by_its_format() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("t", SecurityLevel::Sealed).unwrap();
+        let bytes = b"i\x1fm\x1fc".to_vec();
+        let v1 = RowCanonical::v1(bytes.clone());
+        assert_eq!(
+            v.row_tag(&v1),
+            v.tag(&bytes),
+            "version 1 is the released tag"
+        );
+        let v2 = RowEncoder::new("drawer")
+            .field(b"i")
+            .field(b"m")
+            .field(b"c")
+            .finish();
+        let t2 = v.row_tag(&v2);
+        assert!(v.verify_row_tag(&v2, &t2).is_ok());
+        assert!(
+            v.verify_tag(v2.bytes(), &t2).is_err(),
+            "not under the mac key"
+        );
+        assert!(
+            v.verify_row_tag(&RowCanonical::v1(v2.bytes().to_vec()), &t2)
+                .is_err(),
+            "the same bytes as version 1 do not verify"
+        );
+    }
+
     /// O238: the fresh anchor read refuses a too-new manifest too.
     ///
     /// `anchored_head` re-reads `vault.json` from DISK on every call rather
@@ -4195,9 +4483,10 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         refuses(&mut a, "bb", 4, Some(kc.as_str()), "a missing manifest");
         // A version newer than this build writes.
-        let newer = String::from_utf8(healthy.clone())
-            .unwrap()
-            .replace("\"version\": 1", "\"version\": 2");
+        let newer = String::from_utf8(healthy.clone()).unwrap().replace(
+            &format!("\"version\": {MANIFEST_VERSION}"),
+            &format!("\"version\": {}", MANIFEST_VERSION + 1),
+        );
         assert_ne!(
             newer.as_bytes(),
             healthy.as_slice(),

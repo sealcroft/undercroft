@@ -872,7 +872,7 @@ fn call_tool(store: &mut VaultStore, name: &str, args: &Value) -> Result<String>
             // objects by the names the file's writer chose, and this
             // transport hands its text to an agent.
             let text = format!(
-                "records checked: {}\nhmac failures: {}\nunreadable: {}\naudit chain: {}\naudit labels: {}\norphan labels: {}\nmirror drift: {}\npolicy drift: {}\nversion replay: {}\nstorage: {}{}{}\nresult: {}",
+                "records checked: {}\nhmac failures: {}\nunreadable: {}\naudit chain: {}\naudit labels: {}\norphan labels: {}\nmirror drift: {}\npolicy drift: {}\nversion replay: {}\nstorage: {}\nidentity: {}\nshapes: {}{}{}\nresult: {}",
                 report.records_checked,
                 hmac_failures,
                 report.bad_records.len() - hmac_failures,
@@ -883,6 +883,11 @@ fn call_tool(store: &mut VaultStore, name: &str, args: &Value) -> Result<String>
                 report.policy_drift.len(),
                 report.version_replay.len(),
                 report.storage.len(),
+                // ROADMAP O406 item 8, by COUNT as every leg here: the
+                // identity and shape legs name rows by ids and field words
+                // the file's writer chose.
+                report.identity.len(),
+                report.shapes.len(),
                 sup_line,
                 rec_line,
                 if report.ok() {
