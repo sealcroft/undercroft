@@ -137,7 +137,8 @@ of exactly two shapes:
    and A10 unit 1 shipped a first version keyed with `Vault::tag` that
    would have moved every fact id on every rotation. Use a per-vault
    secret **stored sealed in `meta`**, which rotation re-seals and never
-   regenerates (`kg.rs::kg_secret`), and see the CLAUDE.md invariant *an
+   regenerates (`kg.rs::kg_secret`), and see the agent guide's invariant
+   (`docs/agent-guide/invariants-storage.md`) *an
    identifier is never derived from rotatable key material; neither is a
    blind-index key*. Two riders that unit paid for: any UNKEYED digest of
    the same value elsewhere (an id, a fingerprint) is a confirmation

@@ -181,9 +181,11 @@ longer than usual and grows the WAL, once; later opens are as before.
 64 wings (5,445 records), the switching open took 858 ms on a sealed vault and
 966 ms on an hmac-only one, against 1,349 ms and 821 ms for a key rotation of
 the same vault, and the database file did not grow; the figures at ~10⁵
-records are still owed (ROADMAP O406's `#### BUILT` record). A vault whose
-switch is withheld by a `verify` finding pays that `verify` again at every
-writable open until the finding is cleared.
+records are still owed (ROADMAP O437). A vault whose switch is withheld by a
+`verify` finding pays that `verify` again at every writable open until the
+finding is cleared, and it runs holding the vault alone: an open arriving
+meanwhile waits up to its 5 s busy timeout and past it answers `another
+process holds this vault exclusively …`, which names the switch.
 
 **Fix:** none needed. On a large vault, schedule the first open of the new
 binary like a key rotation — the two cost the same order — and expect a
@@ -2332,7 +2334,8 @@ listing now sees more lines than before, never fewer.
 ### The embeddings-TLS recipe pins a readable path
 
 **Who is affected:** anyone following the served-embedder recipe in
-`docs/EMBEDDERS.md`, `CLAUDE.md` or `docker-compose.yml` **with the `cli` or
+`docs/EMBEDDERS.md`, the agent guide (`docs/agent-guide/build-and-test.md`;
+`CLAUDE.md` at the time) or `docker-compose.yml` **with the `cli` or
 `mcp` service**. With `bench` it always worked, which is why this went
 unnoticed.
 

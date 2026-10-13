@@ -4012,7 +4012,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**465** of the **480** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**468** of the **483** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -19709,8 +19709,8 @@ were not. Tests added: 17 in `undercroft-store`'s lib, 6 in
 **Owed, filed:** P15f at ~10⁵ — not run, the machine was not idle (another worktree's battery and a
 local stack were running throughout) — together with the accelerator item 5 allows for a withheld
 vault, which this build did not build: a withheld writable open pays one full `verify`
-(O-NEW-O406-1); and the two Mermaid renders under `docs/diagrams/` whose canonical blocks this
-build moved (O-NEW-O406-2). P15h stays with O417, whose note says what this build changed; O419 was
+(O437); and the two Mermaid renders under `docs/diagrams/` whose canonical blocks this
+build moved (O438). P15h stays with O417, whose note says what this build changed; O419 was
 closed with this build, at the write door.
 
 ### O419 — CLOSED 2026-10-13: a `-0.0` confidence was tagged as written and read back as `+0.0`, so the fact failed its own tag
@@ -53567,7 +53567,7 @@ which now writes a fact open where its note's `content_date` would be refused, s
 `content_date` cannot abort a run. Full date validation, a length bound and the screen remain this
 entry's question.
 
-### O-NEW-O406-1 — P15f at ~10⁵ is unmeasured, and a withheld vault pays a full `verify` at every writable open
+### O437 — P15f at ~10⁵ is unmeasured, and a withheld vault pays a full `verify` at every writable open
 
 **Filed 2026-10-13 by O406's build.** O406's ruling owes P15f — at ~10⁵ on both levels, the walk's wall
 time and WAL growth against the rotation's 2.58–3.22 s; `verify` with legs (a)–(c) and an AEAD open per
@@ -53593,7 +53593,7 @@ head, height and keycheck, reported on every open, never a reason to walk. **Gat
 recorded in O406's entry; and, if built, a second writable open of a withheld vault that runs no verify
 (counted), while a write in between makes it run one.
 
-### O-NEW-O406-2 — two Mermaid renders under `docs/diagrams/` predate the canonical blocks O406 moved
+### O438 — two Mermaid renders under `docs/diagrams/` predate the canonical blocks O406 moved
 
 **Filed 2026-10-13 by O406's build.** O406 moved two canonical Mermaid blocks and their extracted
 `src/*.mmd` copies: `docs/security.md`'s seal-and-verify flow (the tag is now a table-domained,
@@ -55927,6 +55927,134 @@ the maintainer's, asked with the cumulative figures this ruling makes every unit
 **Placement.** A pure decision with no code of its own, so the entry stays under `## Unversioned`, finished, with
 its row in the battery's `UNVERSIONED_CLOSED` roster (O101). O252's escalated question names this entry beside
 it.
+
+### O436 — CLOSED 2026-10-12 by the maintainer's ruling: `CLAUDE.md` is split into a core every agent reads on every turn and reference documents read when the work touches their area, and the split is the standard
+
+**Filed and closed 2026-10-12, as a pure decision about the agent guide.** `CLAUDE.md` is injected
+into every agent's every turn, the session agent's and every subagent's alike, and at 359,360 bytes
+it was the largest single cost of running an agent on this project, paid again on each turn whatever
+the turn was about. Most of it was text an agent needs only when its work touches one area: the
+Layout section (191 KB, of which the store crate's one bullet was 93 KB), the Build & test block and
+its lessons, and the long form of each invariant.
+
+#### RULED 2026-10-12 by the maintainer
+
+**The question**, as it was put to the maintainer: "Slim CLAUDE.md, or split it into a short core
+file plus reference documents agents read only when needed. … content should move to docs, not be
+deleted".
+
+**The maintainer's answer, verbatim:** "1 -> split and 2 also let that be the standard".
+
+**Decided:** split, moving content and deleting none, and the split is the standard from here on, so
+the core does not grow back. **The search for a prior ruling** — `rul(ed|ing)` over this file for the
+guide's size or form — found none: O173 rules how a question is decided and where its ruling is
+recorded, which this entry follows, and says nothing about the guide's shape.
+
+#### BUILT 2026-10-12
+
+- **The core**, `CLAUDE.md`: 359,360 → 47,260 bytes, about 89,800 → 11,800 tokens. The byte figures
+  are measured (`wc -c`); the token figures are an ESTIMATE, bytes ÷ 4 — the ratio the question's
+  own "359 KB ≈ 90k tokens" implies — and no tokenizer was run. The core keeps the project identity
+  and the current-release paragraph, the role statement with every binding consequence and the
+  ruling procedure verbatim, the suite commands and the build essentials, every invariant in one
+  line (five of them verbatim), the definition of done (items 1, 3, 5 and 6 verbatim, 2, 4 and 7 in
+  one line each), session-end hygiene, the conventions (the semantic-versioning test verbatim, the
+  configuration classes and the release flow in brief), and an index naming every reference
+  document and when to read it.
+- **Eighteen reference documents** under `docs/agent-guide/`, 355,847 bytes after O269's merge:
+  nine `layout-*` by crate and area (`layout-store.md` alone is 96,863 bytes, the store crate's
+  bullet), then
+  `build-and-test.md`, `build-pitfalls.md`, `ci-and-release.md`, `invariants-storage.md`,
+  `invariants-retrieval.md`, `invariants-surfaces.md`, `definition-of-done.md`,
+  `session-end-hygiene.md` and `config-classes.md`. Each opens with a header saying what it holds,
+  when to read it, that it governs over the core's one-line form (RULED, below), which gate
+  reads a figure in it, and where its moved text points outside it; the core's organisation section says that "this file", in any part of the guide, means the
+  whole guide.
+- **Nothing was deleted, and that is measured rather than asserted.** A checker split the old file
+  into 136 units — blank-line paragraphs, cut again at every top-level list item, the finest cut
+  the split made — and found every one byte-for-byte in exactly one file of the new set, after a
+  premise that a one-word change to a unit is NOT found. The only new text is the core's
+  organisation section, its one-line statements and index, and each reference document's header.
+  **Re-run after merging `main` at `0df1004`** (O269's storage leg, which changed two units: the
+  store crate's bullet and the Build & test block's figures): the merged guide is regenerated from
+  that `CLAUDE.md`, whose 136 units — 361,782 bytes — are each found exactly once, the two changed
+  units whole in `layout-store.md` and `build-and-test.md`.
+- **Gates re-pointed, each premise still firing.** The suite and cargo figure readers read
+  `FIGURES_DOC`, `docs/agent-guide/build-and-test.md`: `declare_suite_counts`,
+  `declare_cargo_counts`, and the post-run `integration tests (N run` and `= N compiled` reads, now
+  one `declare_test_totals`; `tests/house-figures.sh` reads its cargo figure there too. Fourteen
+  `PROSE_FIGURES` rows read the reference document their sentence moved to; the workspace crate
+  count stayed in the core, and so did the `Current release` sentence the `version surfaces`
+  preflight reads.
+- **Three checks added, none of them a new preflight**, because the preflight count is itself a
+  gated figure: the cargo figures, which had no premise of their own, must be readable from
+  `FIGURES_DOC` before any suite runs; the core must republish no suite figure, asked through the
+  same readers; and, in the `prose figures` preflight, the core must stay within the limit its own
+  organisation sentence states and its index must name exactly the files under `docs/agent-guide/`
+  in both directions, behind a probe that plants a size, an unindexed and a dangling finding and
+  requires nothing of a clean fixture. `bash tests/battery.sh --preflight-only` exits 0 at the final
+  tree.
+
+**Review fixes, 2026-10-12.** An independent review found nothing high. Answered: O313's merge rule
+(a branch behind `main` is updated first; its new head needs the maintainer's word again before a merge
+pinned with `--match-head-commit`; never `--admin`) is in the core now, not only in
+`ci-and-release.md`'s release flow; the two rules it found written in unruled were marked PROPOSED
+(and are ruled below); three moved paragraphs
+whose "above" pointed outside their new document are named in that document's header; the
+definition of done's items keep their numbers, a heading separating each; `tests/house-figures.sh`
+reads `FIGURES_DOC` out of `tests/battery.sh`; and `UPGRADING.md`, `tests/context-check.sh` and a
+battery message no longer send a reader to `CLAUDE.md` for text that moved. The verbatim checker and
+the preflights were re-run after them.
+
+**Applied backwards**, as a rule here must be: the standard reclassifies nothing, because the guide
+has never been split before — it is untested by history, and this is its first application. What
+it changes is where a unit writes: a layout or a lesson goes to the reference document that owns the
+area, and a moved suite figure is updated in `FIGURES_DOC`.
+
+**What remains.** The moved paragraphs still say "this file" and, in places, "`CLAUDE.md`
+publishes"; they were moved unchanged on purpose, and each document's header says how to read them.
+Comments in `crates/` and `tests/` that cite "the CLAUDE.md invariant" or recount history still
+resolve, since the core names every invariant and its document. The two briefs under
+`.handover/rulings-2026-10-07/` tell an agent to read `CLAUDE.md` in full and to update its Build &
+test block; they are gitignored and outside this unit's worktree, and the session agent updates
+them. No gate can see a reference document going stale beside the code it describes — no more than
+one saw the Layout section do it — so the audit after an engine change still reads the document that
+names the thing changed.
+
+**Placement.** A pure decision with no engine code, so the entry stays under `## Unversioned`,
+finished, with its row in the battery's `UNVERSIONED_CLOSED` roster (O101).
+
+#### RULED 2026-10-12 by the maintainer — the two rules the build wrote in
+
+**The question.** The build wrote two rules the first answer did not settle, and the review of this
+unit found them stated as settled; they were marked PROPOSED and put to the maintainer in the pull
+request: (1) the core stays at or under 60 KiB; (2) where the core's one-line form of a rule and a
+reference document's full text differ, the full text governs. The first answer decided the split and
+made it the standard; it named no size and no precedence. The search for a prior ruling on either —
+`rul(ed|ing)` over this file for the guide's size or for which of two statements governs — found
+none.
+
+**The maintainer's answer, verbatim:** "yes if it is best practice".
+
+**Decided**, the session agent judging both against that condition:
+
+1. **The core stays at or under 60 KiB** — RULED as written. A size budget is the ordinary practice
+   for a file that is loaded on every turn, and this one is enforced by the gate this unit built: the
+   `prose figures` check reads the limit out of the core's own sentence, so the number lives in one
+   place, and refuses a core over it.
+2. **The full text governs, AND any divergence found is a defect, fixed in the unit that finds it** —
+   RULED with that clause added, because precedence alone is not best practice here. On its own it
+   would let a one-line form drift from its full text for as long as nobody looked, while every agent
+   — which reads the core on every turn and a reference document only sometimes — acted on the
+   drifted line. This file's own doctrine already refuses that resting state ("a gap is a gap";
+   "accepted" is not a resting state; a stale claim is debt), and the drift-direction doctrine says
+   which side is wrong: the full text is where the rule was written with its argument, so it leads,
+   and the one-line form is corrected to match it.
+
+**What no gate sees.** A one-line form and its full text are prose, and no check compares them; the
+clause is held by the unit that reads both, the same way a reference document going stale beside the
+code is (above). Both rules are stated in the core as ruled, and every reference document's header
+states the second.
 
 ## Beyond 2.0.0 — the competitive track
 

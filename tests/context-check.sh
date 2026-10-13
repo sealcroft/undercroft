@@ -309,6 +309,6 @@ awk -v t="$TOTAL" -v w="$WINDOW" -v i="$IN" -v cc="$CC" -v cr="$CR" -v o="$OUT" 
   if (pct < 70)      v = "PLENTY — take the next unit. Do not claim to be near the budget."
   else if (pct < 85) v = "COMFORTABLE — a normal unit still fits; size the next one honestly."
   else if (pct < 90) v = "APPROACHING the 90% stop-line — start no unit you cannot finish."
-  else               v = "STOP TAKING NEW UNITS (CLAUDE.md). Spend what is left on governance:\n           CHANGELOG, ROADMAP, CLAUDE.md, the three .handover files, marker at HEAD."
+  else               v = "STOP TAKING NEW UNITS (CLAUDE.md; in full in docs/agent-guide/session-end-hygiene.md).\n           Spend what is left on governance: CHANGELOG, ROADMAP, CLAUDE.md or the\n           docs/agent-guide/ document that states the claim, the three .handover files,\n           their first block naming HEAD."
   printf "  VERDICT: %s\n", v
 }'

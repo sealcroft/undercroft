@@ -445,14 +445,25 @@ suite_summary() { # suite_summary <log>
 # that is a GNU extension, and a stock Debian or Ubuntu host's awk is mawk,
 # which refuses it, so the gawk form would read empty there. CI's preflight
 # job runs these readers under Debian 12's mawk as well (ROADMAP O314).
-declare_suite_counts() {
-  # Compose-invoked suites, as CLAUDE.md publishes them.
-  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ checks' CLAUDE.md 2>/dev/null \
+#
+# **WHERE the figures are published is one constant (ROADMAP O436).** They sat
+# in `CLAUDE.md`'s Build & test block until the agent guide was split into a
+# core every agent reads on every turn and reference documents read on demand;
+# the block moved VERBATIM into the file below, and every reader here — and
+# `tests/house-figures.sh` — reads it there. Each reader takes an optional
+# file so the `published figures` preflight can ask the same question of the
+# core and require NO answer: a figure the core repeated would be the
+# un-gated copy that rots, and a second reader written for that check could
+# disagree with this one about what a figure looks like.
+FIGURES_DOC="docs/agent-guide/build-and-test.md"
+declare_suite_counts() { # declare_suite_counts [file] — default: $FIGURES_DOC
+  # Compose-invoked suites, as the figures document publishes them.
+  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ checks' "${1:-$FIGURES_DOC}" 2>/dev/null \
     | sed -E 's/docker compose run --rm ([a-z0-9-]+).*\(([0-9]+) checks/\1=\2/'
   # Host-side suites publish the same figure and are INVOKED differently, so
   # the reader above cannot see them. Both shapes or the gate is notation-
   # shaped rather than coverage-shaped.
-  grep -oE 'bash tests/[a-z0-9-]+[.]sh.*[(][0-9]+ checks' CLAUDE.md 2>/dev/null \
+  grep -oE 'bash tests/[a-z0-9-]+[.]sh.*[(][0-9]+ checks' "${1:-$FIGURES_DOC}" 2>/dev/null \
     | sed -E 's#bash tests/([a-z0-9-]+)[.]sh.*[(]([0-9]+) checks#\1=\2#'
 }
 SUITE_COUNTS=$(declare_suite_counts)
@@ -467,10 +478,17 @@ SUITE_COUNTS=$(declare_suite_counts)
 # single `run` figure cannot tell a deleted test from a newly ignored one.
 #
 # `test` is deliberately NOT published this way: its figures are the
-# whole-tree ones in CLAUDE.md and on the landing tile, compared separately.
-declare_cargo_counts() {
-  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ run, [0-9]+ ignored' CLAUDE.md 2>/dev/null \
+# whole-tree ones in $FIGURES_DOC and on the landing tile, compared separately.
+declare_cargo_counts() { # declare_cargo_counts [file] — default: $FIGURES_DOC
+  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ run, [0-9]+ ignored' "${1:-$FIGURES_DOC}" 2>/dev/null \
     | sed -E 's#docker compose run --rm ([a-z0-9-]+).*\(([0-9]+) run, ([0-9]+) ignored#\1=\2/\3#'
+}
+# The whole-tree cargo figures — `integration tests (N run` and `= N compiled`
+# — read by ONE function for the same reason: the post-run comparison reads
+# them from $FIGURES_DOC, and the preflight asks the core for them and
+# requires nothing.
+declare_test_totals() { # declare_test_totals [file] — default: $FIGURES_DOC
+  grep -oE 'integration tests \([0-9]+ run|= [0-9]+ compiled' "${1:-$FIGURES_DOC}" 2>/dev/null || true
 }
 CARGO_COUNTS=$(declare_cargo_counts)
 
@@ -749,7 +767,7 @@ NAMES=("${CU_NAMES_SAVE[@]}"); CODES=("${CU_CODES_SAVE[@]}")
 
 if [ "$SUM_FAIL" -ne 0 ]; then
   echo "      the summary is reporting-only and decides nothing, but it is the"
-  echo "      number a session copies into CLAUDE.md — an unreproducible doc claim"
+  echo "      number a session copies into $FIGURES_DOC — an unreproducible doc claim"
   # `exit 1`, like every other preflight here. The first version of this line
   # incremented a `FAIL` counter that does not exist in this script, so the
   # gate would have printed its complaint and let the battery continue — a
@@ -1834,6 +1852,7 @@ UNVERSIONED_CLOSED=(
   "O244|closed by RULING: audit compaction refused; the replacement gate was met by O250 and the witness it was sequenced behind built by O245"
   "O313|two GitHub settings — up-to-date branches on main and a v* tag ruleset with no bypass — applied and observed to block"
   "O340|closed by RULING, the maintainer's: O234's read budget is a per-unit landing gate, the cumulative figure reported beside it"
+  "O436|closed by RULING, the maintainer's: CLAUDE.md is split into a core and reference documents under docs/agent-guide/, and the split is the standard — the agent guide's form, not engine code"
 )
 ROADMAP_DRIFT=$(roadmap_scan ROADMAP.md)
 # The premise BEFORE the roster (ROADMAP O162). It used to run after it, so a
@@ -3937,7 +3956,7 @@ fi
 # is what catches a doc going stale between units — `docs/MULTI_TENANCY.md`
 # claimed 95 for a suite running 110 while every other surface was current.
 #
-# CLAUDE.md publishes them on its `docker compose run --rm <suite>` lines;
+# $FIGURES_DOC publishes them on its `docker compose run --rm <suite>` lines;
 # other docs publish them as `tests/<script>.sh`, N checks`.
 # `grep -oE` + `sed -E`, deliberately NOT awk's three-argument `match()`:
 # that is a GNU extension, and a stock Debian or Ubuntu host's `awk` is mawk,
@@ -3953,12 +3972,41 @@ fi
 # here, inside the preflight, and the post-run block therefore grew its own
 # second, compose-only copy — which could not see `tls-pins`. ROADMAP M13.
 if [ -z "$SUITE_COUNTS" ]; then
-  echo "FAIL  no per-suite check counts found in CLAUDE.md — the reader is broken,"
-  echo "      and a broken reader agrees with every page it cannot read"
+  echo "FAIL  no per-suite check counts found in $FIGURES_DOC — the reader is broken"
+  echo "      or the figures moved, and a broken reader agrees with every page it"
+  echo "      cannot read"
+  FIG_FAIL=1
+fi
+# The CARGO figures had no premise of their own: the post-run comparison skips
+# an empty read silently, so a reworded `(N run, M ignored)` or a moved
+# `= N compiled` would have compared nothing and said nothing. Since O436 moved
+# them out of `CLAUDE.md`, a figure that is not where its reader looks is the
+# likeliest failure, so it is refused here, before any suite runs.
+FIG_TOTALS=$(declare_test_totals)
+if [ -z "$CARGO_COUNTS" ] ||
+   ! grep -q '^integration tests (' <<< "$FIG_TOTALS" ||
+   ! grep -q '^= [0-9]* compiled' <<< "$FIG_TOTALS"; then
+  echo "FAIL  $FIGURES_DOC does not publish the cargo figures its readers want:"
+  echo "      legs='${CARGO_COUNTS//$'\n'/ }' totals='${FIG_TOTALS//$'\n'/ }'."
+  echo "      Without them the post-run comparison compares nothing and says so to"
+  echo "      nobody (ROADMAP O436)"
+  FIG_FAIL=1
+fi
+# A figure lives in ONE file (ROADMAP O436). The core `CLAUDE.md` is read on
+# every turn and is compared against nothing, so a suite figure it repeated
+# would be the un-gated copy — the "number in prose beside a gated list" this
+# project keeps finding stale. Asked through the SAME readers, so the two
+# cannot disagree about what a figure looks like; their premise is the
+# non-empty reads above.
+CORE_FIGS="$(declare_suite_counts CLAUDE.md; declare_cargo_counts CLAUDE.md; declare_test_totals CLAUDE.md)"
+if [ -n "$CORE_FIGS" ]; then
+  echo "FAIL  CLAUDE.md republishes suite figures that live in $FIGURES_DOC:"
+  printf '%s\n' "$CORE_FIGS" | sed 's/^/        /'
+  echo "      State them there only; the core names the file (ROADMAP O436)"
   FIG_FAIL=1
 fi
 
-# Any OTHER doc republishing a suite's count must match CLAUDE.md's.
+# Any OTHER doc republishing a suite's count must match $FIGURES_DOC's.
 while IFS= read -r hit; do
   [ -z "$hit" ] && continue
   f="${hit%%:*}"; rest="${hit#*:}"
@@ -3971,7 +4019,7 @@ while IFS= read -r hit; do
   esac
   want=$(suite_count "$sname")
   if [ -n "$want" ] && [ "$sval" != "$want" ]; then
-    echo "FAIL  $f publishes $sname=$sval; CLAUDE.md publishes $want"
+    echo "FAIL  $f publishes $sname=$sval; $FIGURES_DOC publishes $want"
     FIG_FAIL=1
   fi
 done <<< "$(git grep -nE 'tests/[a-z0-9-]+\.sh`?,? +[0-9]+ checks' -- '*.md' ':!CHANGELOG.md' 2>/dev/null)"
@@ -3990,7 +4038,7 @@ if [ -n "$SUM_SPEC" ] && [ -n "$SUITE_COUNTS" ]; then
     if [ -z "$v" ]; then missing="$missing $s"; else total=$((total + v)); fi
   done
   if [ -n "$missing" ]; then
-    echo "FAIL  the e2e tile sums$missing, which CLAUDE.md does not publish"
+    echo "FAIL  the e2e tile sums$missing, which $FIGURES_DOC does not publish"
     FIG_FAIL=1
   else
     got=$(fig_value "e2e checks")
@@ -5840,14 +5888,14 @@ fi
 
 # label|file|sed-with-one-capture|truth
 PROSE_FIGURES=(
-  "host-side preflights|CLAUDE.md|s/.*runs the ([a-z-]+) host-side preflights.*/\\1/p|$PF_PREFLIGHTS"
+  "host-side preflights|docs/agent-guide/build-and-test.md|s/.*runs the ([a-z-]+) host-side preflights.*/\\1/p|$PF_PREFLIGHTS"
   "workspace crates|CLAUDE.md|s/.*workspace root \\(([0-9]+) crates.*/\\1/p|$PF_CRATES"
-  "MCP tools|CLAUDE.md|s/.*\\*\\*([0-9]+) tools \\(incl\\..*/\\1/p|$PF_MCP"
-  "architecture diagrams|CLAUDE.md|s/.*reference: ([a-z]+) theme-aware.*/\\1/p|$PF_DIAGRAMS"
-  "engine env variables|CLAUDE.md|s/.*plus \\*\\*all ([0-9]+)\\*\\*.*/\\1/p|$PF_ENV_TOTAL"
-  "env vars written in full|CLAUDE.md|s/.*— \\*\\*([0-9]+)\\*\\* written out in.*/\\1/p|$PF_ENV_FULL"
-  "env vars abbreviated|CLAUDE.md|s/.*plus \\*\\*([0-9]+)\\*\\* siblings abbreviated.*/\\1/p|$PF_ENV_ABBREV"
-  "IRREGULAR pairs|CLAUDE.md|s/.*\\(\\*\\*([0-9]+) pairs.*/\\1/p|$PF_IRREGULAR"
+  "MCP tools|docs/agent-guide/layout-cli-orchestrator.md|s/.*\\*\\*([0-9]+) tools \\(incl\\..*/\\1/p|$PF_MCP"
+  "architecture diagrams|docs/agent-guide/layout-docs-diagrams-site.md|s/.*reference: ([a-z]+) theme-aware.*/\\1/p|$PF_DIAGRAMS"
+  "engine env variables|docs/agent-guide/layout-docs-diagrams-site.md|s/.*plus \\*\\*all ([0-9]+)\\*\\*.*/\\1/p|$PF_ENV_TOTAL"
+  "env vars written in full|docs/agent-guide/layout-docs-diagrams-site.md|s/.*— \\*\\*([0-9]+)\\*\\* written out in.*/\\1/p|$PF_ENV_FULL"
+  "env vars abbreviated|docs/agent-guide/layout-docs-diagrams-site.md|s/.*plus \\*\\*([0-9]+)\\*\\* siblings abbreviated.*/\\1/p|$PF_ENV_ABBREV"
+  "IRREGULAR pairs|docs/agent-guide/layout-store.md|s/.*\\(\\*\\*([0-9]+) pairs.*/\\1/p|$PF_IRREGULAR"
   "ROADMAP entries the heading gate examines|ROADMAP.md|s/.*\\*\\*([0-9]+)\\*\\* of the \\*\\*[0-9]+\\*\\*.*/\\1/p|$PF_RM_IDS"
   "ROADMAP level-3 headings total|ROADMAP.md|s/.*\\*\\*[0-9]+\\*\\* of the \\*\\*([0-9]+)\\*\\*.*/\\1/p|$PF_RM_H3"
   # ROADMAP O100 — six counts that had rotted with nothing counting them.
@@ -5860,16 +5908,16 @@ PROSE_FIGURES=(
   "shared declarations|UPGRADING.md|s/.*the ([a-z]+) declarations they share.*/\\1/p|$PF_DECL_SHARED"
   "shared resolvers|UPGRADING.md|s/.*\`undercroft-config\`'s ([a-z]+) resolvers.*/\\1/p|$PF_RESOLVERS"
   "control-plane checked declarations|UPGRADING.md|s/.*the ([a-z]+) checked \`UNDERCROFT_ORCH_\\*\`.*/\\1/p|$PF_ORCH_CHECKED"
-  "CLI absence rows|CLAUDE.md|s/.*PARTITION it \\(([0-9]+) rows over.*/\\1/p|$PF_ABS_ROWS"
-  "CLI absence anchors|CLAUDE.md|s/.*rows over ([0-9]+) anchors.*/\\1/p|$PF_ABS_ANCHORS"
-  "CLI operations reachable everywhere|CLAUDE.md|s/.*plus ([0-9]+) reachable everywhere.*/\\1/p|$PF_COMPLETE"
+  "CLI absence rows|docs/agent-guide/invariants-surfaces.md|s/.*PARTITION it \\(([0-9]+) rows over.*/\\1/p|$PF_ABS_ROWS"
+  "CLI absence anchors|docs/agent-guide/invariants-surfaces.md|s/.*rows over ([0-9]+) anchors.*/\\1/p|$PF_ABS_ANCHORS"
+  "CLI operations reachable everywhere|docs/agent-guide/invariants-surfaces.md|s/.*plus ([0-9]+) reachable everywhere.*/\\1/p|$PF_COMPLETE"
   # ROADMAP O155 — the `ENGINE_ENV_VARS` cross-tab, on both axes. The `Parse`
   # split was published here and gated nowhere; the `ConfigClass` split is
   # published by `platform-views` and was stale for five days.
-  "Checked declarations|CLAUDE.md|s/^ *([0-9]+) of the [0-9]+ are \`Checked\`.*/\\1/p|$PF_CHECKED"
-  "Opaque declarations|CLAUDE.md|s/.*are \`Checked\`, ([0-9]+) \`Opaque\`.*/\\1/p|$PF_OPAQUE"
-  "Protects variables|CLAUDE.md|s/.*\`Opaque\`, and ([0-9]+) \`Protects\`.*/\\1/p|$PF_PROTECTS"
-  "Tunes variables|CLAUDE.md|s/.*\`Protects\` against ([0-9]+)\$/\\1/p|$PF_TUNES"
+  "Checked declarations|docs/agent-guide/config-classes.md|s/^ *([0-9]+) of the [0-9]+ are \`Checked\`.*/\\1/p|$PF_CHECKED"
+  "Opaque declarations|docs/agent-guide/config-classes.md|s/.*are \`Checked\`, ([0-9]+) \`Opaque\`.*/\\1/p|$PF_OPAQUE"
+  "Protects variables|docs/agent-guide/config-classes.md|s/.*\`Opaque\`, and ([0-9]+) \`Protects\`.*/\\1/p|$PF_PROTECTS"
+  "Tunes variables|docs/agent-guide/config-classes.md|s/.*\`Protects\` against ([0-9]+)\$/\\1/p|$PF_TUNES"
 )
 
 PROSE_FAIL=0
@@ -5909,6 +5957,77 @@ if [ -n "$RF_HEAD" ]; then
   elif [ "$RF_HEAD" != "$RF_LIST" ]; then
     echo "FAIL  round-four open rows: the heading says $RF_HEAD, the list holds $RF_LIST"
     PROSE_FAIL=1
+  fi
+fi
+
+# ── the agent guide: the core's size and its index (ROADMAP O436) ──────────
+# The maintainer ruled the split of `CLAUDE.md` the standard: the core every
+# agent reads on every turn stays at or under the limit its own organisation
+# section states, and every reference document under `docs/agent-guide/` is a
+# row of the core's index — BOTH directions, because a document no row names
+# is never opened, and a row naming no file sends an agent to read nothing.
+# The limit is READ from the core's sentence and never repeated here, so the
+# prose and the gate cannot state two limits; a change to it is a change to
+# the doctrine, ruled like one. Inside this preflight, not a new one, because
+# it is a figure the doctrine states about the tree, which is this block's
+# whole subject.
+#
+# One function over (core, directory), so the probe below drives the code the
+# tree is judged by. It prints one row per finding and nothing when clean.
+ag_findings() { # ag_findings <core> <dir>
+  local core="$1" dir="$2" limit bytes docs index
+  limit=$(sed -nE 's/.*core stays at or under ([0-9]+) KiB.*/\1/p' "$core" | head -1)
+  case "$limit" in
+    ''|*[!0-9]*)
+      echo "no-limit|the core states no 'core stays at or under N KiB' sentence"
+      return ;;
+  esac
+  bytes=$(wc -c < "$core" | tr -d ' ')
+  if [ "$bytes" -gt $((limit * 1024)) ]; then
+    echo "too-large|$bytes bytes, over the $limit KiB ($((limit * 1024)) bytes) it states"
+  fi
+  docs=$(cd "$dir" 2>/dev/null && ls -1 -- *.md 2>/dev/null | LC_ALL=C sort -u)
+  index=$(awk '/^## Reference documents/{f=1;next} f&&/^## /{exit} f' "$core" \
+          | grep -oE '`[a-z0-9-]+[.]md`' | tr -d '`' | LC_ALL=C sort -u)
+  [ -n "$docs" ] || echo "no-docs|$dir holds no reference document"
+  [ -n "$index" ] || echo "no-index|the core has no '## Reference documents' list naming one"
+  LC_ALL=C comm -23 <(printf '%s\n' "$docs") <(printf '%s\n' "$index") | sed '/^$/d; s/^/unindexed|/'
+  LC_ALL=C comm -13 <(printf '%s\n' "$docs") <(printf '%s\n' "$index") | sed '/^$/d; s/^/dangling|/'
+}
+# PREMISE, both ways: a fixture with one finding of each kind must yield
+# exactly those, and a clean fixture nothing — a checker that examines nothing
+# reports what a clean guide reports.
+AG_PROBE=".battery/agent-guide-probe"
+rm -rf "$AG_PROBE"; mkdir -p "$AG_PROBE/bad" "$AG_PROBE/ok"
+{ printf 'The core stays at or under 1 KiB.\n\n'; head -c 1100 /dev/zero | tr '\0' 'x'
+  printf '\n\n## Reference documents\n\n- `a.md` — one\n- `c.md` — two\n\n## After\n\n- `b.md` — not the index\n'
+} > "$AG_PROBE/bad.md"
+: > "$AG_PROBE/bad/a.md"; : > "$AG_PROBE/bad/b.md"
+printf 'The core stays at or under 4 KiB.\n\n## Reference documents\n\n- `a.md` — one\n' > "$AG_PROBE/ok.md"
+: > "$AG_PROBE/ok/a.md"
+AG_PROBE_BAD=$(ag_findings "$AG_PROBE/bad.md" "$AG_PROBE/bad" | sed -E 's/^(too-large)[|].*/\1/')
+AG_PROBE_OK=$(ag_findings "$AG_PROBE/ok.md" "$AG_PROBE/ok")
+rm -rf "$AG_PROBE"
+AG_PROBE_WANT='too-large
+unindexed|b.md
+dangling|c.md'
+if [ "$AG_PROBE_BAD" != "$AG_PROBE_WANT" ] || [ -n "$AG_PROBE_OK" ]; then
+  echo "FAIL  premise: the agent-guide check did not find exactly the planted size,"
+  echo "      unindexed and dangling rows, or found one in a clean fixture:"
+  echo "        planted: $(printf '%s' "$AG_PROBE_BAD" | tr '\n' ' ')"
+  echo "        clean:   $(printf '%s' "$AG_PROBE_OK" | tr '\n' ' ')"
+  PROSE_FAIL=1
+else
+  AG_ROWS=$(ag_findings CLAUDE.md docs/agent-guide)
+  if [ -n "$AG_ROWS" ]; then
+    echo "FAIL  the agent guide breaks its own standard (ROADMAP O436):"
+    printf '%s\n' "$AG_ROWS" | sed 's/^/        /'
+    echo "      Move text to the reference document that owns it, and keep the"
+    echo "      core's index naming exactly the files under docs/agent-guide/"
+    PROSE_FAIL=1
+  else
+    echo "ok    the agent guide's core is $(wc -c < CLAUDE.md | tr -d ' ') bytes, within its stated limit,"
+    echo "      and its index names exactly the $(ls -1 docs/agent-guide/*.md | grep -c .) reference documents"
   fi
 fi
 
@@ -6240,7 +6359,7 @@ fi
 # given them and a gate could not keep them.
 # The cross-tab itself is read ONCE, up in the `prose figures` block
 # (`PF_PROTECTS` … `PF_PROT_OPAQUE`), with the premise that each axis must
-# partition the rows. `CLAUDE.md` and this set publish the same inventory, so
+# partition the rows. The agent guide and this set publish the same inventory, so
 # two readers of it could drift from each other as well as from the tree.
 
 # name|regex capturing the number as \1|truth
@@ -6664,7 +6783,7 @@ for i in "${!NAMES[@]}"; do
     # loudest case and used to be the quietest. Other non-matching shapes
     # keep the silent `continue`: the reader names its own failure in them.
     *"examined nothing"*)
-      FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published checks, and this run produced NO results line at all\n"
+      FIGURE_DRIFT="$FIGURE_DRIFT  $n: $FIGURES_DOC publishes $published checks, and this run produced NO results line at all\n"
       continue ;;
     *[!0-9[:blank:]]*) continue ;;
     *" "*) measured=$(( ${measured%% *} + ${measured##* } )) ;;
@@ -6683,13 +6802,13 @@ for i in "${!NAMES[@]}"; do
     continue
   fi
   if [ "$measured" != "$published" ]; then
-    FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published, this run measured $measured\n"
+    FIGURE_DRIFT="$FIGURE_DRIFT  $n: $FIGURES_DOC publishes $published, this run measured $measured\n"
   fi
 done
 
 # **The cargo figure needs its own comparison, and finding that out is how
 # this gate learned its own scope.** The loop above matches `(N checks`, and
-# cargo publishes none — it is `(N run,` plus a compiled total in `CLAUDE.md`
+# cargo publishes none — it is `(N run,` plus a compiled total in `$FIGURES_DOC`
 # and a `cargo tests` tile on the landing page. So the first version of this
 # check covered every suite EXCEPT the one whose number moves most often, and
 # the unit that added it moved that number in the same commit. A gate whose
@@ -6734,16 +6853,16 @@ if printf '%s\n' "${NAMES[@]}" | grep -qx test; then
     # consumer was global. A guard must refuse to compare figure A because A
     # is unreadable, never because B is.
     *) if [ -n "$cargo_unverifiable" ]; then :; else
-      cm_run=$(grep -oE 'integration tests \([0-9]+ run' CLAUDE.md | grep -oE '[0-9]+' | head -1)
-      cm_comp=$(grep -oE '= [0-9]+ compiled' CLAUDE.md | grep -oE '[0-9]+' | head -1)
+      cm_run=$(declare_test_totals | grep -E '^integration tests' | grep -oE '[0-9]+' | head -1)
+      cm_comp=$(declare_test_totals | grep -E '^= [0-9]+ compiled' | grep -oE '[0-9]+' | head -1)
       tile=$(grep -oE 'data-count="[0-9]+">0</div><div class="l">cargo tests' "$LANDING" \
              | grep -oE '[0-9]+' | head -1)
       if [ -n "$cm_run" ] && [ "$cm_run" != "$tpass" ]; then
-        FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: CLAUDE.md publishes $cm_run run, this run measured $tpass\n"
+        FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: $FIGURES_DOC publishes $cm_run run, this run measured $tpass\n"
       fi
       if [ -n "$cm_comp" ] && [ -n "$tign" ]; then
         want=$(( tpass + tign ))
-        [ "$cm_comp" != "$want" ] && FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: CLAUDE.md publishes $cm_comp compiled; run+ignored is $want\n"
+        [ "$cm_comp" != "$want" ] && FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: $FIGURES_DOC publishes $cm_comp compiled; run+ignored is $want\n"
       fi
       if [ -n "$tile" ] && [ "$tile" != "$tpass" ]; then
         FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: the landing tile publishes $tile, this run measured $tpass\n"
@@ -6756,7 +6875,7 @@ fi
 # **The per-leg cargo figures** (ROADMAP O134b). `test` is handled above
 # against its three whole-tree surfaces; every OTHER cargo-shaped suite is
 # compared against its own `(N run, M ignored)` on its `docker compose run`
-# line in CLAUDE.md.
+# line in $FIGURES_DOC (in `CLAUDE.md` until ROADMAP O436).
 #
 # Each leg is guarded on ITS OWN count, never on the global accumulator —
 # O156's rule, applied here from the start rather than inherited.
@@ -6781,18 +6900,18 @@ for n in "${CARGO_SUITES[@]}"; do
   case "$line" in
     *"examined nothing"*)
       if [ -n "$published" ]; then
-        FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published (run/ignored), and this run produced NO cargo result line at all — the leg compiled no tests\n"
+        FIGURE_DRIFT="$FIGURE_DRIFT  $n: $FIGURES_DOC publishes $published (run/ignored), and this run produced NO cargo result line at all — the leg compiled no tests\n"
       fi
       continue ;;
   esac
   if [ -z "$published" ]; then
-    FIGURE_DRIFT="$FIGURE_DRIFT  $n: ran as a cargo suite and publishes no (N run, M ignored) figure in CLAUDE.md — a measured suite with nothing to compare it to\n"
+    FIGURE_DRIFT="$FIGURE_DRIFT  $n: ran as a cargo suite and publishes no (N run, M ignored) figure in $FIGURES_DOC — a measured suite with nothing to compare it to\n"
     continue
   fi
   measured_leg=$(cargo_measured "$line")
   [ -z "$measured_leg" ] && continue
   if [ "$published" != "$measured_leg" ]; then
-    FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published (run/ignored), this run measured $measured_leg\n"
+    FIGURE_DRIFT="$FIGURE_DRIFT  $n: $FIGURES_DOC publishes $published (run/ignored), this run measured $measured_leg\n"
   fi
 done
 
@@ -6821,7 +6940,7 @@ if [ -n "$FIGURE_DRIFT" ]; then
   echo "PUBLISHED FIGURES ARE STALE — the suites passed; the numbers describing"
   echo "them did not. This is a doc-drift verdict, NOT a suite failure:"
   printf "$FIGURE_DRIFT"
-  echo "      Update CLAUDE.md, then the landing page tile (its e2e figure is the"
+  echo "      Update $FIGURES_DOC, then the landing page tile (its e2e figure is the"
   echo "      SUM of the FIVE e2e suites named in PUBLISHED_FIGURES) and any doc"
   printf '%s\n' "      republishing the count."
   OVERALL=1

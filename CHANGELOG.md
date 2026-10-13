@@ -2,9 +2,9 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and fifty-eight fixes. The witness
+MINOR: one new capability, backward compatible, and sixty fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Eighteen fixes change what a deployment must do: every process writing a
+start-up. Nineteen fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
@@ -36,7 +36,9 @@ nothing has written yet exits 1, a `/v1` 409 with no class, where it exited 2 wi
 `class: "integrity"`, so an alert keyed on exit 2 stops firing for it (O213); `verify` checks the database file itself, so a vault
 with index damage, or a file that does not hold together, which the previous binary
 verified or answered with exit 1, now exits 2 and stops `backup create` and
-`vault rotate` (O269); and a native
+`vault rotate` (O269); a vault this release has opened writable is refused by 1.6.1 as too new
+and by 1.6.0 or older as `ManifestTampered`, so read-only replicas upgrade with or before the writer,
+and `kg add` and `undercroft_kg_add` refuse an empty or control-character date (O406); and a native
 source build uses the Rust 1.98.1 that `rust-toolchain.toml` pins, fetching it the first
 time, and does not compile on a standard library of another Unicode version (O294) — all in
 `UPGRADING.md`, beside O279's note that a filesystem whose inode numbers are not
@@ -64,13 +66,15 @@ O236 and O262 — "thirty-nine" until O231, and "forty" until the units of O273,
 which closed five — O273, O301, O211, O210 and O321, "forty-five" until O259's unit closed O259 and
 O260, "forty-seven" until train 3's integration, which closed six — O221, O226, O315, O308,
 O213 and O322 — and "fifty-three" until O294's unit joined that train and closed three —
-O294, O326 and O327, and "fifty-six" until O269's unit closed two — O269 and
-O427 — beside O421, which sits open under this heading;
+O294, O326 and O327, "fifty-six" until O269's unit closed two — O269 and
+O427 — and "fifty-eight" until O406's unit closed two — O406 and O419 — beside O421, which sits
+open under this heading;
 it said "Three fixes change what a deployment must do" until O283 made
 it four, "Four" until O291 made it five, "Five" until O212 made it six, "Six"
 until O287 made it seven, "Seven" until train 1 made it nine (O200, O262), "Nine" until O231 made it ten, "Ten" until those units made it fourteen (O273, O301,
 O321, O210), "Fourteen" until train 3's integration made it sixteen (O315, O213), "Sixteen" until
-O294 made it seventeen, and "Seventeen" until O269 made it eighteen, O221's
+O294 made it seventeen, "Seventeen" until O269 made it eighteen, and "Eighteen" until O406 made
+it nineteen, O221's
 entry joining the notes beside it — every answer it moves is on a queue an offline writer
 touched, and its cost is the kind O255's note records — and O308's amending O303's there;
 O322 moves only what a refusal's message says. O303's
@@ -2836,7 +2840,7 @@ being the canonical answer.
 Measured on the LoCoMo feed mined into 64 wings by 1.6.1 (5,445 records), one contended run per level: the
 switching open took 858 ms sealed and 966 ms hmac-only against a rotation's 1,349 and 821 ms, the database
 file did not grow, the next open took 74 and 48 ms, and `verify` stayed `VERIFY OK` on every leg. P15f at
-~10⁵ is owed (O-NEW-O406-1). Gates: 25 tests — the transplant (P15i) on both levels, red before the legs; the walk on every tagged
+~10⁵ is owed (O437). Gates: 25 tests — the transplant (P15i) on both levels, red before the legs; the walk on every tagged
 table at both levels with every reader after it; withheld over each moved row and beside a holder; the crash
 after the raise; a version-1 manifest beside the commitment; a receipt and a witness from before the walk;
 the encoder over every byte value; ids and labels byte-identical and every tag changed across the walk — and
@@ -2851,6 +2855,20 @@ before the writer; the way back is a pre-upgrade backup or an export imported by
 refused fact dates; the switch withheld while a finding stands or another process holds the vault; and the
 switching open's one-time cost. `config check` cannot see a pending switch; `verify --read-only` with this
 release is the pre-flight.
+
+### The agent guide is split: `CLAUDE.md` is a core, and the rest is verbatim under `docs/agent-guide/` (O436)
+
+Not a fix, and not counted in this release's figures above: it changes how an agent working on this
+repository is instructed, which no deployment can observe. `CLAUDE.md` is read by every agent on every
+turn, and it went from 359,360 bytes to 47,260; everything else it held is now, verbatim, in one of
+eighteen reference documents under `docs/agent-guide/`, each read when the work touches its area, and
+a checker found every paragraph of the old file in exactly one place. The published suite figures
+moved with the Build & test block to `docs/agent-guide/build-and-test.md`, where `tests/battery.sh`
+and `tests/house-figures.sh` read them. Three checks arrived inside existing preflights: the cargo
+figures must be readable before any suite runs, the core may repeat no suite figure, and the core's
+size limit and its index of reference documents are held in both directions. The maintainer ruled
+the limit, 60 KiB, and that where the core's one-line form and a reference document's full text
+differ the full text governs, the divergence being a defect fixed by the unit that finds it.
 
 ## 1.6.1 — 2026-09-22
 
