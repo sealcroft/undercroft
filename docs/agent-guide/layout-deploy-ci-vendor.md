@@ -87,7 +87,29 @@ reference documents.
   exported. Its teardowns stay literal `docker compose -p …` lines, because
   the teardown-scope preflight cannot see through a wrapper.
   `TLSPINS_SERVER_EXTRA_COMPOSE` applies one more file to the team-server
-  boot, for counterfactuals, and a run with it set always exits 3
+  boot, for counterfactuals, and a run with it set always exits 3.
+  A fourth arrived with O439: `up -d` builds an image only when its tag is
+  MISSING, and the throwaway projects' tags outlive `down -v`, so after a
+  machine's first run every boot started that run's engine — six and three
+  weeks old on the maintainer's machine when found, a change to the engine
+  reaching this suite only on a host that had never run it. It now builds
+  both engine images on every run, side by side, and each boot proves its
+  engine is the binary its build recorded from the tree under test
+  (`engine_is_this_tree`, reading the Dockerfile's `build-record` stage).
+  A fifth came the same day: the throwaway project names were FIXED, so two
+  worktrees running the suite at once tore down each other's stacks and
+  failed two correct trees; every project now ends in a digest of the
+  checkout's path (`TP_WT`), its own to tear down and no other run's
+- `tests/tree-digest.sh`, `tests/battery-premise.sh` — the battery's
+  freshness proof (ROADMAP O439). The first is the ONE definition of "the
+  tree a build compiled" — a sha256 over the workspace manifest and lock,
+  `crates/`, `vendor/` and `deploy/` — run by `tests/battery.sh` over the
+  checkout and by the Dockerfile over the copy it compiles, which records it
+  beside each binary's sha256. The second is installed in the battery and
+  model images as `undercroft-battery-premise`, and every compose service on
+  them names it ahead of its command: it refuses (exit 1, `PREMISE FAILURE`)
+  an image whose record is not `BATTERY_EXPECT_TREE` or a binary that is not
+  the one recorded, then execs the suite
 - `vendor/tiny_http` — **the one vendored crate** (ROADMAP O114, ruled
   option A): `tiny_http` 0.12.0 verbatim plus one patch, taken through
   `[patch.crates-io]` in the root `Cargo.toml`. The crate both listeners run

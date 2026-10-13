@@ -19,6 +19,11 @@
 !deploy/**
 !tests/e2e.sh
 !tests/e2e-backends.sh
+# The two scripts the battery image runs (ROADMAP O439): the tree digest its
+# build record holds — the same file `tests/battery.sh` runs over the
+# checkout — and the premise every battery suite runs before its command.
+!tests/tree-digest.sh
+!tests/battery-premise.sh
 !docs
 !docs/**
 !website

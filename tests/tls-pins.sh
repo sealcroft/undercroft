@@ -61,6 +61,17 @@ fail() { echo "FAIL  $1"; [ $# -gt 1 ] && echo "$2" | sed 's/^/      /'; FAIL=$(
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 
+# ─ every throwaway project is this CHECKOUT's (ROADMAP O439) ────────────────
+#
+# The projects below were fixed names, so two worktrees running this suite at
+# once shared them: each run's `down -v` tore down the other's stacks, and a
+# bearer from one reached the other's server. Measured on 2026-10-13, two
+# batteries in two worktrees on one machine failed 5 and 3 checks of a correct
+# tree that way, in the same second. The suffix is a digest of the checkout's
+# path — stable for a worktree, distinct between worktrees — so a run's
+# leftovers are still its own to tear down, and no run can reach another's.
+TP_WT="$(printf '%s' "$ROOT" | sha256sum | cut -c1-12)"
+
 # ─ the team-server recipe's bearer (ROADMAP O172) ──────────────────────────
 #
 # `deploy/docker-compose.server.yml` declares
@@ -115,9 +126,9 @@ pass "engine uid read from Dockerfile: $ENGINE_UID"
 #
 # <compose file>|<terminator>|<exporter>|<volume>|<published path>|<project>
 STACKS="
-docker-compose.yml|embeddings-tls|embed-tls-export|undercroft-embed-tls|/tls/root.crt|tlspins-embed
-deploy/observability/docker-compose.observability.yml|tempo-tls|tls-export|tempo-tls-data|/tls/root.crt|tlspins-obs
-deploy/docker-compose.server.yml|qdrant-tls|qdrant-tls-export|qdrant-tls-data|/tls/root.crt|tlspins-qdrant
+docker-compose.yml|embeddings-tls|embed-tls-export|undercroft-embed-tls|/tls/root.crt|tlspins-embed-$TP_WT
+deploy/observability/docker-compose.observability.yml|tempo-tls|tls-export|tempo-tls-data|/tls/root.crt|tlspins-obs-$TP_WT
+deploy/docker-compose.server.yml|qdrant-tls|qdrant-tls-export|qdrant-tls-data|/tls/root.crt|tlspins-qdrant-$TP_WT
 "
 
 # The boot sections' throwaway projects, `<project>|<file>` separated by
@@ -262,6 +273,48 @@ dc_boot() {
     -f "$BOOT_OVERRIDE" ${extra[@]+"${extra[@]}"} "$@"
 }
 
+# engine_is_this_tree — the PREMISE every boot runs once its stack is up
+# (ROADMAP O439): the engine it started is the binary its build compiled from
+# the tree under test. The Dockerfile's builder writes a build record beside
+# the binaries — the digest of the tree it copied (tests/tree-digest.sh) and
+# the sha256 of each binary — and its `build-record` stage holds that record
+# alone, so this exports it from the SAME build (a cache hit: the same
+# Dockerfile, context and build argument the compose build just used) and
+# compares the digest with the tree under test and each hash with the binary
+# inside the running engine. A premise, not a counted check: it prints one
+# line, and fails — counted, so the run cannot pass — only when the proof does
+# not hold. The export directory travels as its own argument, and the paths
+# inside the engine inside `sh -c`, so Git Bash converts the one and leaves
+# the others alone.
+engine_is_this_tree() {
+  local feats rec="$OVERRIDES/record-$BOOT_PROJ" rec_tree rec_bins run_bins name want got bad=""
+  feats="$(dc_boot config 2>/dev/null | sed -n 's/^ *UNDERCROFT_FEATURES: *//p' | tr -d '"' | head -1)"
+  rm -rf "$rec"
+  if ! docker build -q --target build-record --build-arg "UNDERCROFT_FEATURES=$feats" \
+         -o "$rec" . > "$OVERRIDES/premise-build.err" 2>&1; then
+    fail "$BOOT_LABEL: premise — the engine is the binary built from the tree under test" \
+         "the build record would not export: $(tail -n 20 "$OVERRIDES/premise-build.err")"
+    return
+  fi
+  rec_tree="$(cat "$rec/tree" 2>&1)"
+  rec_bins="$(cat "$rec/bins.sha256" 2>&1)"
+  run_bins="$(dc_boot exec -T undercroft sh -c 'sha256sum /usr/local/bin/undercroft /usr/local/bin/undercroft-orchestrator' 2>&1)"
+  [ "$rec_tree" = "$TREE" ] \
+    || bad="the build recorded tree '$rec_tree', and the tree under test is '$TREE'"
+  for name in undercroft undercroft-orchestrator; do
+    want="$(printf '%s\n' "$rec_bins" | sed -n "s#^\([0-9a-f]\{64\}\) [ *]/src/target/release/$name\$#\1#p")"
+    got="$(printf '%s\n' "$run_bins" | sed -n "s#^\([0-9a-f]\{64\}\) [ *]/usr/local/bin/$name\$#\1#p")"
+    if [ -z "$want" ] || [ "$want" != "$got" ]; then
+      bad="${bad:+$bad; }the running $name hashes to '${got:-nothing}', its build recorded '${want:-nothing}'"
+    fi
+  done
+  if [ -n "$bad" ]; then
+    fail "$BOOT_LABEL: premise — the engine is the binary built from the tree under test" "$bad"
+  else
+    echo "premise: $BOOT_LABEL's engine is the binary its build recorded from tree $TREE${feats:+ (features: $feats)}"
+  fi
+}
+
 # boot_stack <label> <project> <file> <override> <exporter> <extra file>
 #
 # Brings one stack up and runs the five checks every engine stack owes: the
@@ -292,15 +345,17 @@ boot_stack() {
   fi
   pass "$BOOT_LABEL: compose resolves $n services"
 
-  # The engine image is BUILT here. That build is the entire cost of a boot;
-  # everything after it is seconds.
-  if ! dc_boot up -d >/dev/null 2>&1; then
+  # The engine image was BUILT above, beside the other stack's (ROADMAP O439);
+  # `--build` here is a cache hit that keeps this boot self-sufficient. That
+  # build is the entire cost of a boot; everything after it is seconds.
+  if ! dc_boot up -d --build >/dev/null 2>&1; then
     fail "$BOOT_LABEL: the stack came up" \
          "$(dc_boot logs --tail 20 2>&1 | tail -20)"
     return
   fi
   pass "$BOOT_LABEL: the stack came up"
   BOOT_UP=1
+  engine_is_this_tree
 
   # The exporter is the one true one-shot: it copies the public root out of
   # Caddy's root-only tree and exits. Everything else carries `restart:`.
@@ -367,6 +422,54 @@ $(dc_boot logs --tail 10 undercroft 2>&1 | tail -10)"
 
 OVERRIDES="$(mktemp -d 2>/dev/null || { mkdir -p "${TMPDIR:-/tmp}/tlspins.$$" && echo "${TMPDIR:-/tmp}/tlspins.$$"; })"
 
+# ─ the two engine images: built from THIS tree, side by side (ROADMAP O439) ─
+#
+# `up -d` builds an image only when its tag is missing, and these tags are the
+# throwaway projects' own (`tlspins-stack-<worktree>-undercroft` and its
+# team-server twin), which `down -v` never removes. So after a machine's first
+# run every boot here started the engine image that run had built: measured on
+# the maintainer's machine on 2026-10-13, the two tags (the fixed names of
+# then) were six and three weeks old, and a change to the engine reached this
+# suite only on a host that had never run it — CI, which starts empty, and
+# nowhere else.
+#
+# Both images are built here on every run, the layer cache deciding the cost,
+# and side by side: they share every dependency stage, and they used to be
+# built one after the other, each inside its own boot. Each boot then proves
+# its engine is the binary its build recorded from this tree
+# (`engine_is_this_tree`). A failed build prints its log here; the boot's own
+# `up --build` then fails the stack's checks with it.
+TREE="${BATTERY_EXPECT_TREE:-}"
+if [ -z "$TREE" ] && ! TREE="$(bash tests/tree-digest.sh)"; then
+  fail "the tree under test could be digested" "tests/tree-digest.sh failed, so no engine can be tied to a tree"
+  TREE="(none)"
+fi
+engine_build() { # <log> <project> <file> [extra file]
+  local log="$1" t0=$SECONDS rc; shift
+  env $(token_for "$2") docker compose -p "$1" -f "$2" ${3:+-f "$3"} --progress plain build undercroft \
+    > "$log" 2>&1
+  rc=$?
+  # How long this build took, for the line below — a note, never a check.
+  echo "$((SECONDS - t0))" > "$log.secs"
+  return "$rc"
+}
+engine_build "$OVERRIDES/build-observability.log" \
+  "tlspins-stack-$TP_WT" deploy/observability/docker-compose.observability.yml &
+EB_OBS=$!
+engine_build "$OVERRIDES/build-team-server.log" \
+  "tlspins-server-$TP_WT" "$SERVER_FILE" "$EXTRA_COMPOSE" &
+EB_SRV=$!
+wait "$EB_OBS"; EB_OBS_RC=$?
+wait "$EB_SRV"; EB_SRV_RC=$?
+for eb in "observability:$EB_OBS_RC" "team-server:$EB_SRV_RC"; do
+  eb_secs="$(cat "$OVERRIDES/build-${eb%%:*}.log.secs" 2>/dev/null || echo '?')"
+  echo "note  the ${eb%%:*} engine image: built in ${eb_secs}s, exit ${eb##*:}"
+  if [ "${eb##*:}" -ne 0 ]; then
+    echo "the ${eb%%:*} engine image did not build (exit ${eb##*:}); its last lines:"
+    tail -n 30 "$OVERRIDES/build-${eb%%:*}.log" | sed 's/^/      /'
+  fi
+done
+
 # ─ the observability deployment (ROADMAP O63, O199) ────────────────────────
 cat > "$OVERRIDES/obs-ports.yml" <<'YAML'
 services:
@@ -385,7 +488,8 @@ services:
 YAML
 
 # The observability engine is built with `UNDERCROFT_FEATURES=telemetry`.
-boot_stack "observability" "tlspins-stack" \
+T_BOOT=$SECONDS
+boot_stack "observability" "tlspins-stack-$TP_WT" \
   "deploy/observability/docker-compose.observability.yml" \
   "$OVERRIDES/obs-ports.yml" "tls-export" ""
 
@@ -466,6 +570,7 @@ fi
 # The stack is torn down now rather than at exit, so the team-server boot
 # below does not run beside eleven idle services.
 env $(token_for "$BOOT_FILE") docker compose -p "$BOOT_PROJ" -f "$BOOT_FILE" down -v >/dev/null 2>&1 || true
+echo "note  the observability deployment: booted, checked and torn down in $((SECONDS - T_BOOT))s"
 
 # ─ the team-server recipe (ROADMAP O172) ───────────────────────────────────
 #
@@ -487,7 +592,8 @@ services:
     ports: !override ["0:8765"]
 YAML
 
-boot_stack "team-server" "tlspins-server" "$SERVER_FILE" \
+T_BOOT=$SECONDS
+boot_stack "team-server" "tlspins-server-$TP_WT" "$SERVER_FILE" \
   "$OVERRIDES/server-ports.yml" "qdrant-tls-export" "$EXTRA_COMPOSE"
 
 # srv_exec <args…> runs the CLI inside the engine container. `-T` because this
@@ -595,6 +701,7 @@ if [ -n "$BOOT_UP" ] && [ -n "$BOOT_PORT" ]; then
     'UNDERCROFT_PASSPHRASE: tlspins-passphrase-probe' \
     -- dc_boot --env-file "$OVERRIDES/passphrase.env" config
 fi
+echo "note  the team-server deployment: booted and checked in $((SECONDS - T_BOOT))s"
 rm -rf "$OVERRIDES" 2>/dev/null || true
 
 echo ""

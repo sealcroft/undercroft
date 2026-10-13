@@ -46,6 +46,25 @@ check() { # check <name> <expected-exit> <expected-substring> -- cmd...
 # the match. A battery preflight refuses the shape; every converted check
 # below asserts the exit code first.
 
+# ── a fixed sleep is not a wait (ROADMAP O439) ──────────────────────────────
+# Since O439 the battery runs its suites side by side, so this suite runs
+# under load as a matter of course, and a `sleep 1` standing in for "the
+# server is up", "the holder has its lock" or "the server is gone" is a window
+# load can close before the event. These wait for the event itself, bounded
+# at 30 s; a check that needs it then fails on its own terms if it never came.
+listening() { # listening <port> — 0 once /healthz answers on 127.0.0.1:<port>
+  local _
+  for _ in $(seq 1 300); do
+    curl -sf "http://127.0.0.1:$1/healthz" >/dev/null 2>&1 && return 0
+    sleep 0.1
+  done
+  return 1
+}
+gone() { # gone <pid> — 0 once the process has exited
+  local _
+  for _ in $(seq 1 300); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.1; done
+  return 1
+}
 absent_in_db() { # absent_in_db <name> <needle> <db>
   # A NEGATIVE at-rest assertion, with its premise asserted first.
   #
@@ -1335,7 +1354,7 @@ fi
 BK_NAME="$("$BIN" backup list | grep '^default-' | head -1)"
 "$BIN" serve-http --port 18899 >/dev/null 2>&1 &
 E2E_HOLDER=$!
-sleep 2
+listening 18899
 if kill -0 "$E2E_HOLDER" 2>/dev/null; then
   check "restore refuses while the vault is held" 1 "is open in another process" -- \
     "$BIN" backup restore "$BK_NAME" --force
@@ -1433,7 +1452,7 @@ check "and the restored vault verifies"                0 "VERIFY OK" -- "$BIN" v
 # state is the directory copied as files while the server held it.
 "$BIN" serve-http --port 18898 >/dev/null 2>&1 &
 O268_SRV=$!
-sleep 2
+listening 18898
 for i in 1 2 3; do "$BIN" remember "O268: a write the killed server never checkpointed $i" >/dev/null 2>&1; done
 O268_LEGACY="$UNDERCROFT_HOME/backups/default-2026-01-01T00-00-00Z"
 rm -rf "$O268_LEGACY"; cp -r "$UNDERCROFT_HOME/vaults/default" "$O268_LEGACY"
@@ -2351,11 +2370,14 @@ o231 vault create plain --level hmac-only >/dev/null 2>&1
 O231_DB="$O231_HOME/vaults/plain/vault.db"
 sqlite3 "$O231_DB" "PRAGMA journal_mode=WAL;" >/dev/null
 mkfifo "$O231_DIR/hold"
-sqlite3 "$O231_DB" < "$O231_DIR/hold" >/dev/null 2>&1 &
+sqlite3 "$O231_DB" < "$O231_DIR/hold" >"$O231_DIR/held.out" 2>&1 &
 O231_HOLDER=$!
 exec 7>"$O231_DIR/hold"
-echo "BEGIN; SELECT count(*) FROM sqlite_master;" >&7
-sleep 0.5
+# The marker prints only once the read transaction has begun (sqlite3 runs
+# the statements in order and flushes each), so the remembers below meet a
+# holder rather than a `sleep 0.5` that load can outrun (ROADMAP O439).
+echo "BEGIN; SELECT count(*) FROM sqlite_master; SELECT 'o231-held';" >&7
+for _ in $(seq 1 300); do grep -q o231-held "$O231_DIR/held.out" && break; sleep 0.1; done
 o231 remember "the sluice opens at dawn" --vault plain --wing canal --room gates >/dev/null 2>&1
 o231 remember "the weir was rebuilt in may" --vault plain --wing canal --room gates >/dev/null 2>&1
 O231_EXP="$(o231 export --vault plain 2>/dev/null)"
@@ -3315,7 +3337,7 @@ check "config check accepts a presentable token with whitespace in it" 0 "" -- "
 export UNDERCROFT_MCP_HTTP_TOKEN="e2e-secret-token"
 "$BIN" serve-http --host 127.0.0.1 --port 18765 &
 HTTP_PID=$!
-sleep 1
+listening 18765
 http_req() { # http_req <path> <body-or-empty> [auth]
   local path="$1" body="$2" auth="${3:-}"
   exec 3<>/dev/tcp/127.0.0.1/18765
@@ -3398,7 +3420,7 @@ printf '{"half-written":' > "$RO_VAULT/vault.json.next"
 RO_BEFORE="$(cd "$RO_VAULT" && md5sum vault.db vault.json vault.json.next | sort)"
 "$BIN" serve-http --host 127.0.0.1 --port 18766 --read-only &
 RO_PID=$!
-sleep 1
+listening 18766
 out="$(exec 3<>/dev/tcp/127.0.0.1/18766; body='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"undercroft_search","arguments":{"query":"graphql"}}}'; printf 'POST /mcp HTTP/1.0\r\nContent-Type: application/json\r\nAuthorization: Bearer e2e-secret-token\r\nContent-Length: %d\r\n\r\n%s' "${#body}" "$body" >&3; cat <&3; exec 3<&- 3>&-)"
 if grep -q '"result"' <<<"$out"; then
   echo "ok    read-only server still serves reads"; PASS=$((PASS+1))
@@ -3481,7 +3503,7 @@ fi
 printf '{"half-written":' > "$RO_VAULT/vault.json.next"
 "$BIN" serve-http --host 127.0.0.1 --port 18766 --read-only 2>"$UNDERCROFT_HOME/ro.log" &
 RO_PID=$!
-sleep 1
+listening 18766
 kill $RO_PID 2>/dev/null
 wait $RO_PID 2>/dev/null
 if grep -q "vault.json.next" "$UNDERCROFT_HOME/ro.log"; then
@@ -3546,7 +3568,7 @@ UNDERCROFT_HOME="$ATK_HOME" "$BIN" remember "the release train leaves on friday"
 UNDERCROFT_HOME="$ATK_HOME" UNDERCROFT_ADMISSION=quarantine \
   "$BIN" serve-http --host 127.0.0.1 --port 18767 &
 ATK_PID=$!
-sleep 1
+listening 18767
 atk() { # atk <METHOD> <path> [body]
   local method="$1" path="$2" body="${3:-}"
   exec 3<>/dev/tcp/127.0.0.1/18767
@@ -3625,7 +3647,8 @@ atk_check "stats reports the review queue depth" '"quarantined":4' "$out"
 # If a future edit changes how many writes this section diverts, the number
 # above moves with it — the arithmetic is what must stay true.
 kill $ATK_PID 2>/dev/null
-sleep 1
+gone $ATK_PID
+wait $ATK_PID 2>/dev/null
 check "chain green after the attack" 0 "audit chain:     ok"          -- \
   env UNDERCROFT_HOME="$ATK_HOME" "$BIN" verify
 unset UNDERCROFT_MCP_HTTP_TOKEN
