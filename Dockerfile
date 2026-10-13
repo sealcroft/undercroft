@@ -141,6 +141,16 @@ ARG UNDERCROFT_FEATURES=""
 # first with the checkout and the second with the binaries it is about to
 # run. The first statement is the dependency layer's guarantee, asserted: no
 # workspace member's artifact may exist yet, so nothing here can be reused.
+#
+# **Every command is its own statement under `set -eu`, never a link in an
+# `&&` chain.** POSIX ignores `-e` for every command of an AND-OR list but the
+# last, so `cargo build --release && cargo test --release --no-run; sha256sum …`
+# went on to the `sha256sum` when the BUILD failed, and the RUN answered with
+# its status: an independent review planted a compile error in a crate both
+# binaries do not link, and `docker build --target battery-core` exited 0 with
+# the two binaries recorded and `--no-run` never run (this unit's own defect,
+# ROADMAP O439). Before O439 this RUN was the `if` alone, whose status was the
+# chain's; the build record appended after it is what made the chain unsafe.
 RUN set -eu; \
     mkdir -p /opt/undercroft/build; \
     bash /usr/local/lib/undercroft/tree-digest.sh /src > /opt/undercroft/build/tree; \
@@ -152,13 +162,14 @@ RUN set -eu; \
       ls target/release/.fingerprint/ | grep '^undercroft-' >&2; exit 1; \
     fi; \
     if [ -n "$UNDERCROFT_FEATURES" ]; then \
-        apt-get update \
-        && apt-get install -y --no-install-recommends pkg-config libssl-dev g++ \
-        && rm -rf /var/lib/apt/lists/* \
-        && cargo build --release -p undercroft-cli --features "$UNDERCROFT_FEATURES" \
-        && cargo build --release -p undercroft-orchestrator; \
+        apt-get update; \
+        apt-get install -y --no-install-recommends pkg-config libssl-dev g++; \
+        rm -rf /var/lib/apt/lists/*; \
+        cargo build --release -p undercroft-cli --features "$UNDERCROFT_FEATURES"; \
+        cargo build --release -p undercroft-orchestrator; \
     else \
-        cargo build --release && cargo test --release --no-run; \
+        cargo build --release; \
+        cargo test --release --no-run; \
     fi; \
     sha256sum -b /src/target/release/undercroft /src/target/release/undercroft-orchestrator \
         > /opt/undercroft/build/bins.sha256

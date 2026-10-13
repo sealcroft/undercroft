@@ -4012,7 +4012,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**467** of the **482** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**468** of the **483** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -53823,6 +53823,8 @@ BuildKit cache mounts, one image built once that the suites run against, CI cach
 Actions cache, and the local suites in parallel. NOT approved: skipping or path-filtering a suite — where the
 four cannot reach fifteen minutes, the remainder is reported per suite and nothing is narrowed.
 
+**Relations:** shares a question with O440 — the fixed-name collision found here in `tls-pins` and fixed in this entry stands in `backends-e2e`.
+
 #### Measured before (2026-10-13)
 
 - **Local**, on the maintainer's Windows host through Git Bash, beside other agents' Docker builds (a machine
@@ -53900,13 +53902,16 @@ four cannot reach fifteen minutes, the remainder is reported per suite and nothi
   battery was running, tore down that battery's stacks and failed 3 of its checks — and 5 of its own — in
   the same second. That failure is this unit's, reported as such; the projects now end in a digest of the
   checkout's path. It prints how long each engine build and each deployment took, as notes.
-- **CI.** Each matrix leg asks `--image-of`, builds that stage with `docker/build-push-action` and buildx
-  over the dependency layers in the Actions cache (the two actions `release.yml` already pins, by the same
-  SHAs), loads it, and runs `battery.sh --no-preflight <suite>` with `BATTERY_PREBUILT=1`. One leg per
-  cache scope writes it (`e2e-telemetry` for `battery`, whose image needs every dependency stage;
-  `ort-build` for `models`), and only the dependency stages (`deps-all`, `deps-models`). No job is added;
-  the legs stay independent (M13). `tls-pins` builds its two images side by side; `trivy-image` stays
-  uncached, the authority on the published image.
+- **CI.** Each matrix leg builds its image with `docker buildx bake` reading `docker-compose.yml`
+  (`docker/bake-action`, pinned by SHA at v7.4.0, beside the `setup-buildx-action` `release.yml` already
+  pins), the target being the suite's OWN compose service, so its target, Dockerfile, build arguments and
+  tag are the ones a local battery's `docker compose build` reads; bake adds only the Actions cache
+  (`cache-from`) and loads the image. The leg then runs `battery.sh --no-preflight <suite>` with
+  `BATTERY_PREBUILT=1`. One leg per cache scope writes it (`e2e-telemetry` for `battery`, whose image
+  needs every dependency stage; `ort-build` for `models`), and only the dependency stages: the writer's bake
+  overrides its service's target with `deps-all` or `deps-models` and its output with the cache alone. No
+  job is added; the legs stay independent (M13). `tls-pins` builds its two images side by side;
+  `trivy-image` stays uncached, the authority on the published image.
 
 #### Measured after (2026-10-13)
 
@@ -53945,6 +53950,38 @@ ignored, `e2e` 901, `orchestrator-e2e` 201, `e2e-telemetry` 62, `backends-e2e` 1
   which stopped there, and the coordinator then failed the run naming `version surfaces` as not run — exit
   1, reverted, the file's checksum back to its own.
 
+#### The independent review of the first build (2026-10-13), and what changed for it
+
+- **The builder answered green over a workspace that does not build — this unit's own defect.** Its RUN
+  became `set -eu; …; cargo build --release && cargo test --release --no-run; …; sha256sum …`, and POSIX
+  ignores `-e` for every command of an AND-OR list but the last: a failing `cargo build` went on to the
+  build record, and the RUN answered with `sha256sum`'s status. The reviewer planted a compile error in
+  `undercroft-bench`, which neither binary links, and `docker build --target battery-core` exited 0 with
+  both binaries recorded and `--no-run` never run. `test` and `lint` would still have gone red, but
+  `trivy-image` and every runtime image would have built green, and code compiled only by the release
+  build would have passed every suite. **The premise could not see it**: it compares the record with the
+  binaries, and the record was of binaries that did link. Every command in that RUN is now its own
+  statement, in both branches; the other RUNs this unit added or changed were audited for the shape — the
+  dependency cooks are bare `&&` chains whose status is the chain's, and the rest are one statement per
+  line under `set -eu`. Measured on a scratch copy of the tree with the same planted error: the previous
+  Dockerfile exited 0 in 48 s and tagged the image (no `undercroft-bench` binary in it, the premise
+  answering "2 binaries match their build record"); the fixed one exited 1, the RUN failing with cargo's
+  101, and tagged nothing; the fixed Dockerfile over the real tree exited 0 in 201 s, its premise
+  accepting the tree under test.
+- **The `backends-e2e` collision is filed as O440**, with its mechanism, the two fix shapes and a gate.
+- **CI now builds from the compose definitions** — the M13 bullet below says what and why.
+- **Three prose claims corrected**: a suite's exit code reaches the battery through `tee` and
+  `${PIPESTATUS[0]}`, read on the next statement, whenever one suite runs alone or under `--serial` — every
+  CI leg — so "without a pipe" held only side by side; and two comments in `tests/battery.sh` still said
+  the preflights ran before any suite.
+- **Unchanged, and for the maintainer to rule in the pull request: dependency LAYERS rather than BuildKit
+  cache mounts.** The maintainer approved cache mounts. They are not used, for the reason under "What
+  changed": a cache mount is one directory shared by every build on the machine, every worktree compiles at
+  `/src`, and cargo decides freshness by path and mtime, so two worktrees' builds would share artifacts the
+  way the shared-`CARGO_TARGET_DIR` false green in `build-pitfalls.md` did; and a cache mount never reaches
+  the Actions cache, so CI would gain nothing from it. A layer is content-addressed, safe across worktrees,
+  and exported.
+
 #### CI: the expected shape, and what to watch
 
 Not measured — the unit could not push, and a workflow's time exists only on a pushed branch. Expected, from
@@ -53980,12 +54017,49 @@ the before-figures and the local measurements:
   checkout declares, and the battery resets them before the suite, so two worktrees running it at once can
   pull the databases from under each other — the fixed-name hazard `tls-pins` had, one suite over, not caused
   by this unit and not fixed by it, because a per-checkout project would start five databases per worktree.
-  It needs its own entry, not yet filed — ids are assigned by the session that dispatched this unit — and a
-  ruling on that cost.
-- **The prior ruling is followed, not revised**: M13's — legs independent, no new job, the verdict's `needs:`
-  untouched, every leg through `battery.sh --no-preflight`. What M13 called the legs inheriting `--build` is
-  kept in substance: every leg builds its image on every run, the layer cache deciding the cost, and the
-  premise proves it is the checkout's.
+  Filed as O440, with its fix shape and its gate, for a ruling on that cost.
+- **The prior ruling is followed, not revised**: M13's — CI and a local battery execute the SAME code, legs
+  independent, no new job, the verdict's `needs:` untouched, every leg through `battery.sh --no-preflight`.
+  The first build of this unit did NOT follow it, and the independent review said so: CI's legs built with
+  `docker/build-push-action` from a target name of their own while a local run built with `docker compose
+  build`, and the premise's digest covers only the files an image copies — never the Dockerfile or the
+  compose build arguments — so a compose `args:` or `target:` change would have reached local runs and
+  silently not CI. Now both sides build from the one compose service definition (`docker buildx bake -f
+  docker-compose.yml <suite>` in CI, `docker compose build <service>` locally), and bake adds nothing but
+  the cache, so a change to the definition reaches both or neither. Of the review's two options this is the
+  one it preferred; the other — recording the Dockerfile's digest and the build arguments in the image and
+  comparing them in the premise — was not needed once both builds read one definition. Measured locally:
+  `docker buildx bake -f docker-compose.yml --load e2e` built the image the premise accepted for the tree
+  under test, and `--print` resolves each leg's service to the target its compose block names. What M13
+  called the legs inheriting `--build` is kept: every leg builds its image on every run, the layer cache
+  deciding the cost.
+
+### O440 — two checkouts running `backends-e2e` at once share its five databases, so one run's reset can pull them from under the other — filed by O439's review, a ruling pending between a per-checkout project and a host-wide lock
+
+**Filed 2026-10-13 by the independent review of O439.** The databases `backends-e2e` drives — `qdrant`,
+`chroma`, `pgvector`, `milvus`, `weaviate` and the `backends-tls` terminator in front of them — are services
+of the compose project `docker-compose.yml` names (`name: undercroft`, which the compose-project-name
+preflight requires), and so are the named volumes holding their certificates (`undercroft-backends-tls`,
+`undercroft-pgvector-tls`). Every checkout on a machine therefore resolves them to the SAME containers and
+volumes. `tests/battery.sh` resets them before the suite (`docker compose rm -sfv` over those services,
+M12's narrowed reset), and the suite's `docker compose run --rm backends-e2e` brings them up again through
+`depends_on`. When two checkouts run the suite at once, the second run's reset removes the databases the
+first is in the middle of using. Not yet observed as a failure; the same fixed-name shape in `tls-pins` was,
+on 2026-10-13, when two correct trees failed 5 and 3 checks in the same second, and O439 fixed it there. It
+is likelier now than it was: a battery runs its suites side by side, and several checkouts run batteries on
+one machine.
+
+**Shape, for a ruling.** (a) A per-checkout project for this suite — `-p undercroft-<digest of the checkout
+path>` on the reset and on the run, as `tls-pins` does — isolating each checkout's databases and their
+certificate volumes, at the cost of one full five-database stack per battery running at that moment, Milvus
+among them. (b) A host-wide lock, taken before the reset and released after the suite, that serialises the
+suite across checkouts, at the cost of wall-clock whenever two batteries overlap. (c) Both. Either way every
+teardown keeps naming its project, the `destructive compose scope` preflight's rule. **Gate**: two checkouts
+run `bash tests/battery.sh --no-preflight backends-e2e` at once and both pass with the published count; and
+the same probe over today's shared project is shown to fail first, measured rather than argued, so the gate is
+known to see the collision.
+
+**Relations:** shares a question with O439 — that entry's per-checkout `tls-pins` projects are this hazard's fix one suite over.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

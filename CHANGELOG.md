@@ -2829,9 +2829,11 @@ member's artifacts deleted, so no stub can be linked — and two images are cut 
 the telemetry binaries the suite used to compile at run time and mdBook, for `e2e-telemetry` and `site`.
 `tests/battery.sh` builds each once per run under a per-worktree tag, starts every suite the moment its
 image exists (`--serial` keeps the old one-at-a-time stream), and runs the preflights beside them as a
-second process of itself, in five shards and a last, at raised priority on Git Bash; every exit code is
-still collected without a pipe, and the shards' coordinator refuses a run where any preflight ran twice or
-not at all. Every suite on a battery image first runs `undercroft-battery-premise`, which refuses an image
+second process of itself, in five shards and a last, at raised priority on Git Bash. A suite's verdict is
+still its own exit code: collected by `wait` from a redirect into its log when the suites run side by side,
+and, when one suite runs alone or under `--serial` — every CI leg among them — through `tee` with
+`${PIPESTATUS[0]}` read on the very next statement, as before. The shards' coordinator refuses a run where
+any preflight ran twice or not at all. Every suite on a battery image first runs `undercroft-battery-premise`, which refuses an image
 whose recorded tree digest (`tests/tree-digest.sh`, the one definition, run over the checkout too) is not
 the tree under test, or a binary that is not the one its build recorded. Eight preflight readers that
 started a process per item now start one per question, with the same answers.
@@ -2841,9 +2843,11 @@ throwaway projects' tags outlive `down -v` — so on a machine that had run it o
 engine, six and three weeks old here; it now builds both on every run, side by side, and proves each
 running engine against its build record. Its throwaway projects were fixed names, so two worktrees running
 it at once tore down each other's stacks — this unit's own run did that to another worktree's battery,
-failing three of its checks — and each now ends in a digest of the checkout's path. CI's legs build the image they run with buildx over the dependency
-layers earlier runs left in the Actions cache, one leg per cache scope writing them, and run the battery
-with `BATTERY_PREBUILT=1`; no job is added and the verdict still needs every job. CI's new wall-clock is
+failing three of its checks — and each now ends in a digest of the checkout's path. CI's legs build the
+image they run with `docker buildx bake` from the suite's own service in `docker-compose.yml` — the
+definition a local battery builds — over the dependency layers earlier runs left in the Actions cache, one
+leg per cache scope writing them, and run the battery with `BATTERY_PREBUILT=1`; no job is added and the
+verdict still needs every job. CI's new wall-clock is
 measured by the pull request's first runs, not here.
 
 ## 1.6.1 — 2026-09-22

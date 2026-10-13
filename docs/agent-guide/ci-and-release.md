@@ -55,16 +55,25 @@ measured on runs `38294232458`, `38304475585` and `38307051064` — and the mode
 legs then compiled their own dependencies at run time on top, so `ort-build`
 was the run's wall-clock. Now a leg asks `bash tests/battery.sh --image-of
 <suite>` which image it runs on (its compose service's `target:` — the
-workflow keeps no map of its own), builds that stage with
-`docker/build-push-action` and buildx over the dependency layers earlier runs
-left in the Actions cache, loads it as `undercroft-battery-core:ci`,
-`undercroft-battery:ci` or `undercroft-models:ci`, and runs `battery.sh
---no-preflight <suite>` with `BATTERY_PREBUILT=1`, so the script builds nothing
-and the premise in every suite refuses an image that is not the checkout's
-tree. ONE leg per cache scope writes it — `e2e-telemetry` for `battery`, the
+workflow keeps no map of its own) and so which cache scope it shares, builds
+it with `docker buildx bake -f docker-compose.yml <suite>`
+(`docker/bake-action`, pinned by SHA) over the dependency layers earlier runs
+left in the Actions cache, loads it under the name the job's `env:` gives —
+`undercroft-battery-core:ci`, `undercroft-battery:ci` or
+`undercroft-models:ci`, which the service's `image:` interpolates — and runs
+`battery.sh --no-preflight <suite>` with `BATTERY_PREBUILT=1`, so the script
+builds nothing and the premise in every suite refuses an image that is not the
+checkout's tree. **Bake reads the suite's OWN compose service**, the
+definition a local battery's `docker compose build` reads, and adds only the
+cache: CI and a local battery build one definition, as M13 ruled they run one
+script, so a compose `target:` or `args:` change reaches both. (The first
+version built a target name of its own with `docker/build-push-action`, and the
+premise's digest, which covers what an image copies and not how it was built,
+would not have seen the two drift.) ONE leg per cache scope writes it — `e2e-telemetry` for `battery`, the
 scope both battery images read, because its target needs every dependency
 stage; `ort-build` for `models` — and only the dependency stages (`deps-all`,
-`deps-models`) with `mode=max`: the workspace's own layers belong to one
+`deps-models`, the writer's bake overriding its service's target and its output
+with the cache alone) with `mode=max`: the workspace's own layers belong to one
 commit, and uploading them from every leg would buy nothing and evict what
 later runs need. The legs stay independent (M13's ruling): each builds what it
 runs and none waits on another job, so no job is added and `verdict`'s

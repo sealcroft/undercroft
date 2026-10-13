@@ -401,7 +401,8 @@ if pf_shard "line endings"; then  # ROADMAP O439: the shard that runs this prefl
 # else — `tests/`, `docs/`, `website/`, the compose files — which NO image
 # carries: the test image COPYs only `crates/`, and each e2e service
 # bind-mounts its single script. Host-side is the only place the whole tree
-# exists, so this runs before any suite rather than inside one.
+# exists, so this runs on the host, beside the suites (ROADMAP O439), rather
+# than inside one.
 echo "═══ preflight: line endings ═══"
 # `git ls-files --eol` — git owns this concept, so ask git. It prints the
 # index ending, the WORKING-TREE ending and the attribute that governs the
@@ -4201,7 +4202,9 @@ fi
 # an empty read silently, so a reworded `(N run, M ignored)` or a moved
 # `= N compiled` would have compared nothing and said nothing. Since O436 moved
 # them out of `CLAUDE.md`, a figure that is not where its reader looks is the
-# likeliest failure, so it is refused here, before any suite runs.
+# likeliest failure, so it is refused here, as a preflight, rather than skipped
+# in silence after the run. Since ROADMAP O439 the preflights run BESIDE the
+# suites, so this no longer keeps them from starting; it fails the run.
 FIG_TOTALS=$(declare_test_totals)
 if [ -z "$CARGO_COUNTS" ] ||
    ! grep -q '^integration tests (' <<< "$FIG_TOTALS" ||

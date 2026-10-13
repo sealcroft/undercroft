@@ -180,6 +180,13 @@ jobs:
     # required check ("test") resolve to one cargo suite out of seven.
     name: suite (${{ matrix.suite }})
     runs-on: ubuntu-latest
+    # The three images a leg can run on, named ONCE for both the bake that
+    # builds them (docker-compose.yml interpolates these names into each
+    # service's `image:`) and the battery that runs them (ROADMAP O439).
+    env:
+      BATTERY_CORE_IMAGE: undercroft-battery-core:ci
+      BATTERY_IMAGE: undercroft-battery:ci
+      BATTERY_MODELS_IMAGE: undercroft-models:ci
     strategy:
       # **Every suite runs even when one fails.** Serially, a failure in the
       # second step meant the remaining five never ran, so one broken suite
@@ -250,21 +257,26 @@ jobs:
           - ort-build
     steps:
       - uses: actions/checkout@v5
-      # ── the leg's image, built over the Actions layer cache (ROADMAP O439) ──
+      # ── the leg's image, built from ITS OWN compose service over the Actions
+      #    layer cache (ROADMAP O439) ──────────────────────────────────────────
       # Every leg used to build the whole builder stage from nothing — about
       # seven and a half minutes of every leg's eight to seventeen — and the
       # model legs then compiled their own dependencies at run time on top.
-      # Now the image a leg runs on (the Dockerfile's `battery-core`, `battery`
-      # or `models` stage, read from its compose service by `battery.sh
-      # --image-of`, so this file keeps no map of its own) is built here with
-      # buildx over the dependency layers earlier runs left in the Actions
-      # cache, and loaded; only the workspace compiles, and only what the
-      # suite runs — four legs never compile the telemetry binaries. Legs stay
-      # independent (ROADMAP M13): each builds what it runs, nothing waits on
-      # another job.
+      # Now the leg's image is built here by `docker buildx bake` reading
+      # docker-compose.yml, so its target, Dockerfile, build arguments and tag
+      # come from the SAME service definition a local battery's `docker compose
+      # build` reads: CI and a local battery build one definition, as ROADMAP
+      # M13 ruled they run one script. Bake only ADDS the cache, never changes
+      # what is built. The image is loaded; only the workspace compiles, and
+      # only what the suite runs — four legs never compile the telemetry
+      # binaries. Legs stay independent (M13): each builds what it runs,
+      # nothing waits on another job. `battery.sh --image-of` reads the
+      # service's `target:` to say which cache scope it shares.
       #
       # ONE leg per cache scope writes it, and only the dependency stages
       # (`deps-all`, `deps-models`), whose layers no source edit moves: the
+      # writer's bake overrides its service's target with that stage and its
+      # output with the cache alone, so it builds nothing a suite runs. The
       # workspace's own layers are this commit's alone, and uploading them
       # from every leg would buy nothing and evict what later runs need. The
       # `battery` scope's writer is e2e-telemetry, whose image needs every
@@ -276,30 +288,45 @@ jobs:
       # image whose recorded tree digest is not this checkout's.
       - name: Which image this leg runs on
         id: image
-        run: echo "target=$(bash tests/battery.sh --image-of '${{ matrix.suite }}')" >> "$GITHUB_OUTPUT"
+        run: |
+          target="$(bash tests/battery.sh --image-of '${{ matrix.suite }}')"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          if [ "$target" = models ]; then
+            echo "scope=models" >> "$GITHUB_OUTPUT"
+            echo "deps=deps-models" >> "$GITHUB_OUTPUT"
+          else
+            echo "scope=battery" >> "$GITHUB_OUTPUT"
+            echo "deps=deps-all" >> "$GITHUB_OUTPUT"
+          fi
       - name: Buildx, for the layer cache
         if: steps.image.outputs.target != ''
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: The dependency layers, written to the Actions cache by one leg per scope
         if: steps.image.outputs.target != '' && (matrix.suite == 'e2e-telemetry' || matrix.suite == 'ort-build')
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
         with:
-          context: .
-          target: ${{ steps.image.outputs.target == 'models' && 'deps-models' || 'deps-all' }}
-          outputs: type=cacheonly
-          cache-from: type=gha,scope=${{ steps.image.outputs.target == 'models' && 'models' || 'battery' }}
-          cache-to: type=gha,mode=max,scope=${{ steps.image.outputs.target == 'models' && 'models' || 'battery' }}
-      - name: The ${{ steps.image.outputs.target }} image this leg runs on
+          source: .
+          files: docker-compose.yml
+          targets: ${{ matrix.suite }}
+          set: |
+            ${{ matrix.suite }}.target=${{ steps.image.outputs.deps }}
+            ${{ matrix.suite }}.output=type=cacheonly
+            ${{ matrix.suite }}.cache-from=type=gha,scope=${{ steps.image.outputs.scope }}
+            ${{ matrix.suite }}.cache-to=type=gha,mode=max,scope=${{ steps.image.outputs.scope }}
+      - name: The image this leg runs on, from its compose service
         if: steps.image.outputs.target != ''
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
         with:
-          context: .
-          target: ${{ steps.image.outputs.target }}
+          source: .
+          files: docker-compose.yml
+          targets: ${{ matrix.suite }}
           load: true
-          tags: undercroft-${{ steps.image.outputs.target }}:ci
-          cache-from: type=gha,scope=${{ steps.image.outputs.target == 'models' && 'models' || 'battery' }}
+          set: |
+            ${{ matrix.suite }}.cache-from=type=gha,scope=${{ steps.image.outputs.scope }}
       # Through `battery.sh`, not `docker compose run` directly. The script
-      # runs the suite, captures its exit code WITHOUT a pipe, and then
+      # runs the suite, takes the suite's OWN exit code — one suite runs
+      # through `tee`, so it reads `${PIPESTATUS[0]}` on the next statement,
+      # never the pipeline's status, which would be tee's — and then
       # compares the suite's MEASURED check count against the figure the agent
       # guide publishes for it (`docs/agent-guide/build-and-test.md`, ROADMAP
       # O436) — a comparison only a RUN can perform, which is why
@@ -315,9 +342,6 @@ jobs:
       - name: ${{ matrix.suite }}
         env:
           BATTERY_PREBUILT: ${{ steps.image.outputs.target != '' && '1' || '0' }}
-          BATTERY_CORE_IMAGE: undercroft-battery-core:ci
-          BATTERY_IMAGE: undercroft-battery:ci
-          BATTERY_MODELS_IMAGE: undercroft-models:ci
         run: bash tests/battery.sh --no-preflight ${{ matrix.suite }}
 
   tls-pins:

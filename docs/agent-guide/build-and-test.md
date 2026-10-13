@@ -483,9 +483,10 @@ rebuilt — ROADMAP O439 has each suite's figure. Now:
   with no expectation it says it compared nothing, and runs.
 * **CI builds, then says so.** `BATTERY_PREBUILT=1` (with
   `BATTERY_CORE_IMAGE`, `BATTERY_IMAGE` and `BATTERY_MODELS_IMAGE`) makes the
-  battery build nothing: CI's legs build and load the image themselves over
-  the Actions layer cache, and the premise is what proves it is the
-  checkout's (`ci-and-release.md`).
+  battery build nothing: CI's legs build and load the image themselves with
+  `docker buildx bake` from the same compose service, over the Actions layer
+  cache, and the premise is what proves it is the checkout's
+  (`ci-and-release.md`).
 
 `tests/tls-pins.sh` got the same proof, and needed it more: it booted engine
 images with `up -d`, which builds only a MISSING tag, and its throwaway
