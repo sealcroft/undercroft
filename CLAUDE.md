@@ -288,7 +288,9 @@ when a count moves.
 `ci-and-release.md`:
 
 - **The exit code is the verdict.** `tests/battery.sh` never parses suite
-  output to decide pass/fail and never pipes a suite; it runs every suite in
+  output to decide pass/fail and never takes a verdict from a pipeline's
+  status (a single or `--serial` suite goes through `tee`, its own status read
+  from `${PIPESTATUS[0]}` on the very next statement); it runs every suite in
   one pass over one tree. Never let a pipeline's tail mask an exit code you
   depend on. Logs land in `.battery/`. Since O439 it builds its images once per
   run from one `builder`, runs the suites side by side on them (`--serial` for

@@ -349,9 +349,12 @@ green while the battery failed on a lint introduced after it. So the script
 never parses suite output to decide pass/fail — **the exit code is the
 verdict** — and it runs every suite in one pass over one tree, which makes "I
 ran it before the last edit" impossible rather than merely discouraged. It
-also handles the `backends-e2e` reset and never pipes a suite (a
-pipeline's status is its LAST command's, which is how `| grep` turns a failing
-suite into a passing one). **That reset is NARROW, and it was not always** —
+also handles the `backends-e2e` reset and never takes a verdict from a
+pipeline's status (a pipeline's status is its LAST command's, which is how
+`| grep` turns a failing suite into a passing one): suites run side by side
+redirect to their logs and are reaped with `wait`, and a single or `--serial`
+suite (every CI leg) goes through `tee` with its own status read from
+`${PIPESTATUS[0]}` on the very next statement (O439). **That reset is NARROW, and it was not always** —
 ROADMAP M12. It was a project-wide teardown carrying the volumes flag and no
 `-p`/`-f`, so it resolved to `docker-compose.yml`'s declared project,
 `undercroft`, which is the DEVELOPER'S OWN — and removed every named volume
