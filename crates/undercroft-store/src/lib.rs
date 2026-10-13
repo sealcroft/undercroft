@@ -38,6 +38,7 @@ mod delete_pause;
 mod delete_tests;
 #[cfg(test)]
 mod destruction_tests;
+mod exact;
 mod fdeidx;
 pub mod forget;
 #[cfg(test)]
@@ -73,16 +74,23 @@ mod restore;
 mod restore_pause;
 #[cfg(test)]
 mod restore_tests;
+mod retag;
+mod retag_pause;
 pub mod retention;
 mod rotate;
 mod rotate_pause;
 #[cfg(test)]
 mod rotation_state_tests;
+pub(crate) mod rows;
 #[cfg(test)]
 mod snapshot_tests;
 #[cfg(test)]
 mod storage_tests;
 mod sweep_pause;
+#[cfg(test)]
+mod tag_walk_tests;
+#[cfg(test)]
+mod transplant_tests;
 #[cfg(test)]
 mod unlock_state_tests;
 #[cfg(test)]
@@ -1015,8 +1023,9 @@ pub(crate) fn is_busy(e: &rusqlite::Error) -> bool {
 /// What an open says when another process holds the vault exclusively.
 pub(crate) const OPEN_HELD: &str =
     "another process holds this vault exclusively — a key rotation, a backup restore, a \
-     vault delete, or another open renaming its pre-1.5.0 palace.db is running. Nothing was \
-     read or written; retry once it finishes (ROADMAP O257, O281, O291)";
+     vault delete, another open switching its row tags to version 2 or checking with \
+     `verify` whether it can, or another open renaming its pre-1.5.0 palace.db is running. \
+     Nothing was read or written; retry once it finishes (ROADMAP O257, O281, O291, O406)";
 
 /// What a refused vault delete says (ROADMAP O291).
 pub(crate) const DELETE_HELD: &str =
@@ -2429,43 +2438,6 @@ pub(crate) fn claimed_site(meta_json: &str) -> (Option<String>, Option<String>) 
     (pick("wing"), pick("room"))
 }
 
-/// A drawer's canonical bytes. The id is taken as BYTES so `verify` can
-/// check a tag over an id that does not decode (ROADMAP O269 item 2) through
-/// this one builder.
-pub(crate) fn canonical(id: impl AsRef<[u8]>, meta_json: &[u8], content_at_rest: &[u8]) -> Vec<u8> {
-    let id = id.as_ref();
-    let mut out = Vec::with_capacity(id.len() + meta_json.len() + content_at_rest.len() + 2);
-    out.extend_from_slice(id);
-    out.push(0x1f);
-    out.extend_from_slice(meta_json);
-    out.push(0x1f);
-    out.extend_from_slice(content_at_rest);
-    out
-}
-
-/// Canonical bytes of a drawer **supersession receipt**: the tamper-covered
-/// binding of a superseding drawer to the verbatim drawer it replaces —
-/// [`kg::receipt_canonical`] one level up, same shape and same reasoning.
-/// Keyed with the vault mac, and the superseding drawer's own id is inside
-/// the binding, so a receipt cannot be moved to a different drawer. The
-/// fingerprint is keyed with the STORED `kg_secret` rather than a vault key
-/// (U12), which keeps it rotation-stable while stopping it being a
-/// confirmation oracle at rest; the *tag* over these bytes is what makes the
-/// citation unforgeable.
-pub(crate) fn supersession_canonical(
-    drawer_id: &str,
-    supersedes_id: &str,
-    source_fp: &[u8],
-) -> Vec<u8> {
-    let mut out = Vec::new();
-    out.extend_from_slice(drawer_id.as_bytes());
-    out.push(0x1f);
-    out.extend_from_slice(supersedes_id.as_bytes());
-    out.push(0x1f);
-    out.extend_from_slice(source_fp);
-    out
-}
-
 /// A page of results together with the two things only the engine can know
 /// about it: whether the ranking held more than this page returned, and how
 /// large the declared scope was.
@@ -3625,7 +3597,7 @@ impl serde::Serialize for BadRecord {
     }
 }
 
-/// The whole verdict, ten legs: record HMACs (with the drawers whose HMAC verifies over covered meta that does not parse, O231, and the rows a column of which no read takes, O269), the chain replay, the label commitment, supersession receipts, fact receipts, orphan labels, mirror drift, policy drift, version replay and storage (O269). Hand-projected on four renderers (`parity::HAND_PROJECTED`), so a new leg must reach all of them.
+/// The whole verdict, twelve legs: record HMACs (with the drawers whose HMAC verifies over covered meta that does not parse, O231, and the rows a column of which no read takes, O269), the chain replay, the label commitment, supersession receipts, fact receipts, orphan labels, mirror drift, policy drift, version replay, storage (O269), and identity and field shapes (O406). Hand-projected on four renderers (`parity::HAND_PROJECTED`), so a new leg must reach all of them.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VerifyReport {
     /// How many records had their HMAC checked.
@@ -3870,6 +3842,36 @@ pub struct VerifyReport {
     /// rows name objects by the names in the file, chosen by whoever wrote it:
     /// renderers print them as text, never as markup, and MCP prints a count.
     pub storage: Vec<String>,
+    /// Rows whose IDENTITY their own fields contradict (ROADMAP O406 item
+    /// 8(a) and (c)): a fact whose id is not the one its decoded subject,
+    /// predicate, object and `valid_from` derive, and one id naming rows in
+    /// two tables — a drawer and a fact, a drawer and an entity, a fact and
+    /// an entity.
+    ///
+    /// **The eleventh leg, and it reads what a moved field boundary moves.**
+    /// A row tag proves a run of bytes, not where each field in it ends, and
+    /// version-1 tags joined their fields by a separator with no lengths, no
+    /// table domain and one key — so a writer WITHOUT the key re-partitioned
+    /// a fact's bytes, or moved a fact's tag onto a drawer row carrying them,
+    /// and every other leg passed: measured, a drawer forged from a fact an
+    /// agent wrote was served by `get` and `recent` under `VERIFY OK` with no
+    /// audit record of its write (`transplant_tests`). The version-2 row
+    /// canonical makes those moves fail their tag; this leg is what sees the
+    /// ones a vault still on version 1 holds, and what withholds the walk
+    /// that would bind them.
+    ///
+    /// Not a rotation blocker (O232's criterion: a rotation keeps the framing,
+    /// so each finding survives it exactly as detectable). Fails `ok()`.
+    pub identity: Vec<String>,
+    /// Covered fields holding a SHAPE no write produces (ROADMAP O406 item
+    /// 8(b)): a drawer id that is not 32 lowercase hex, a receipt's citation
+    /// or a supersession's target that is not a drawer id, an entity
+    /// `created_at` that is not RFC 3339, a `canonical_key` the authority
+    /// tier would refuse, a control byte in a fact's dates or extractor, and
+    /// sealed graph words on an hmac-only vault. Each is where a moved
+    /// boundary lands when it does not move an id. Same rotation answer as
+    /// [`identity`](Self::identity); fails `ok()`.
+    pub shapes: Vec<String>,
 }
 
 impl VerifyReport {
@@ -3885,6 +3887,8 @@ impl VerifyReport {
             && self.policy_drift.is_empty()
             && self.version_replay.is_empty()
             && self.storage.is_empty()
+            && self.identity.is_empty()
+            && self.shapes.is_empty()
     }
 
     /// Supersession links whose keyed receipt failed its HMAC. The other
@@ -3961,6 +3965,12 @@ impl VerifyReport {
             // rotation's own record is the policy boundary, and a whole-vault
             // rewrite over a damaged freelist spreads the damage.
             storage,
+            // ROADMAP O406 item 8: "Rotation blockers: none of (a)–(c) — a
+            // same-framing rotation leaves each exactly as detectable" (O232's
+            // criterion). Each withholds the version-2 walk instead, which
+            // changes the framing: `walk_blockers`.
+            identity: _,
+            shapes: _,
         } = self;
         let tampered = crate::kg::ReceiptVerdict::Tampered;
         let mut out: Vec<String> = bad_records
@@ -4007,6 +4017,40 @@ impl VerifyReport {
         }));
         out.extend(policy_drift.iter().map(|p| format!("policy {p}")));
         out.extend(version_replay.iter().map(|v| format!("version {v}")));
+        out
+    }
+
+    /// What withholds the version-2 row-tag walk — one line per finding
+    /// (ROADMAP O406 item 5: "`rotation_blockers()` plus every exact leg of
+    /// item 8").
+    ///
+    /// **Stricter than a rotation, at O232's own reason.** A rotation keeps
+    /// the framing, so a drawer whose meta/content boundary moved, or a fact
+    /// re-partitioned, is exactly as detectable after it. The walk CHANGES
+    /// the framing: it binds whatever partition the columns hold, and
+    /// destroys the one authenticated recovery version 1 still allows (a
+    /// drawer re-split at its first two 0x1f, a fact re-joined until its id
+    /// matches). So a [`BadReason::MetaUnparseable`] row withholds it too,
+    /// and so does every finding of the identity and shape legs.
+    ///
+    /// **Not `ok()`** (the ruling's lost option): mirror drift, orphan
+    /// labels, a pre-switch label mismatch and an edited or deleted receipt
+    /// source are findings a re-tag cannot worsen — none of them is a column
+    /// the walk binds — and withholding over them would keep an ordinary
+    /// vault on the ambiguous format for good.
+    pub fn walk_blockers(&self) -> Vec<String> {
+        let mut out = self.rotation_blockers();
+        out.extend(
+            self.bad_records
+                .iter()
+                .filter(|b| match b.reason {
+                    BadReason::MetaUnparseable => true,
+                    BadReason::TagFailed | BadReason::Undecodable => false,
+                })
+                .map(|b| format!("record {b}")),
+        );
+        out.extend(self.identity.iter().map(|i| format!("identity {i}")));
+        out.extend(self.shapes.iter().map(|s| format!("shape {s}")));
         out
     }
 }
@@ -4318,6 +4362,14 @@ pub struct VaultStore {
     /// current" about a lag it never got to see. This is how a surface
     /// reports what actually happened rather than what is left to do.
     anchor_at_open: AnchorState,
+    /// **The row-tag format this handle reads and writes** (ROADMAP O406
+    /// item 4): the vault's tag regime, read from its one commitment record
+    /// (`migrate/tag-v2`, by exact label and `MIN(seq)`) when the handle was
+    /// built, and moved only by this handle's own walk. Never re-read per row:
+    /// the walk takes the vault EXCLUSIVELY, so no other process can switch
+    /// the regime while this handle holds a connection to it, and a regime
+    /// read per verified row would be a query per search candidate.
+    row_format: std::cell::Cell<undercroft_vault::RowFormat>,
 }
 
 /// A query's encoded token matrix, keyed by the query text it encodes.
@@ -5881,6 +5933,12 @@ impl VaultStore {
         store.init_kg_schema()?;
         store.init_manage_schema()?;
         store.init_retention_schema()?;
+        // ROADMAP O406 item 6: the manifest and the tag commitment read
+        // together, BEFORE anything heals the anchor.
+        if let Err(e) = store.judge_tag_regime() {
+            Self::close_refused(store.conn);
+            return Err(e);
+        }
         // A refused judgement closes its connection rather than dropping it
         // (O284's convention, O290 item 5; ROADMAP O303 refuses here).
         if let Err(e) = store.init_chain() {
@@ -5909,6 +5967,10 @@ impl VaultStore {
         // relabel `audit` rows, which a commitment written before it would
         // then contradict.
         store.switch_chain_to_v2()?;
+        // After O233's switch, and LAST of the steps that write rows (ROADMAP
+        // O406 item 5): the version-2 row-tag walk, under the vault's
+        // exclusive hold, withheld — never failing the open — on any finding.
+        store.walk_tags_to_v2()?;
         // `check_duplicate` looks a content fingerprint up on EVERY save and
         // every imported record, and `fp` is an ADD COLUMN that never got an
         // index — so that lookup was a full table scan (ROADMAP O139).
@@ -6167,6 +6229,11 @@ impl VaultStore {
         };
         store.refuse_headless_without_table(manifest_first, blind)?;
         store.check_read_schema(manifest_first)?;
+        // ROADMAP O406 items 4, 6 and 12: the tag regime, read now that the
+        // schema is known to be there, and judged against the manifest. A
+        // read-only open never walks; it verifies in the regime it finds.
+        store.adopt_tag_regime(retag::tag_regime(&store.conn)?);
+        store.judge_tag_regime()?;
         store.fts = store.probe_fts_read_only();
         store.check_chain_read_only(manifest_first, blind)?;
         // The legacy-name note is DERIVED from the file the connector opened
@@ -6191,6 +6258,7 @@ impl VaultStore {
         // this open is actually leaving behind.
         store.adopt_open_verdict();
         store.note_unblinded_kg();
+        store.note_pending_walk();
         for note in &store.unhealed {
             undercroft_obs::diag_warn!("read-only open left this unhealed: {note}");
         }
@@ -7216,6 +7284,7 @@ impl VaultStore {
             unhealed: Vec::new(),
             kg_secret: std::cell::RefCell::new(None),
             anchor_at_open: AnchorState::Current,
+            row_format: std::cell::Cell::new(undercroft_vault::RowFormat::V1),
             // Nothing has replayed yet; `reconcile_chain` fills this in only
             // when it does, and only the open consumes it (ROADMAP O251).
             open_verdict: None,
@@ -7223,6 +7292,13 @@ impl VaultStore {
             orphans_swept: false,
             lock_reconnects: 0,
         };
+        let mut store = store;
+        // The tag regime the database records (ROADMAP O406 item 4), read
+        // once here and moved only by this handle's own walk. A connection
+        // that cannot answer yet — no `audit` table — is the version-1 regime.
+        if let Ok(regime) = retag::tag_regime(&store.conn) {
+            store.adopt_tag_regime(regime);
+        }
         Ok(store)
     }
 
@@ -7377,6 +7453,11 @@ impl VaultStore {
     /// open switches it as it would a real legacy vault.
     #[cfg(test)]
     pub(crate) fn unswitch_chain_for_test(&mut self) {
+        // A vault written before O233 was written before ROADMAP O406 too:
+        // its row tags are version 1, it carries no tag commitment, and its
+        // manifest is version 1. The chain is re-stepped below from the rows
+        // left, so the commitment's row goes first.
+        crate::tag_walk_tests::unwalk_for_test(self);
         self.conn
             .execute(
                 "DELETE FROM audit WHERE record_id = ?1",
@@ -8434,7 +8515,12 @@ impl VaultStore {
                         let fp = crate::kg::keyed_content_fp(&self.vault, &secret, &old.content);
                         let receipt = self
                             .vault
-                            .tag(&supersession_canonical(&drawer.id, old_id, &fp))
+                            .row_tag(&rows::supersession(
+                                self.row_format(),
+                                &drawer.id,
+                                old_id,
+                                &fp,
+                            ))
                             .to_vec();
                         (fp, receipt)
                     });
@@ -8467,9 +8553,12 @@ impl VaultStore {
             .vault
             .content_at_rest(&drawer.id, drawer.content.as_bytes());
         let emb_rest = self.vault.embedding_at_rest(&drawer.id, embedding);
-        let tag = self
-            .vault
-            .tag(&canonical(&drawer.id, meta_json.as_bytes(), &content_rest));
+        let tag = self.vault.row_tag(&rows::drawer(
+            self.row_format(),
+            &drawer.id,
+            meta_json.as_bytes(),
+            &content_rest,
+        ));
         let fp = self.fingerprint(&drawer.content);
         let now = OffsetDateTime::now_utc()
             .format(&Rfc3339)
@@ -9044,25 +9133,31 @@ impl VaultStore {
             let content_rest: Vec<u8> = r.get(2)?;
             let emb_rest: Vec<u8> = r.get(3)?;
             let tag: Vec<u8> = r.get(4)?;
-            self.vault
-                .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
-                .map_err(|_| {
-                    undercroft_obs::hmac_verify_failed("drawer");
-                    // M6: point the alarm at a row rather than at the whole
-                    // palace. Everything here is what the FAILING row claims
-                    // about itself and travels marked unverified.
-                    let (w, r) = claimed_site(&meta_json);
-                    undercroft_obs::event_hmac_fail(
-                        self.vault.id(),
-                        "drawer",
-                        undercroft_obs::TamperSite {
-                            id: Some(&id),
-                            wing: w.as_deref(),
-                            room: r.as_deref(),
-                        },
-                    );
-                    StoreError::Integrity(id.clone())
-                })?;
+            rows::verify_drawer(
+                &self.vault,
+                self.row_format(),
+                &id,
+                meta_json.as_bytes(),
+                &content_rest,
+                &tag,
+            )
+            .map_err(|_| {
+                undercroft_obs::hmac_verify_failed("drawer");
+                // M6: point the alarm at a row rather than at the whole
+                // palace. Everything here is what the FAILING row claims
+                // about itself and travels marked unverified.
+                let (w, r) = claimed_site(&meta_json);
+                undercroft_obs::event_hmac_fail(
+                    self.vault.id(),
+                    "drawer",
+                    undercroft_obs::TamperSite {
+                        id: Some(&id),
+                        wing: w.as_deref(),
+                        room: r.as_deref(),
+                    },
+                );
+                StoreError::Integrity(id.clone())
+            })?;
             let drawer = self.decode(&id, &meta_json, &content_rest)?;
             let emb = self
                 .vault
@@ -9526,25 +9621,31 @@ impl VaultStore {
         match row {
             None => Ok(None),
             Some((id, meta_json, content_rest, tag)) => {
-                self.vault
-                    .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
-                    .map_err(|_| {
-                        undercroft_obs::hmac_verify_failed("drawer");
-                        // M6: point the alarm at a row rather than at the whole
-                        // palace. Everything here is what the FAILING row claims
-                        // about itself and travels marked unverified.
-                        let (w, r) = claimed_site(&meta_json);
-                        undercroft_obs::event_hmac_fail(
-                            self.vault.id(),
-                            "drawer",
-                            undercroft_obs::TamperSite {
-                                id: Some(&id),
-                                wing: w.as_deref(),
-                                room: r.as_deref(),
-                            },
-                        );
-                        StoreError::Integrity(id.clone())
-                    })?;
+                rows::verify_drawer(
+                    &self.vault,
+                    self.row_format(),
+                    &id,
+                    meta_json.as_bytes(),
+                    &content_rest,
+                    &tag,
+                )
+                .map_err(|_| {
+                    undercroft_obs::hmac_verify_failed("drawer");
+                    // M6: point the alarm at a row rather than at the whole
+                    // palace. Everything here is what the FAILING row claims
+                    // about itself and travels marked unverified.
+                    let (w, r) = claimed_site(&meta_json);
+                    undercroft_obs::event_hmac_fail(
+                        self.vault.id(),
+                        "drawer",
+                        undercroft_obs::TamperSite {
+                            id: Some(&id),
+                            wing: w.as_deref(),
+                            room: r.as_deref(),
+                        },
+                    );
+                    StoreError::Integrity(id.clone())
+                })?;
                 Ok(Some(self.decode(&id, &meta_json, &content_rest)?))
             }
         }
@@ -9691,25 +9792,31 @@ impl VaultStore {
             self.refuse_replayed(snap, crate::replay::Consulted::Drawers, Some(&consulted))?;
         }
         for (id, meta_json, content_rest, tag) in rows {
-            self.vault
-                .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
-                .map_err(|_| {
-                    undercroft_obs::hmac_verify_failed("drawer");
-                    // M6: point the alarm at a row rather than at the whole
-                    // palace. Everything here is what the FAILING row claims
-                    // about itself and travels marked unverified.
-                    let (w, r) = claimed_site(&meta_json);
-                    undercroft_obs::event_hmac_fail(
-                        self.vault.id(),
-                        "drawer",
-                        undercroft_obs::TamperSite {
-                            id: Some(&id),
-                            wing: w.as_deref(),
-                            room: r.as_deref(),
-                        },
-                    );
-                    StoreError::Integrity(id.clone())
-                })?;
+            rows::verify_drawer(
+                &self.vault,
+                self.row_format(),
+                &id,
+                meta_json.as_bytes(),
+                &content_rest,
+                &tag,
+            )
+            .map_err(|_| {
+                undercroft_obs::hmac_verify_failed("drawer");
+                // M6: point the alarm at a row rather than at the whole
+                // palace. Everything here is what the FAILING row claims
+                // about itself and travels marked unverified.
+                let (w, r) = claimed_site(&meta_json);
+                undercroft_obs::event_hmac_fail(
+                    self.vault.id(),
+                    "drawer",
+                    undercroft_obs::TamperSite {
+                        id: Some(&id),
+                        wing: w.as_deref(),
+                        room: r.as_deref(),
+                    },
+                );
+                StoreError::Integrity(id.clone())
+            })?;
             let drawer = self.decode(&id, &meta_json, &content_rest)?;
             // A28, and this read matters most of the three: `recent` is what
             // `wake_up` and the closet index call — the two surfaces whose
@@ -10385,6 +10492,7 @@ impl VaultStore {
         };
         use rayon::prelude::*;
         let vault = &self.vault;
+        let fmt = self.row_format();
         let legacy = self.fusion == Fusion::Legacy;
         let sem_floor = self.sem_floor;
         let qv = &qvec;
@@ -10392,8 +10500,7 @@ impl VaultStore {
             .into_par_iter()
             .zip(cached_embs.into_par_iter())
             .map(|((id, meta_json, content_rest, emb_rest, tag), cached)| {
-                vault
-                    .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
+                rows::verify_drawer(vault, fmt, &id, meta_json.as_bytes(), &content_rest, &tag)
                     .map_err(|_| {
                         undercroft_obs::hmac_verify_failed("drawer");
                         // M6: point the alarm at a row rather than at the whole
@@ -11614,7 +11721,7 @@ impl VaultStore {
             value_bytes(&tag_v),
         ) {
             (Some(i), Some(m), Some(c), Some(t)) => {
-                self.vault.verify_tag(&canonical(i, m, c), t).is_ok()
+                rows::verify_drawer(&self.vault, self.row_format(), i, m, c, t).is_ok()
             }
             _ => false,
         };
@@ -11641,11 +11748,19 @@ impl VaultStore {
             });
         }
         let meta_json = text_of(&meta_v).unwrap_or_default();
-        // The tag verified, so `meta_json` is authentic — which makes any
-        // disagreement with a mirror column an offline edit of the
-        // mirror. Reported separately from a tag failure: the record
-        // itself is intact, and calling it a corrupt record would
-        // misname what happened.
+        // The tag verified over this row's id, meta and content, so on a
+        // version-2 vault `meta_json` is authentic — which makes any
+        // disagreement with a mirror column an offline edit of the mirror.
+        // Reported separately from a tag failure: the record itself is
+        // intact, and calling it a corrupt record would misname what
+        // happened. **On a version-1 vault a verified tag proves the bytes
+        // and not where `meta_json` ends** (ROADMAP O406): a keyless writer
+        // can move the meta/content boundary, which leaves `meta_json`
+        // unparseable (below, O231) or not UTF-8 (above, O269), and can carry
+        // a fact's or an entity's tag onto a drawer row whose meta DOES
+        // parse — the identity leg names that one, and the walk to version 2
+        // makes every such move fail its tag. This comment said "the tag
+        // verified, so `meta_json` is authentic" until O406.
         let Ok(meta) = serde_json::from_str::<undercroft_core::DrawerMeta>(meta_json) else {
             return Ok(CoveredRow::MetaUnparseable {
                 id,
@@ -11713,7 +11828,9 @@ impl VaultStore {
     /// the covered meta, re-tag every declared policy row, and match every
     /// tagged row to the chain record that last wrote it, and — FIRST —
     /// check the file those rows live in with SQLite's `integrity_check`
-    /// (`storage`, ROADMAP O269). **All TEN legs
+    /// (`storage`, ROADMAP O269), and name what a moved field boundary or a
+    /// tag carried between tables moves (`identity`, `shapes`, ROADMAP O406).
+    /// **All TWELVE legs
     /// are in the one report** — it was three until 2026-08-06, and each
     /// addition is there because it covers a mutation the others structurally
     /// cannot see (`label_commitment`: the labels a chain held when it
@@ -11843,11 +11960,20 @@ impl VaultStore {
             mirror_drift.clear();
             checked = 0;
         }
-        // Knowledge-graph and tunnel rows are integrity-tagged too.
-        let graph = (|| -> Result<_, StoreError> { Ok((self.kg_count()?, self.kg_verify()?)) })();
-        if let Some((n, rows)) = leg(&mut storage, "the graph walk", graph)? {
+        // Knowledge-graph and tunnel rows are integrity-tagged too — and the
+        // graph walk carries ROADMAP O406's exact legs over every row whose
+        // tag verified: the fact's id re-derived (item 8(a)), the shapes of
+        // its covered fields (8(b)), and a sealed field that does not open
+        // under its own AAD, which is O269's arm (8(d)).
+        let mut identity = Vec::new();
+        let mut shapes = Vec::new();
+        let graph =
+            (|| -> Result<_, StoreError> { Ok((self.kg_count()?, self.kg_verify_full()?)) })();
+        if let Some((n, verdict)) = leg(&mut storage, "the graph walk", graph)? {
             checked += n;
-            bad.extend(rows);
+            bad.extend(verdict.bad);
+            identity.extend(verdict.identity);
+            shapes.extend(verdict.shapes);
         }
         let tunnels =
             (|| -> Result<_, StoreError> { Ok((self.tunnel_count()?, self.tunnels_verify()?)) })();
@@ -11954,6 +12080,27 @@ impl VaultStore {
         )?
         .unwrap_or_default();
 
+        // ── The eleventh and twelfth legs (ROADMAP O406 item 8): what a
+        // field boundary moved, or a tag moved between tables, moves — the
+        // graph's half rode the graph walk above; these are the drawers'
+        // shapes and one id in two tables, each an indexed statement.
+        let drawer_shapes = leg(
+            &mut storage,
+            "the drawer shape leg",
+            self.drawer_shapes_in(snap, &named),
+        )?
+        .unwrap_or_default();
+        shapes.extend(drawer_shapes);
+        shapes.sort();
+        let cross = leg(
+            &mut storage,
+            "the cross-table identity leg",
+            self.cross_table_ids_in(snap),
+        )?
+        .unwrap_or_default();
+        identity.extend(cross);
+        identity.sort();
+
         Ok(VerifyReport {
             records_checked: checked,
             bad_records: bad,
@@ -11966,6 +12113,8 @@ impl VaultStore {
             policy_drift,
             version_replay,
             storage,
+            identity,
+            shapes,
         })
     }
 
@@ -12244,25 +12393,31 @@ impl VaultStore {
             let meta_json: String = r.get(1)?;
             let content_rest: Vec<u8> = r.get(2)?;
             let tag: Vec<u8> = r.get(3)?;
-            self.vault
-                .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
-                .map_err(|_| {
-                    undercroft_obs::hmac_verify_failed("drawer");
-                    // M6: point the alarm at a row rather than at the whole
-                    // palace. Everything here is what the FAILING row claims
-                    // about itself and travels marked unverified.
-                    let (w, r) = claimed_site(&meta_json);
-                    undercroft_obs::event_hmac_fail(
-                        self.vault.id(),
-                        "drawer",
-                        undercroft_obs::TamperSite {
-                            id: Some(&id),
-                            wing: w.as_deref(),
-                            room: r.as_deref(),
-                        },
-                    );
-                    StoreError::Integrity(id.clone())
-                })?;
+            rows::verify_drawer(
+                &self.vault,
+                self.row_format(),
+                &id,
+                meta_json.as_bytes(),
+                &content_rest,
+                &tag,
+            )
+            .map_err(|_| {
+                undercroft_obs::hmac_verify_failed("drawer");
+                // M6: point the alarm at a row rather than at the whole
+                // palace. Everything here is what the FAILING row claims
+                // about itself and travels marked unverified.
+                let (w, r) = claimed_site(&meta_json);
+                undercroft_obs::event_hmac_fail(
+                    self.vault.id(),
+                    "drawer",
+                    undercroft_obs::TamperSite {
+                        id: Some(&id),
+                        wing: w.as_deref(),
+                        room: r.as_deref(),
+                    },
+                );
+                StoreError::Integrity(id.clone())
+            })?;
             f(self.decode(&id, &meta_json, &content_rest)?)?;
         }
         Ok(())
@@ -16806,9 +16961,10 @@ mod tests {
         // Simulate a crash between transaction commit and manifest anchor:
         // the database holds three chained writes, the manifest only saw
         // the first (and the chain's `migrate/chain-v2` commitment before
-        // it, ROADMAP O233 — hence 2 and 4 below, not 1 and 3). A power loss
-        // must NOT read as tampering.
-        undercroft_vault::fixture::write_anchor_unchecked(&mut s.vault, &old_head, 2).unwrap();
+        // it, ROADMAP O233, and the row-tag walk's `migrate/tag-v2`, O406 —
+        // hence 3 and 5 below, not 1 and 3). A power loss must NOT read as
+        // tampering.
+        undercroft_vault::fixture::write_anchor_unchecked(&mut s.vault, &old_head, 3).unwrap();
         assert!(
             s.verify().unwrap().chain_ok,
             "a behind-anchor (crash artifact) must not fail verification"
@@ -16819,7 +16975,7 @@ mod tests {
         // head and the vault is fully healthy again.
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
-        assert_eq!(s.vault.writes(), 4, "anchor fast-forwarded");
+        assert_eq!(s.vault.writes(), 5, "anchor fast-forwarded");
         let db_head = chain::require_head(&s.conn).unwrap().head;
         assert_eq!(s.vault.chain_head_hex(), db_head);
         assert!(s.verify().unwrap().chain_ok);
@@ -18468,9 +18624,12 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        let tag = s
-            .vault
-            .tag(&canonical(&qid, meta_json.as_bytes(), &content_rest));
+        let tag = s.vault.row_tag(&crate::rows::drawer(
+            s.row_format(),
+            &qid,
+            meta_json.as_bytes(),
+            &content_rest,
+        ));
         s.conn
             .execute(
                 "UPDATE drawers SET meta_json = ?1, tag = ?2, supersedes = ?3 WHERE id = ?4",

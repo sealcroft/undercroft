@@ -2,9 +2,9 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and fifty-eight fixes. The witness
+MINOR: one new capability, backward compatible, and sixty fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Eighteen fixes change what a deployment must do: every process writing a
+start-up. Nineteen fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
@@ -36,7 +36,9 @@ nothing has written yet exits 1, a `/v1` 409 with no class, where it exited 2 wi
 `class: "integrity"`, so an alert keyed on exit 2 stops firing for it (O213); `verify` checks the database file itself, so a vault
 with index damage, or a file that does not hold together, which the previous binary
 verified or answered with exit 1, now exits 2 and stops `backup create` and
-`vault rotate` (O269); and a native
+`vault rotate` (O269); a vault this release has opened writable is refused by 1.6.1 as too new
+and by 1.6.0 or older as `ManifestTampered`, so read-only replicas upgrade with or before the writer,
+and `kg add` and `undercroft_kg_add` refuse an empty or control-character date (O406); and a native
 source build uses the Rust 1.98.1 that `rust-toolchain.toml` pins, fetching it the first
 time, and does not compile on a standard library of another Unicode version (O294) — all in
 `UPGRADING.md`, beside O279's note that a filesystem whose inode numbers are not
@@ -64,13 +66,15 @@ O236 and O262 — "thirty-nine" until O231, and "forty" until the units of O273,
 which closed five — O273, O301, O211, O210 and O321, "forty-five" until O259's unit closed O259 and
 O260, "forty-seven" until train 3's integration, which closed six — O221, O226, O315, O308,
 O213 and O322 — and "fifty-three" until O294's unit joined that train and closed three —
-O294, O326 and O327, and "fifty-six" until O269's unit closed two — O269 and
-O427 — beside O421, which sits open under this heading;
+O294, O326 and O327, "fifty-six" until O269's unit closed two — O269 and
+O427 — and "fifty-eight" until O406's unit closed two — O406 and O419 — beside O421, which sits
+open under this heading;
 it said "Three fixes change what a deployment must do" until O283 made
 it four, "Four" until O291 made it five, "Five" until O212 made it six, "Six"
 until O287 made it seven, "Seven" until train 1 made it nine (O200, O262), "Nine" until O231 made it ten, "Ten" until those units made it fourteen (O273, O301,
 O321, O210), "Fourteen" until train 3's integration made it sixteen (O315, O213), "Sixteen" until
-O294 made it seventeen, and "Seventeen" until O269 made it eighteen, O221's
+O294 made it seventeen, "Seventeen" until O269 made it eighteen, and "Eighteen" until O406 made
+it nineteen, O221's
 entry joining the notes beside it — every answer it moves is on a queue an offline writer
 touched, and its cost is the kind O255's note records — and O308's amending O303's there;
 O322 moves only what a refusal's message says. O303's
@@ -2797,6 +2801,60 @@ the maintainer's of 2026-10-08 (exit 1's "an unreadable vault" means unreachable
 file's bytes). `UPGRADING.md` carries the entry: a vault with such damage, which the previous binary
 verified, now fails `verify` and stops `backup create` and `vault rotate`; `config check` opens no vault
 database, and the new binary's `verify --read-only` is the pre-flight.
+
+### Row tags have one reading: a table-domained, length-prefixed canonical under a key of their own (O406, O419)
+
+Every row tag — drawers, supersession receipts, facts, fact receipts, entities, tunnels, trust and
+retention policies, the mirror marker — was an HMAC over its fields joined by a separator byte, with no
+lengths, no table domain and one key, an absent field written as an empty one. A tag proves a run of bytes,
+not where each field ends, so a writer WITHOUT the key could move a field boundary inside a row, or carry
+one table's row and tag onto another's, and the tag still verified. Measured before this release: on an
+hmac-only vault a fact whose subject an agent chose over MCP, its row and tag inserted into `drawers` under
+the fact's id, verified clean (`VERIFY OK`), was returned by `get` and `wake_up`, and left no audit record of
+its write; an approved canonical fact flipped from no `valid_to` to an empty one kept its tag and stopped
+being the canonical answer.
+
+- **A version-2 row canonical** — `undercroft.row.v2/<table>` first, every required field u64-length-
+  prefixed, every optional field a numbered TLV where absent is not empty, every value as the database
+  returns it (`-0.0` as `+0.0`) — under a sixth HKDF subkey, `row`. `Vault::tag` and the `mac` key are
+  unchanged for the record-only canonicals, so every erasure receipt still replays `Verified`.
+- **One switch per vault, at its first writable open under this release**, after `verify` finds nothing
+  the re-tag would bind (any finding or error withholds it, and says why on `unhealed`; so does another
+  process holding the vault, a staged `vault.json.next`, or a pending A10 or U12 migration). It raises
+  `vault.json` to version 2 — the fence 1.6.1 shipped (O238) — then re-tags every row and appends one
+  `migrate/tag-v2` commitment in one transaction, the rotation's own re-tag. A read-only open never walks.
+  From then on a version-1 tag is refused, a rotation re-tags in version 2, and one boundary — the later of
+  the last rotation and the commitment — feeds the version check and both policy scans.
+- **Two new `verify` legs, `identity` and `field shapes`**, on the CLI, MCP, `/v1` (`identity`, `shapes`)
+  and the console: a fact whose id its own words do not derive (the fact read doors refuse it too), one id
+  naming rows in two tables, and a covered field of a shape no write produces. They name the moves the old
+  format admits on a vault that has not switched, fail `ok()` — they found nothing on any real corpus,
+  written by 1.6.0, 1.6.1 or a build older than A10 — block no rotation, and withhold the switch. A sealed
+  fact or entity field that does not open is O269's `UNREADABLE`.
+- **`kg add` and `undercroft_kg_add` refuse an empty `valid_from` or `valid_to` and one holding a control
+  character**; an absent bound is the open window it always was, and `refine` writes a fact open where its
+  note's own date would be refused. A re-add or an import now stores the `valid_from` its tag covers,
+  and a `-0.0` confidence is stored and tagged as the `+0.0` the database reads back, so it no longer
+  fails its own tag — on a vault not yet switched, a walk blocker an MCP agent could write (O419).
+
+Measured on the LoCoMo feed mined into 64 wings by 1.6.1 (5,445 records), one contended run per level: the
+switching open took 858 ms sealed and 966 ms hmac-only against a rotation's 1,349 and 821 ms, the database
+file did not grow, the next open took 74 and 48 ms, and `verify` stayed `VERIFY OK` on every leg. P15f at
+~10⁵ is owed (O437). Gates: 25 tests — the transplant (P15i) on both levels, red before the legs; the walk on every tagged
+table at both levels with every reader after it; withheld over each moved row and beside a holder; the crash
+after the raise; a version-1 manifest beside the commitment; a receipt and a witness from before the walk;
+the encoder over every byte value; ids and labels byte-identical and every tag changed across the walk — and
+eleven `e2e` checks, O231's moved onto a vault a reader keeps on version-1 tags; counterfactuals for the boundary withheld from the policy scans, the walk without its
+verify-first and version 2 inside `Vault::tag` each turn a test red. Released 1.6.0 and 1.6.1, built from
+their tags, refuse a walked vault before any byte moves, a deferred promote and the crash after the raise
+included; raising after the COMMIT instead — the order the ruling rejected — let both write.
+
+PATCH inside the unreleased 1.7.0, by O406's ruling on O233's precedent. `UPGRADING.md` carries four
+entries: older binaries refuse a vault this release has opened writable (upgrade read-only replicas with or
+before the writer; the way back is a pre-upgrade backup or an export imported by the older build); the
+refused fact dates; the switch withheld while a finding stands or another process holds the vault; and the
+switching open's one-time cost. `config check` cannot see a pending switch; `verify --read-only` with this
+release is the pre-flight.
 
 ### The agent guide is split: `CLAUDE.md` is a core, and the rest is verbatim under `docs/agent-guide/` (O436)
 

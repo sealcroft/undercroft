@@ -2733,10 +2733,18 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
         0,
         "a truncating create"
     );
+    // ROADMAP O406 added the fifth writer: the version-2 walk's raise of
+    // `vault.json`, made under the vault's exclusive hold and through the
+    // anchor's own checks, BEFORE the transaction that re-tags the rows.
     assert_eq!(
         vault.matches("write_manifest_file(").count(),
-        5,
-        "one def + four writers: create, staging, anchor, promote"
+        6,
+        "one def + five writers: create, staging, anchor, the version raise, promote"
+    );
+    assert!(
+        method("raise_manifest_version").contains("write_manifest_file(")
+            && method("raise_manifest_version").contains("verified_disk_manifest("),
+        "the raise reads and MAC-checks the manifest on disk before it writes"
     );
     // Three deletions, each of a file the vault crate can name as its own: a
     // failed write's own temp, an orphan temp under the lock, and a staged

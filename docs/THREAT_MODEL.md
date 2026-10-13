@@ -192,7 +192,17 @@ chain replay, the label guard) are what stand against it.
 **Defense (shipped)**: tamper is **detected on read, not merely
 resisted**. Any record, KG triple, or tunnel that fails its HMAC
 surfaces immediately — a read returns an integrity error, never partial
-data. `undercroft verify` audits everything. The audit chain advances
+data. `undercroft verify` audits everything. **What a tag covers is a run
+of bytes, and since 1.7.0 that run has one reading** (ROADMAP O406): every
+row tag is over a table-domained, length-prefixed canonical under its own
+HKDF subkey, so a writer WITHOUT the key can no longer move a field
+boundary inside a row, or carry one table's row and tag onto another's,
+under a tag that still verifies — both were possible over the
+separator-joined version-1 canonicals, and a drawer forged from a fact an
+agent wrote was served by `get` and `wake_up` under `VERIFY OK`. A vault
+moves to the new format once, at its first writable open, after `verify`
+passes every leg the re-tag would bind; until then `verify`'s identity and
+shape legs name the moves the old format admits, and the walk withholds. The audit chain advances
 transactionally with each write (`chain_meta` + `chain_append` in the
 same SQLite transaction), and the manifest holds a lagging, MAC'd
 rollback anchor reconciled at every open: an anchor *behind* the
@@ -365,7 +375,7 @@ itself with SQLite's full `integrity_check`, walks every record's HMAC,
 replays the whole
 audit chain, checks every supersession receipt, checks every
 knowledge-graph fact receipt, resolves every graph and drawer audit
-label, compares four of the five mirror columns (`wing`, `room`, `kind`, `supersedes`; `filed_at` is deliberately excluded — the column takes the write path's own clock while the covered field was stamped at construction, so they differ by a clock read in normal operation and checking it reported healthy vaults as tampered) against the covered meta, checks every wing-trust and retention row against the chain record that assigned it in both directions — a row that does not verify or was never recorded, and a recorded assignment whose row is gone with no later clear — and matches every drawer, fact, entity and tunnel row against the chain record that last wrote it, so an older version written back offline, or a row present after its recorded destruction, is a finding (**ten** legs since 1.7.0, when O269 added the storage leg — an
+label, compares four of the five mirror columns (`wing`, `room`, `kind`, `supersedes`; `filed_at` is deliberately excluded — the column takes the write path's own clock while the covered field was stamped at construction, so they differ by a clock read in normal operation and checking it reported healthy vaults as tampered) against the covered meta, checks every wing-trust and retention row against the chain record that assigned it in both directions — a row that does not verify or was never recorded, and a recorded assignment whose row is gone with no later clear — and matches every drawer, fact, entity and tunnel row against the chain record that last wrote it, so an older version written back offline, or a row present after its recorded destruction, is a finding, and re-derives every fact's id from its words and names one id in two tables or a covered field of a shape no write produces (**twelve** legs since O406 added identity and field shapes — the moves a separator-joined row canonical admitted under a tag that still verified; **ten** from O269, both in 1.7.0, when O269 added the storage leg — an
 index page flipped offline passed every row leg while hiding rows from every read
 that finds one through it; **nine**
 from 1.6.0, when O233 added the label commitment and O234 the version check; seven from 1.3.0, when O94

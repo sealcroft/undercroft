@@ -54,11 +54,6 @@ const PUSHED_EMBEDDER_TAG: &str = "index_pushed_embedder_tag";
 /// [`PUSHED_EMBEDDER_TAG`], for the rotation that re-keys it.
 pub(crate) const PUSHED_EMBEDDER_TAG_KEY: &str = PUSHED_EMBEDDER_TAG;
 
-/// The canonical the marker's tag covers.
-pub(crate) fn pushed_embedder_canonical(name: &str) -> Vec<u8> {
-    format!("indexpushed\x1f{name}").into_bytes()
-}
-
 /// What the mirror's staleness marker says once it has been judged
 /// (ROADMAP O237).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -447,7 +442,7 @@ impl VaultStore {
     /// die together, while an orphaned tag is what makes the deletion of the
     /// value itself an integrity failure. The tag costs one HMAC per push
     /// and one per read, and it is re-keyed by a rotation like every other.
-    fn record_pushed_embedder(&self) -> Result<(), StoreError> {
+    pub(crate) fn record_pushed_embedder(&self) -> Result<(), StoreError> {
         let name = self.embedder.model_name().to_string();
         let tx = self.conn.unchecked_transaction()?;
         let mut up = tx.prepare(
@@ -457,7 +452,10 @@ impl VaultStore {
         up.execute(params![PUSHED_EMBEDDER, name])?;
         up.execute(params![
             PUSHED_EMBEDDER_TAG,
-            hex::encode(self.vault.tag(&pushed_embedder_canonical(&name)))
+            hex::encode(
+                self.vault
+                    .row_tag(&crate::rows::pushed_embedder(self.row_format(), &name)),
+            )
         ])?;
         drop(up);
         tx.commit()?;
@@ -483,10 +481,10 @@ impl VaultStore {
             (Some(name), None) => PushedMarker::Legacy(name),
             (Some(name), Some(tag)) => {
                 let bytes = hex::decode(&tag).unwrap_or_default();
-                match self
-                    .vault
-                    .verify_tag(&pushed_embedder_canonical(&name), &bytes)
-                {
+                match self.vault.verify_row_tag(
+                    &crate::rows::pushed_embedder(self.row_format(), &name),
+                    &bytes,
+                ) {
                     Ok(()) => PushedMarker::Recorded(name),
                     Err(_) => PushedMarker::Tampered,
                 }

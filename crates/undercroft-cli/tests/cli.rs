@@ -4899,3 +4899,86 @@ fn o213_o308_a_fresh_vault_and_a_deleted_database_on_every_surface() {
         );
     }
 }
+
+/// **ROADMAP O406, through the surface an operator drives.** A fresh vault is
+/// switched to the version-2 row tags at its first writable open — its
+/// manifest is version 2 — and a fact's tag carried onto a drawer row with no
+/// key (P15i: the subject is a `DrawerMeta` JSON an agent chose) fails
+/// `verify` by name: exit 2, the drawer under `TAMPERED:`, the shared id under
+/// `IDENTITY:`, and `drawer get` refuses it. Before O406 it answered `VERIFY
+/// OK` and was served. And an empty validity bound is refused at `kg add`.
+#[test]
+fn o406_a_tag_carried_between_tables_fails_verify_through_the_cli() {
+    const META: &str = r#"{"wing":"w","room":"r","chunk_index":0,"added_by":"mine","filed_at":"x","normalize_version":2,"id_recipe":"v"}"#;
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["vault", "create", "v", "--level", "hmac-only"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["remember", "an ordinary note", "--vault", "v"])
+        .assert()
+        .success();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.path().join("vaults/v/vault.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["version"], 2, "the first writable open walked");
+    cmd(&home)
+        .args([
+            "kg",
+            "add",
+            META,
+            "p",
+            "INJECTED",
+            "--confidence",
+            "0",
+            "--vault",
+            "v",
+        ])
+        .assert()
+        .success();
+    let db = home.path().join("vaults/v/vault.db");
+    let c = rusqlite::Connection::open(&db).unwrap();
+    let (id, tag, object): (String, Vec<u8>, Vec<u8>) = c
+        .query_row(
+            "SELECT id, tag, object FROM kg_triples WHERE predicate = 'p'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    let mut content = b"p\x1f\x1f\x1f".to_vec();
+    content.extend_from_slice(&0.0f64.to_le_bytes());
+    content.push(0x1f);
+    content.extend_from_slice(&object);
+    let embedding: Vec<u8> = c
+        .query_row("SELECT embedding FROM drawers LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    c.execute(
+        "INSERT INTO drawers (id, wing, room, meta_json, content, embedding, tag, filed_at, \
+                              updated_at) VALUES (?1, 'w', 'r', ?2, ?3, ?4, ?5, 'x', 'x')",
+        rusqlite::params![id, META, content, embedding, tag],
+    )
+    .unwrap();
+    drop(c);
+    cmd(&home)
+        .args(["verify", "--vault", "v"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(format!("TAMPERED: {id}")))
+        .stdout(predicate::str::contains(format!(
+            "IDENTITY: {id}: one id names a drawer"
+        )))
+        .stdout(predicate::str::contains("VERIFY FAILED"));
+    cmd(&home)
+        .args(["drawer", "get", &id, "--vault", "v"])
+        .assert()
+        .failure();
+    cmd(&home)
+        .args(["kg", "add", "s", "p", "o", "--to", "", "--vault", "v"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "empty or holds a control character",
+        ));
+}

@@ -32,9 +32,9 @@
 //! candidate is re-verified and decrypted locally.
 
 use rusqlite::{params, OptionalExtension};
-use undercroft_vault::Vault;
+use undercroft_vault::{RowFormat, Vault};
 
-use crate::{canonical, StoreError, VaultStore};
+use crate::{rows, StoreError, VaultStore};
 
 /// What one rotation re-sealed / re-tagged.
 #[derive(Debug, Default, serde::Serialize)]
@@ -256,392 +256,21 @@ impl VaultStore {
 
         // ---- Phase 1: transform in memory (old keys → new keys) ----
 
-        // drawers: content / embedding re-sealed, tag over the new at-rest
-        // bytes, keyed fingerprint recomputed from the plaintext.
-        struct DrawerUpd {
-            seq: i64,
-            content: Vec<u8>,
-            emb: Vec<u8>,
-            tag: Vec<u8>,
-            fp: Option<Vec<u8>>,
-            /// Re-keyed supersession receipt, `None` for the (near-total)
-            /// majority of drawers that supersede nothing.
-            sup_receipt: Option<Vec<u8>>,
-        }
-        let mut drawer_upds = Vec::new();
-        {
-            let mut stmt = self.conn.prepare(
-                "SELECT seq, id, meta_json, content, embedding, fp, \
-                        supersedes, supersedes_fp, supersedes_receipt \
-                 FROM drawers ORDER BY seq",
-            )?;
-            let rows = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, Vec<u8>>(3)?,
-                    r.get::<_, Vec<u8>>(4)?,
-                    r.get::<_, Option<Vec<u8>>>(5)?,
-                    (
-                        r.get::<_, Option<String>>(6)?,
-                        r.get::<_, Option<Vec<u8>>>(7)?,
-                        r.get::<_, Option<Vec<u8>>>(8)?,
-                    ),
-                ))
-            })?;
-            for row in rows {
-                let (seq, id, meta_json, content, emb, fp, sup3) = row?;
-                let new_content = self.vault.reseal_at_rest(&next, &id, &content)?;
-                let new_emb = self
-                    .vault
-                    .reseal_at_rest(&next, &format!("{id}/emb"), &emb)?;
-                let tag = next
-                    .tag(&canonical(&id, meta_json.as_bytes(), &new_content))
-                    .to_vec();
-                let fp = match fp {
-                    Some(_) => {
-                        let plain = self.vault.content_from_rest(&id, &content)?;
-                        let text = String::from_utf8(plain).map_err(|_| {
-                            StoreError::Invalid(format!("drawer {id} content is not UTF-8"))
-                        })?;
-                        // The lookup's own recipe under the next key — over
-                        // `match_key(text)`, never the raw bytes. A second
-                        // copy of the recipe lived here over the raw bytes,
-                        // so a rotated vault stopped finding any duplicate
-                        // whose content was not already NFC (ROADMAP O116).
-                        Some(crate::manage::fingerprint_with(&next, &text))
-                    }
-                    None => None,
-                };
-                // Re-key the supersession receipt when present — unchanged
-                // canonical (drawer id + superseded id + the fingerprint,
-                // which is keyed with the STORED secret and therefore does
-                // not move here), new mac key: the kg receipt re-key one
-                // level up. An unreceipted link stays unreceipted.
-                let sup_receipt = match &sup3 {
-                    (Some(old_id), Some(sup_fp), Some(_)) => Some(
-                        next.tag(&crate::supersession_canonical(&id, old_id, sup_fp))
-                            .to_vec(),
-                    ),
-                    _ => None,
-                };
-                drawer_upds.push(DrawerUpd {
-                    seq,
-                    content: new_content,
-                    emb: new_emb,
-                    tag,
-                    fp,
-                    sup_receipt,
-                });
-            }
-        }
-        report.drawers = drawer_upds.len();
-
-        // kg entities: tag over the stored fields, and the sealed NAME
-        // re-sealed like every other blob.
-        //
-        // That second half was missing for one commit and the e2e caught
-        // it, not the unit tests: `name_rest` is sealed under the enc key,
-        // rotation replaces the enc key, and nothing re-sealed it — so the
-        // first rotation after A10 left every entity name undecryptable and
-        // `export`, `kg entities` and `kg query` all failed on the row. The
-        // triples' `terms` blob one block down had been handled; its
-        // neighbour had not. Any future sealed column needs a line here,
-        // which is exactly why rotation's contract is byte-exact reseal of
-        // *every* artifact rather than most of them.
-        let mut entity_upds: Vec<(String, Vec<u8>, Option<Vec<u8>>)> = Vec::new();
-        {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT id, name, etype, created_at, name_rest FROM kg_entities")?;
-            let rows = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, Option<Vec<u8>>>(4)?,
-                ))
-            })?;
-            for row in rows {
-                let (id, name, etype, created, name_rest) = row?;
-                // The AAD domain is `kgname/{blind}`, and the blind value
-                // is keyed with the KG secret — which rotation re-seals
-                // rather than re-derives — so the domain is unchanged and
-                // only the enc key moves.
-                let new_name_rest = name_rest
-                    .map(|sealed| {
-                        self.vault
-                            .reseal_at_rest(&next, &format!("kgname/{name}"), &sealed)
-                    })
-                    .transpose()?;
-                // `kg::entity_canonical`, NOT a local copy of its bytes.
-                // This was an inline `format!` of the same four fields —
-                // correct at the time and a landmine: the moment that
-                // canonical gained its `name_rest` extension, rotation would
-                // have kept computing the old shape and marked every entity
-                // in the vault tampered, on the first rotation after the
-                // change. The sealed name is re-sealed above, so the NEW
-                // bytes are what the new tag covers, exactly as the triple
-                // arm covers its new `terms`.
-                let can = crate::kg::entity_canonical(
-                    &id,
-                    &name,
-                    &etype,
-                    &created,
-                    new_name_rest.as_deref(),
-                );
-                entity_upds.push((id, next.tag(&can).to_vec(), new_name_rest));
-            }
-        }
-        report.kg_entities = entity_upds.len();
-
-        // kg triples: object re-sealed (content domain `kg/{id}`), tag over
-        // the new at-rest object. A fact carrying a receipt also gets its
-        // keyed receipt_tag re-computed under the new key — the receipt's
-        // source fingerprint is keyed with the STORED `kg_secret`, which
-        // rotation re-seals and never regenerates, so it stays
-        // byte-identical and the citation binding survives verbatim (U12).
-        #[allow(clippy::type_complexity)]
-        let mut triple_upds: Vec<(
-            String,
-            Vec<u8>,
-            Vec<u8>,
-            Option<Vec<u8>>,
-            Option<Vec<u8>>,
-            Option<Vec<u8>>,
-        )> = Vec::new();
-        {
-            let mut stmt = self.conn.prepare(
-                "SELECT id, subject, predicate, object, valid_from, valid_to, confidence, \
-                        source_drawer_id, source_fp, receipt_tag, support, \
-                        authority_class, review_state, canonical_key, extractor, terms \
-                 FROM kg_triples",
-            )?;
-            let rows = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, Vec<u8>>(3)?,
-                    r.get::<_, Option<String>>(4)?,
-                    r.get::<_, Option<String>>(5)?,
-                    r.get::<_, f64>(6)?,
-                    r.get::<_, Option<String>>(7)?,
-                    r.get::<_, Option<Vec<u8>>>(8)?,
-                    r.get::<_, Option<Vec<u8>>>(9)?,
-                    r.get::<_, Option<Vec<u8>>>(10)?,
-                    (
-                        r.get::<_, Option<String>>(11)?,
-                        r.get::<_, Option<String>>(12)?,
-                        r.get::<_, Option<String>>(13)?,
-                        r.get::<_, Option<String>>(14)?,
-                    ),
-                    r.get::<_, Option<Vec<u8>>>(15)?,
-                ))
-            })?;
-            for row in rows {
-                let (
-                    id,
-                    s,
-                    p,
-                    object,
-                    vf,
-                    vt,
-                    conf,
-                    src_id,
-                    src_fp,
-                    receipt_tag,
-                    support,
-                    auth4,
-                    terms,
-                ) = row?;
-                let new_object = self
-                    .vault
-                    .reseal_at_rest(&next, &format!("kg/{id}"), &object)?;
-                // The grounding blob is sealed under its own AAD domain, so
-                // rotation must re-seal it like any other artifact — and the
-                // new bytes are what the new tag has to cover, since support
-                // is inside the triple's canonical.
-                let new_support = support
-                    .map(|sealed| {
-                        self.vault
-                            .reseal_at_rest(&next, &format!("kg/{id}/support"), &sealed)
-                    })
-                    .transpose()?;
-                // Authority fields are plain columns inside the canonical
-                // (like validity), so rotation carries them into the new tag
-                // unchanged — dropping them would mark every promoted fact
-                // tampered after the first rotation.
-                let (a_class, a_review, a_key, x_id) = auth4;
-                let auth = crate::kg::authority_ext(
-                    a_class.as_deref(),
-                    a_review.as_deref(),
-                    a_key.as_deref(),
-                );
-                // Extractor identity is a plain column inside the canonical
-                // (via its extension), so rotation carries it into the new
-                // tag unchanged — dropping it would mark every attributed
-                // fact tampered after the first rotation.
-                let ext = crate::kg::extractor_ext(x_id.as_deref());
-                // The sealed subject/predicate (A10) are re-sealed like the
-                // object and the grounding blob, and the NEW bytes are what
-                // the new tag covers — they are inside the canonical via the
-                // terms extension.
-                //
-                // The blind COLUMNS and the ids are deliberately untouched.
-                // They are keyed with the vault's KG blind secret, which is
-                // a stored value rotation RE-SEALS rather than a derived key
-                // rotation replaces — and that is the whole reason it is a
-                // stored secret. Re-deriving them here would change every id
-                // in the graph on every rotation, orphaning the audit
-                // records written under `kg/{id}` (rotation re-keys over
-                // PRESERVED audit bytes) and breaking the deterministic-id
-                // idempotency the module rests on: re-adding the same fact
-                // after a rotation would insert a second row.
-                let new_terms = terms
-                    .map(|sealed| {
-                        self.vault
-                            .reseal_at_rest(&next, &format!("kgterms/{id}"), &sealed)
-                    })
-                    .transpose()?;
-                let tag = next
-                    .tag(&crate::kg::triple_canonical(
-                        &id,
-                        &s,
-                        &p,
-                        &new_object,
-                        &vf,
-                        &vt,
-                        conf,
-                        new_support.as_deref(),
-                        auth.as_deref(),
-                        ext.as_deref(),
-                        crate::kg::terms_ext(new_terms.as_deref()).as_deref(),
-                    ))
-                    .to_vec();
-                // Re-key the receipt binding when present (unchanged
-                // canonical: id + citation + the source fingerprint, which
-                // is stored-secret-keyed and does not move on a rotation).
-                let new_receipt = match (receipt_tag, src_id, src_fp) {
-                    (Some(_), Some(did), Some(fp)) => Some(
-                        next.tag(&crate::kg::receipt_canonical(&id, &did, &fp))
-                            .to_vec(),
-                    ),
-                    _ => None,
-                };
-                triple_upds.push((id, new_object, tag, new_receipt, new_support, new_terms));
-            }
-        }
-        report.kg_triples = triple_upds.len();
-
-        // tunnels: tag only (nothing sealed).
-        let mut tunnel_upds: Vec<(String, Vec<u8>)> = Vec::new();
-        {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT id, from_wing, to_wing, label, created_at FROM tunnels")?;
-            let rows = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
-                ))
-            })?;
-            for row in rows {
-                let (id, from, to, label, created) = row?;
-                let can = crate::manage::tunnel_canonical(&id, &from, &to, &label, &created);
-                tunnel_upds.push((id, next.tag(&can).to_vec()));
-            }
-        }
-        report.tunnels = tunnel_upds.len();
-
-        // wing_trust and retention_policy: tag only, and **outside the
-        // `if sealed` block below** because neither holds sealed bytes — the
-        // tag is the whole key-derived content, at both security levels.
-        //
-        // These were missing entirely until 2026-08-06, and the cost was not
-        // cosmetic: both tags are verified ON READ and raise
-        // `StoreError::Integrity` (`wing_trusts` in manage.rs, the sweep's
-        // per-policy check in retention.rs). So a routine key rotation — the
-        // operation the docs recommend — made `wing_trusts()` fail forever,
-        // which takes `trust_clause` with it and therefore every search
-        // carrying a trust floor, while `trust_clause`'s own comment asserts
-        // "every row it rests on was tag-verified by `wing_trusts`". A
-        // declared retention policy stopped listing and stopped sweeping the
-        // same way. Found by two independent review lenses; the enumeration
-        // gate below is what stops the class rather than these two rows.
-        let mut trust_upds: Vec<(String, Vec<u8>)> = Vec::new();
-        {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT wing, trust, assigned_at FROM wing_trust")?;
-            let rows = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })?;
-            for row in rows {
-                let (wing, trust, at) = row?;
-                let can = crate::manage::wing_trust_canonical(&wing, &trust, &at);
-                trust_upds.push((wing, next.tag(&can).to_vec()));
-            }
-        }
-        report.wing_trusts = trust_upds.len();
-
-        let mut retention_upds: Vec<(String, String, Vec<u8>)> = Vec::new();
-        {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT wing, room, max_age_days, assigned_at FROM retention_policy")?;
-            let rows = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, u32>(2)?,
-                    r.get::<_, String>(3)?,
-                ))
-            })?;
-            for row in rows {
-                let (wing, room, days, at) = row?;
-                let can = crate::retention::retention_canonical(&wing, &room, days, &at);
-                retention_upds.push((wing, room, next.tag(&can).to_vec()));
-            }
-        }
-        report.retention_policies = retention_upds.len();
-
-        // **The mirror's staleness marker, tagged since ROADMAP O237.** It is
-        // a `meta` row rather than a table, so the source gate below — which
-        // parses `CREATE TABLE` statements for a `tag` column — cannot see
-        // it; without this line a rotation would leave it keyed with the
-        // retired mac key and every later read would refuse, which is
-        // precisely the `wing_trust` disaster one table over. It is re-tagged
-        // from the value the row holds NOW, so a rotation over an already
-        // edited marker would launder it — hence the refusal, O232's
-        // criterion (refuse only what a rotation would launder), checked at
-        // O(1) inside the same transaction that verifies everything else.
-        let pushed_marker_upd: Option<Vec<u8>> = match self.pushed_marker()? {
-            crate::remote::PushedMarker::Absent => None,
-            crate::remote::PushedMarker::Tampered => {
-                return Err(StoreError::IntegrityFinding(
-                    "meta/index_pushed_embedder: the record of which embedding space the \
-                     remote mirror was built in does not verify, and a rotation would \
-                     re-tag it into authenticity — run `undercroft verify`, then \
-                     `index push` again before rotating"
-                        .into(),
-                ))
-            }
-            crate::remote::PushedMarker::Legacy(name)
-            | crate::remote::PushedMarker::Recorded(name) => Some(
-                next.tag(&crate::remote::pushed_embedder_canonical(&name))
-                    .to_vec(),
-            ),
-        };
+        // Every tag-bearing row — drawers and their supersession receipts,
+        // entities, facts and their receipts, tunnels, the two policy tables
+        // and the mirror marker — through the ONE per-table re-tag the
+        // version-2 walk shares (ROADMAP O406 item 5), so the gate below that
+        // names every key-derived artifact in this file forces the walk to be
+        // complete too. A rotation PRESERVES the vault's tag regime and never
+        // switches it: the format is this handle's, the keys the next
+        // generation's.
+        let retagged = self.retag_rows(&next, self.row_format(), Reseal::Yes)?;
+        report.drawers = retagged.drawers.len();
+        report.kg_entities = retagged.entities.len();
+        report.kg_triples = retagged.triples.len();
+        report.tunnels = retagged.tunnels.len();
+        report.wing_trusts = retagged.trusts.len();
+        report.retention_policies = retagged.retentions.len();
 
         // Sealed-only artifact sweeps: for hmac-only vaults these blobs are
         // stored in clear and carry no key material — nothing to rewrite.
@@ -870,58 +499,7 @@ impl VaultStore {
         {
             let tx = &self.conn;
             {
-                let mut up = tx.prepare(
-                    "UPDATE drawers SET content = ?2, embedding = ?3, tag = ?4, fp = ?5, \
-                                        supersedes_receipt = \
-                                            COALESCE(?6, supersedes_receipt) \
-                     WHERE seq = ?1",
-                )?;
-                for d in &drawer_upds {
-                    one_row(
-                        up.execute(params![d.seq, d.content, d.emb, d.tag, d.fp, d.sup_receipt])?,
-                        "drawers seq",
-                        &d.seq.to_string(),
-                    )?;
-                }
-                let mut up =
-                    tx.prepare("UPDATE kg_entities SET tag = ?2, name_rest = ?3 WHERE id = ?1")?;
-                for (id, tag, name_rest) in &entity_upds {
-                    one_row(
-                        up.execute(params![id, tag, name_rest])?,
-                        "kg_entities id",
-                        id,
-                    )?;
-                }
-                let mut up = tx.prepare(
-                    "UPDATE kg_triples SET object = ?2, tag = ?3, receipt_tag = ?4, support = ?5,
-                            terms = ?6
-                     WHERE id = ?1",
-                )?;
-                for (id, object, tag, receipt_tag, support, terms) in &triple_upds {
-                    one_row(
-                        up.execute(params![id, object, tag, receipt_tag, support, terms])?,
-                        "kg_triples id",
-                        id,
-                    )?;
-                }
-                let mut up = tx.prepare("UPDATE tunnels SET tag = ?2 WHERE id = ?1")?;
-                for (id, tag) in &tunnel_upds {
-                    one_row(up.execute(params![id, tag])?, "tunnels id", id)?;
-                }
-                let mut up = tx.prepare("UPDATE wing_trust SET tag = ?2 WHERE wing = ?1")?;
-                for (wing, tag) in &trust_upds {
-                    one_row(up.execute(params![wing, tag])?, "wing_trust wing", wing)?;
-                }
-                let mut up = tx.prepare(
-                    "UPDATE retention_policy SET tag = ?3 WHERE wing = ?1 AND room = ?2",
-                )?;
-                for (wing, room, tag) in &retention_upds {
-                    one_row(
-                        up.execute(params![wing, room, tag])?,
-                        "retention_policy wing/room",
-                        &format!("{wing}/{room}"),
-                    )?;
-                }
+                self.apply_retagged(tx, &retagged)?;
                 let mut up = tx.prepare("UPDATE drawer_tok SET tok = ?2 WHERE id = ?1")?;
                 for (id, tok) in &tok_upds {
                     one_row(up.execute(params![id, tok])?, "drawer_tok id", id)?;
@@ -970,19 +548,6 @@ impl VaultStore {
                         key,
                     )?;
                 }
-            }
-            // The mirror marker's tag, under the next mac key (ROADMAP
-            // O237). Hex rather than a blob because the row it lives in is
-            // `meta(key TEXT, value TEXT)`.
-            if let Some(tag) = &pushed_marker_upd {
-                one_row(
-                    tx.execute(
-                        "UPDATE meta SET value = ?2 WHERE key = ?1",
-                        params![crate::remote::PUSHED_EMBEDDER_TAG_KEY, hex::encode(tag)],
-                    )?,
-                    "meta key",
-                    crate::remote::PUSHED_EMBEDDER_TAG_KEY,
-                )?;
             }
             // The rotation's own audit row, inside the same transaction as
             // everything it describes. Appended last so its `seq` orders
@@ -1126,6 +691,534 @@ impl VaultStore {
         {
             *self.hnsw.borrow_mut() = None;
         }
+    }
+}
+
+/// Whether [`VaultStore::retag_rows`] also re-seals what it re-tags.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reseal {
+    /// A key rotation: every sealed blob a tag covers is re-sealed under the
+    /// next generation's keys, and the tag covers the NEW bytes.
+    Yes,
+    /// The version-2 walk (ROADMAP O406): the keys stay, only the format
+    /// moves, so every blob stays byte for byte and only the tags change.
+    No,
+}
+
+/// A drawer's re-sealed content, embedding and keyed fingerprint.
+type Resealed = (Vec<u8>, Vec<u8>, Option<Vec<u8>>);
+
+/// One drawer's new state.
+pub(crate) struct DrawerUpd {
+    seq: i64,
+    /// `None` when nothing is re-sealed (the version-2 walk).
+    resealed: Option<Resealed>,
+    tag: Vec<u8>,
+    /// Re-keyed supersession receipt, `None` for the (near-total) majority
+    /// of drawers that supersede nothing.
+    sup_receipt: Option<Vec<u8>>,
+}
+
+/// One fact's new state: id, object, tag, receipt tag, support, terms.
+type TripleUpd = (
+    String,
+    Vec<u8>,
+    Vec<u8>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+);
+
+/// Every tag-bearing row's new state, computed in memory before any of it is
+/// written (ROADMAP O406 item 5: one per-table re-tag for the rotation and
+/// the walk).
+pub(crate) struct Retagged {
+    pub(crate) drawers: Vec<DrawerUpd>,
+    pub(crate) entities: Vec<(String, Vec<u8>, Option<Vec<u8>>)>,
+    pub(crate) triples: Vec<TripleUpd>,
+    pub(crate) tunnels: Vec<(String, Vec<u8>)>,
+    pub(crate) trusts: Vec<(String, Vec<u8>)>,
+    pub(crate) retentions: Vec<(String, String, Vec<u8>)>,
+    pub(crate) pushed_marker: Option<Vec<u8>>,
+}
+
+impl Retagged {
+    /// How many rows this re-tags, for the walk's own record.
+    pub(crate) fn rows(&self) -> u64 {
+        (self.drawers.len()
+            + self.entities.len()
+            + self.triples.len()
+            + self.tunnels.len()
+            + self.trusts.len()
+            + self.retentions.len()
+            + usize::from(self.pushed_marker.is_some())) as u64
+    }
+}
+
+impl VaultStore {
+    /// **Every tag-bearing row, re-tagged in `fmt` under `to`'s keys** — the
+    /// ONE per-table re-tag a key rotation and the version-2 walk share
+    /// (ROADMAP O406 item 5), in memory, writing nothing.
+    ///
+    /// Each tag goes through its table's builder in `rows.rs` with the format
+    /// stated, so neither caller can re-tag a row in a format it did not ask
+    /// for. With [`Reseal::Yes`] every sealed blob a tag covers is re-sealed
+    /// from this handle's keys into `to`'s first, and the tag covers the new
+    /// bytes; with [`Reseal::No`] (`to` is this handle's own vault) the bytes
+    /// stay and only the tags move.
+    ///
+    /// Both callers have run `verify` first, in the same transaction: every
+    /// column is read here by its type, and a row no read takes is a blocker
+    /// for both, never something this re-tags.
+    pub(crate) fn retag_rows(
+        &self,
+        to: &Vault,
+        fmt: RowFormat,
+        reseal: Reseal,
+    ) -> Result<Retagged, StoreError> {
+        let resealing = reseal == Reseal::Yes;
+        // `from → to` for a blob a tag covers, or the blob as it is.
+        let reseal_blob = |domain: &str, blob: &[u8]| -> Result<Vec<u8>, StoreError> {
+            if resealing {
+                Ok(self.vault.reseal_at_rest(to, domain, blob)?)
+            } else {
+                Ok(blob.to_vec())
+            }
+        };
+
+        // drawers: content / embedding re-sealed, tag over the new at-rest
+        // bytes, keyed fingerprint recomputed from the plaintext.
+        let mut drawer_upds = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT seq, id, meta_json, content, embedding, fp, \
+                        supersedes, supersedes_fp, supersedes_receipt \
+                 FROM drawers ORDER BY seq",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Vec<u8>>(3)?,
+                    r.get::<_, Vec<u8>>(4)?,
+                    r.get::<_, Option<Vec<u8>>>(5)?,
+                    (
+                        r.get::<_, Option<String>>(6)?,
+                        r.get::<_, Option<Vec<u8>>>(7)?,
+                        r.get::<_, Option<Vec<u8>>>(8)?,
+                    ),
+                ))
+            })?;
+            for row in rows {
+                let (seq, id, meta_json, content, emb, fp, sup3) = row?;
+                let new_content = reseal_blob(&id, &content)?;
+                let resealed = if resealing {
+                    let new_emb = reseal_blob(&format!("{id}/emb"), &emb)?;
+                    let fp = match fp {
+                        Some(_) => {
+                            let plain = self.vault.content_from_rest(&id, &content)?;
+                            let text = String::from_utf8(plain).map_err(|_| {
+                                StoreError::Invalid(format!("drawer {id} content is not UTF-8"))
+                            })?;
+                            // The lookup's own recipe under the next key —
+                            // over `match_key(text)`, never the raw bytes. A
+                            // second copy of the recipe lived here over the
+                            // raw bytes, so a rotated vault stopped finding
+                            // any duplicate whose content was not already NFC
+                            // (ROADMAP O116).
+                            Some(crate::manage::fingerprint_with(to, &text))
+                        }
+                        None => None,
+                    };
+                    Some((new_content.clone(), new_emb, fp))
+                } else {
+                    None
+                };
+                let tag = to
+                    .row_tag(&rows::drawer(fmt, &id, meta_json.as_bytes(), &new_content))
+                    .to_vec();
+                // Re-key the supersession receipt when present — unchanged
+                // fields (drawer id + superseded id + the fingerprint, which
+                // is keyed with the STORED secret and therefore does not move
+                // here), new key or new format: the kg receipt re-key one
+                // level up. An unreceipted link stays unreceipted.
+                let sup_receipt = match &sup3 {
+                    (Some(old_id), Some(sup_fp), Some(_)) => Some(
+                        to.row_tag(&rows::supersession(fmt, &id, old_id, sup_fp))
+                            .to_vec(),
+                    ),
+                    _ => None,
+                };
+                drawer_upds.push(DrawerUpd {
+                    seq,
+                    resealed,
+                    tag,
+                    sup_receipt,
+                });
+            }
+        }
+
+        // kg entities: tag over the stored fields, and the sealed NAME
+        // re-sealed like every other blob.
+        //
+        // That second half was missing for one commit and the e2e caught
+        // it, not the unit tests: `name_rest` is sealed under the enc key,
+        // rotation replaces the enc key, and nothing re-sealed it — so the
+        // first rotation after A10 left every entity name undecryptable and
+        // `export`, `kg entities` and `kg query` all failed on the row. The
+        // triples' `terms` blob one block down had been handled; its
+        // neighbour had not. Any future sealed column needs a line here,
+        // which is exactly why rotation's contract is byte-exact reseal of
+        // *every* artifact rather than most of them.
+        let mut entity_upds: Vec<(String, Vec<u8>, Option<Vec<u8>>)> = Vec::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, name, etype, created_at, name_rest FROM kg_entities")?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<Vec<u8>>>(4)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, name, etype, created, name_rest) = row?;
+                // The AAD domain is `kgname/{blind}`, and the blind value
+                // is keyed with the KG secret — which rotation re-seals
+                // rather than re-derives — so the domain is unchanged and
+                // only the enc key moves.
+                let new_name_rest = name_rest
+                    .map(|sealed| reseal_blob(&format!("kgname/{name}"), &sealed))
+                    .transpose()?;
+                // The entity's builder in `rows.rs`, NOT a local copy of its
+                // bytes. This was an inline `format!` of the same four
+                // fields — correct at the time and a landmine: the moment
+                // that canonical gained its `name_rest` extension, rotation
+                // would have kept computing the old shape and marked every
+                // entity in the vault tampered, on the first rotation after
+                // the change. The sealed name is re-sealed above, so the NEW
+                // bytes are what the new tag covers, exactly as the triple
+                // arm covers its new `terms`.
+                let can = rows::entity(fmt, &id, &name, &etype, &created, new_name_rest.as_deref());
+                entity_upds.push((id, to.row_tag(&can).to_vec(), new_name_rest));
+            }
+        }
+
+        // kg triples: object re-sealed (content domain `kg/{id}`), tag over
+        // the new at-rest object. A fact carrying a receipt also gets its
+        // keyed receipt_tag re-computed — the receipt's source fingerprint is
+        // keyed with the STORED `kg_secret`, which rotation re-seals and
+        // never regenerates, so it stays byte-identical and the citation
+        // binding survives verbatim (U12).
+        let mut triple_upds: Vec<TripleUpd> = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, subject, predicate, object, valid_from, valid_to, confidence, \
+                        source_drawer_id, source_fp, receipt_tag, support, \
+                        authority_class, review_state, canonical_key, extractor, terms \
+                 FROM kg_triples",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Vec<u8>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, f64>(6)?,
+                    r.get::<_, Option<String>>(7)?,
+                    r.get::<_, Option<Vec<u8>>>(8)?,
+                    r.get::<_, Option<Vec<u8>>>(9)?,
+                    r.get::<_, Option<Vec<u8>>>(10)?,
+                    (
+                        r.get::<_, Option<String>>(11)?,
+                        r.get::<_, Option<String>>(12)?,
+                        r.get::<_, Option<String>>(13)?,
+                        r.get::<_, Option<String>>(14)?,
+                    ),
+                    r.get::<_, Option<Vec<u8>>>(15)?,
+                ))
+            })?;
+            for row in rows {
+                let (
+                    id,
+                    s,
+                    p,
+                    object,
+                    vf,
+                    vt,
+                    conf,
+                    src_id,
+                    src_fp,
+                    receipt_tag,
+                    support,
+                    auth4,
+                    terms,
+                ) = row?;
+                let new_object = reseal_blob(&format!("kg/{id}"), &object)?;
+                // The grounding blob is sealed under its own AAD domain, so
+                // rotation must re-seal it like any other artifact — and the
+                // new bytes are what the new tag has to cover, since support
+                // is inside the triple's canonical.
+                let new_support = support
+                    .map(|sealed| reseal_blob(&format!("kg/{id}/support"), &sealed))
+                    .transpose()?;
+                // The sealed subject/predicate (A10) are re-sealed like the
+                // object and the grounding blob, and the NEW bytes are what
+                // the new tag covers.
+                //
+                // The blind COLUMNS and the ids are deliberately untouched.
+                // They are keyed with the vault's KG blind secret, which is
+                // a stored value rotation RE-SEALS rather than a derived key
+                // rotation replaces — and that is the whole reason it is a
+                // stored secret. Re-deriving them here would change every id
+                // in the graph on every rotation, orphaning the audit
+                // records written under `kg/{id}` (rotation re-keys over
+                // PRESERVED audit bytes) and breaking the deterministic-id
+                // idempotency the module rests on: re-adding the same fact
+                // after a rotation would insert a second row.
+                let new_terms = terms
+                    .map(|sealed| reseal_blob(&format!("kgterms/{id}"), &sealed))
+                    .transpose()?;
+                // Authority fields and extractor identity are plain columns
+                // inside the canonical (like validity), so they are carried
+                // into the new tag unchanged — dropping them would mark every
+                // promoted or attributed fact tampered.
+                let (a_class, a_review, a_key, x_id) = auth4;
+                let tag = to
+                    .row_tag(&rows::fact(
+                        fmt,
+                        &rows::FactFields {
+                            id: id.as_bytes(),
+                            subject: s.as_bytes(),
+                            predicate: p.as_bytes(),
+                            object: &new_object,
+                            valid_from: vf.as_deref().map(str::as_bytes),
+                            valid_to: vt.as_deref().map(str::as_bytes),
+                            confidence: conf,
+                            support: new_support.as_deref(),
+                            authority_class: a_class.as_deref().map(str::as_bytes),
+                            review_state: a_review.as_deref().map(str::as_bytes),
+                            canonical_key: a_key.as_deref().map(str::as_bytes),
+                            extractor: x_id.as_deref().map(str::as_bytes),
+                            terms: new_terms.as_deref(),
+                        },
+                    ))
+                    .to_vec();
+                // Re-key the receipt binding when present (unchanged fields:
+                // id + citation + the source fingerprint, which is
+                // stored-secret-keyed and does not move here).
+                let new_receipt = match (receipt_tag, src_id, src_fp) {
+                    (Some(_), Some(did), Some(fp)) => Some(
+                        to.row_tag(&rows::fact_receipt(fmt, &id, &did, &fp))
+                            .to_vec(),
+                    ),
+                    _ => None,
+                };
+                triple_upds.push((id, new_object, tag, new_receipt, new_support, new_terms));
+            }
+        }
+
+        // tunnels: tag only (nothing sealed).
+        let mut tunnel_upds: Vec<(String, Vec<u8>)> = Vec::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, from_wing, to_wing, label, created_at FROM tunnels")?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, from, to_wing, label, created) = row?;
+                let can = rows::tunnel(fmt, &id, &from, &to_wing, &label, &created);
+                tunnel_upds.push((id, to.row_tag(&can).to_vec()));
+            }
+        }
+
+        // wing_trust and retention_policy: tag only, at both security
+        // levels — neither holds sealed bytes, the tag is the whole
+        // key-derived content.
+        //
+        // These were missing entirely until 2026-08-06, and the cost was not
+        // cosmetic: both tags are verified ON READ and raise
+        // `StoreError::Integrity` (`wing_trusts` in manage.rs, the sweep's
+        // per-policy check in retention.rs). So a routine key rotation — the
+        // operation the docs recommend — made `wing_trusts()` fail forever,
+        // which takes `trust_clause` with it and therefore every search
+        // carrying a trust floor, while `trust_clause`'s own comment asserts
+        // "every row it rests on was tag-verified by `wing_trusts`". A
+        // declared retention policy stopped listing and stopped sweeping the
+        // same way. Found by two independent review lenses; the enumeration
+        // gate below is what stops the class rather than these two rows.
+        let mut trust_upds: Vec<(String, Vec<u8>)> = Vec::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT wing, trust, assigned_at FROM wing_trust")?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (wing, trust, at) = row?;
+                let can = rows::wing_trust(fmt, &wing, &trust, &at);
+                trust_upds.push((wing, to.row_tag(&can).to_vec()));
+            }
+        }
+
+        let mut retention_upds: Vec<(String, String, Vec<u8>)> = Vec::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT wing, room, max_age_days, assigned_at FROM retention_policy")?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, u32>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })?;
+            for row in rows {
+                let (wing, room, days, at) = row?;
+                let can = rows::retention(fmt, &wing, &room, days, &at);
+                retention_upds.push((wing, room, to.row_tag(&can).to_vec()));
+            }
+        }
+
+        // **The mirror's staleness marker, tagged since ROADMAP O237.** It is
+        // a `meta` row rather than a table, so the source gate below — which
+        // parses `CREATE TABLE` statements for a `tag` column — cannot see
+        // it; without this line a rotation would leave it keyed with the
+        // retired mac key and every later read would refuse, which is
+        // precisely the `wing_trust` disaster one table over. It is re-tagged
+        // from the value the row holds NOW, so a re-tag over an already
+        // edited marker would launder it — hence the refusal, O232's
+        // criterion (refuse only what a re-tag would launder), checked at
+        // O(1) inside the same transaction that verifies everything else.
+        let pushed_marker: Option<Vec<u8>> = match self.pushed_marker()? {
+            crate::remote::PushedMarker::Absent => None,
+            crate::remote::PushedMarker::Tampered => {
+                return Err(StoreError::IntegrityFinding(
+                    "meta/index_pushed_embedder: the record of which embedding space the \
+                     remote mirror was built in does not verify, and re-tagging it would \
+                     make it authentic — run `undercroft verify`, then `index push` again \
+                     before rotating"
+                        .into(),
+                ))
+            }
+            crate::remote::PushedMarker::Legacy(name)
+            | crate::remote::PushedMarker::Recorded(name) => {
+                Some(to.row_tag(&rows::pushed_embedder(fmt, &name)).to_vec())
+            }
+        };
+
+        Ok(Retagged {
+            drawers: drawer_upds,
+            entities: entity_upds,
+            triples: triple_upds,
+            tunnels: tunnel_upds,
+            trusts: trust_upds,
+            retentions: retention_upds,
+            pushed_marker,
+        })
+    }
+
+    /// Write what [`retag_rows`](Self::retag_rows) computed, inside the
+    /// caller's transaction, every statement required to change exactly one
+    /// row ([`one_row`]). A drawer whose bytes were not re-sealed has its tag
+    /// and receipt rewritten and nothing else — the walk re-tags a corpus,
+    /// and rewriting every content blob to move a tag would grow the WAL by
+    /// the corpus for nothing.
+    pub(crate) fn apply_retagged(
+        &self,
+        tx: &rusqlite::Connection,
+        r: &Retagged,
+    ) -> Result<(), StoreError> {
+        let mut resealed = tx.prepare(
+            "UPDATE drawers SET content = ?2, embedding = ?3, tag = ?4, fp = ?5, \
+                                supersedes_receipt = \
+                                    COALESCE(?6, supersedes_receipt) \
+             WHERE seq = ?1",
+        )?;
+        let mut retagged = tx.prepare(
+            "UPDATE drawers SET tag = ?2, \
+                                supersedes_receipt = COALESCE(?3, supersedes_receipt) \
+             WHERE seq = ?1",
+        )?;
+        for d in &r.drawers {
+            let changed = match &d.resealed {
+                Some((content, emb, fp)) => {
+                    resealed.execute(params![d.seq, content, emb, d.tag, fp, d.sup_receipt])?
+                }
+                None => retagged.execute(params![d.seq, d.tag, d.sup_receipt])?,
+            };
+            one_row(changed, "drawers seq", &d.seq.to_string())?;
+        }
+        let mut up = tx.prepare("UPDATE kg_entities SET tag = ?2, name_rest = ?3 WHERE id = ?1")?;
+        for (id, tag, name_rest) in &r.entities {
+            one_row(
+                up.execute(params![id, tag, name_rest])?,
+                "kg_entities id",
+                id,
+            )?;
+        }
+        let mut up = tx.prepare(
+            "UPDATE kg_triples SET object = ?2, tag = ?3, receipt_tag = ?4, support = ?5,
+                    terms = ?6
+             WHERE id = ?1",
+        )?;
+        for (id, object, tag, receipt_tag, support, terms) in &r.triples {
+            one_row(
+                up.execute(params![id, object, tag, receipt_tag, support, terms])?,
+                "kg_triples id",
+                id,
+            )?;
+        }
+        let mut up = tx.prepare("UPDATE tunnels SET tag = ?2 WHERE id = ?1")?;
+        for (id, tag) in &r.tunnels {
+            one_row(up.execute(params![id, tag])?, "tunnels id", id)?;
+        }
+        let mut up = tx.prepare("UPDATE wing_trust SET tag = ?2 WHERE wing = ?1")?;
+        for (wing, tag) in &r.trusts {
+            one_row(up.execute(params![wing, tag])?, "wing_trust wing", wing)?;
+        }
+        let mut up =
+            tx.prepare("UPDATE retention_policy SET tag = ?3 WHERE wing = ?1 AND room = ?2")?;
+        for (wing, room, tag) in &r.retentions {
+            one_row(
+                up.execute(params![wing, room, tag])?,
+                "retention_policy wing/room",
+                &format!("{wing}/{room}"),
+            )?;
+        }
+        // The mirror marker's tag (ROADMAP O237). Hex rather than a blob
+        // because the row it lives in is `meta(key TEXT, value TEXT)`.
+        if let Some(tag) = &r.pushed_marker {
+            one_row(
+                tx.execute(
+                    "UPDATE meta SET value = ?2 WHERE key = ?1",
+                    params![crate::remote::PUSHED_EMBEDDER_TAG_KEY, hex::encode(tag)],
+                )?,
+                "meta key",
+                crate::remote::PUSHED_EMBEDDER_TAG_KEY,
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -2604,5 +2697,153 @@ mod tests {
             matches!(store.wing_trusts(), Err(StoreError::Integrity(_))),
             "and the floor must still refuse it: a rotation lifted it to `trusted`"
         );
+    }
+
+    /// Every row tag the vault holds, by table, in a stable order — what the
+    /// walk arm below requires to have CHANGED, row for row.
+    fn row_tags(s: &VaultStore) -> Vec<(&'static str, Vec<Vec<u8>>)> {
+        let tags = |sql: &str| -> Vec<Vec<u8>> {
+            s.conn
+                .prepare(sql)
+                .unwrap()
+                .query_map([], |r| r.get::<_, Vec<u8>>(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        vec![
+            ("drawers", tags("SELECT tag FROM drawers ORDER BY seq")),
+            (
+                "drawer supersession receipts",
+                tags(
+                    "SELECT supersedes_receipt FROM drawers \
+                     WHERE supersedes_receipt IS NOT NULL ORDER BY seq",
+                ),
+            ),
+            ("facts", tags("SELECT tag FROM kg_triples ORDER BY seq")),
+            (
+                "fact receipts",
+                tags(
+                    "SELECT receipt_tag FROM kg_triples \
+                     WHERE receipt_tag IS NOT NULL ORDER BY seq",
+                ),
+            ),
+            ("entities", tags("SELECT tag FROM kg_entities ORDER BY id")),
+            ("tunnels", tags("SELECT tag FROM tunnels ORDER BY seq")),
+            (
+                "wing trust",
+                tags("SELECT tag FROM wing_trust ORDER BY wing"),
+            ),
+            (
+                "retention",
+                tags("SELECT tag FROM retention_policy ORDER BY wing, room"),
+            ),
+            (
+                "pushed-embedder marker",
+                s.conn
+                    .prepare("SELECT value FROM meta WHERE key = 'index_pushed_embedder_tag'")
+                    .unwrap()
+                    .query_map([], |r| r.get::<_, String>(0))
+                    .unwrap()
+                    .map(|v| hex::decode(v.unwrap()).unwrap())
+                    .collect(),
+            ),
+        ]
+    }
+
+    /// **ROADMAP O406 item 5's gate, the walk arm of this file's rotation
+    /// gate**: the version-2 walk moves NO durable reference — every id,
+    /// blind index, fingerprint and audit label byte-identical, one label
+    /// appended (`migrate/tag-v2`) — and it changes EVERY row tag, table by
+    /// table, so a walk that did nothing cannot pass. Then every
+    /// tag-verifying reader still answers, under the new format.
+    #[test]
+    fn the_tag_walk_moves_no_reference_and_every_tag() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("r", SecurityLevel::Sealed).unwrap();
+        let vdir = vault.dir().to_path_buf();
+        crate::retag_pause::keep_on_v1(&vdir);
+        let mut store = VaultStore::open(vault).unwrap();
+        assert_eq!(store.row_format(), undercroft_vault::RowFormat::V1);
+        let src = drawer("Ada migrated auth to PASETO in June.", 0);
+        store.upsert(&src).unwrap();
+        store
+            .upsert(
+                &drawer("Ada moved auth back to JWT in July.", 1)
+                    .with_supersedes(Some(src.id.clone())),
+            )
+            .unwrap();
+        store
+            .kg_add_receipted(
+                "ada",
+                "migrated_auth_to",
+                "paseto",
+                None,
+                None,
+                0.8,
+                (&src.id, &src.content),
+                None,
+            )
+            .unwrap();
+        store
+            .kg_add("heron", "nests-in", "the reeds", None, None, 0.9, None)
+            .unwrap();
+        assert!(
+            store
+                .create_tunnel("wing", "wing", "self-link")
+                .unwrap()
+                .created
+        );
+        store.set_wing_trust("wing", "trusted").unwrap();
+        store.set_retention("wing", Some("room"), 3650).unwrap();
+        store.record_pushed_embedder().unwrap();
+        let before = references(&store);
+        let tags_before = row_tags(&store);
+        assert!(before.verified.iter().all(|v| v.ends_with(":ok")));
+        drop(store);
+
+        crate::retag_pause::release(&vdir);
+        let store = reopen(&dir);
+        assert_eq!(
+            store.row_format(),
+            undercroft_vault::RowFormat::V2,
+            "the next writable open walks"
+        );
+        let after = references(&store);
+        assert_eq!(
+            before.stable, after.stable,
+            "the walk moved a durable reference"
+        );
+        assert!(
+            after.audit.starts_with(&before.audit),
+            "the walk relabelled an audit record"
+        );
+        assert_eq!(
+            after.audit.len(),
+            before.audit.len() + 1,
+            "one record: its own"
+        );
+        assert!(
+            after.audit.last().unwrap().contains(":migrate/tag-v2"),
+            "{:?}",
+            after.audit.last()
+        );
+        assert_eq!(
+            before.verified, after.verified,
+            "every reader verifies after it"
+        );
+        for ((table, b), (_, a)) in tags_before.iter().zip(row_tags(&store).iter()) {
+            assert!(!b.is_empty(), "premise: the fixture holds {table}");
+            assert_eq!(b.len(), a.len(), "{table}: rows");
+            for (x, y) in b.iter().zip(a) {
+                assert_ne!(x, y, "{table}: a row tag the walk did not change");
+            }
+        }
+        assert!(store.verify().unwrap().ok());
+        assert!(matches!(
+            store.pushed_marker().unwrap(),
+            crate::remote::PushedMarker::Recorded(_)
+        ));
     }
 }

@@ -472,25 +472,12 @@ impl Drawer {
         strip(self.live_time_mentions()) != strip(self.meta.time_mentions.clone())
     }
 
-    /// Canonical bytes covered by the integrity HMAC: id, meta (canonical
-    /// JSON), and content, separated by 0x1f with no lengths.
-    ///
-    /// **The separator does not keep the fields apart.** Serialized meta
-    /// never holds a raw 0x1f while at-rest content may, so moving the
-    /// meta/content boundary to a 0x1f inside the content leaves these bytes
-    /// — and a tag over them — unchanged. A verified tag proves this run of
-    /// bytes, not where each field ends (ROADMAP O231, O406).
-    pub fn canonical_bytes(&self, content_at_rest: &[u8]) -> Vec<u8> {
-        let meta_json = serde_json::to_vec(&self.meta).expect("meta serializes");
-        let mut out =
-            Vec::with_capacity(self.id.len() + meta_json.len() + content_at_rest.len() + 2);
-        out.extend_from_slice(self.id.as_bytes());
-        out.push(0x1f);
-        out.extend_from_slice(&meta_json);
-        out.push(0x1f);
-        out.extend_from_slice(content_at_rest);
-        out
-    }
+    // No canonical lives here. A drawer's tag covers the STORED `meta_json`
+    // and at-rest content, so its canonical is built from the row by
+    // `undercroft-store`'s `rows::drawer`, the one recipe per table and
+    // format (ROADMAP O406 item 1, which deleted the `canonical_bytes` that
+    // sat here: called by its own test alone, version 1 only, and over
+    // `self.meta` rather than the stored bytes the tag covers).
 }
 
 #[cfg(test)]
@@ -681,15 +668,6 @@ mod tests {
         assert_eq!(live.len(), 1);
         assert!(live[0].resolved.is_none(), "no anchor, no date");
         assert!(!d.time_mentions_differ());
-    }
-
-    #[test]
-    fn canonical_bytes_change_with_meta() {
-        let mut a = Drawer::new("w", "r", "c".into(), None, 0, "test");
-        let before = a.canonical_bytes(b"c");
-        a.meta.room = "other".into();
-        let after = a.canonical_bytes(b"c");
-        assert_ne!(before, after);
     }
 
     #[test]

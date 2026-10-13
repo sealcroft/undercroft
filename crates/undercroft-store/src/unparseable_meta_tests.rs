@@ -22,8 +22,8 @@ use undercroft_core::{Drawer, HashEmbedder};
 use undercroft_vault::{SecurityLevel, Vault, VaultManager};
 
 use crate::{
-    canonical, restore_archive, BackupOutcome, BadReason, BadRecord, InternalRead, Read,
-    RestoreOutcome, StoreError, VaultStore,
+    restore_archive, BackupOutcome, BadReason, BadRecord, InternalRead, Read, RestoreOutcome,
+    StoreError, VaultStore,
 };
 
 const VAULT: &str = "o231";
@@ -58,7 +58,13 @@ fn hash(_: &Vault) -> Result<Box<dyn Embedder + Send>, StoreError> {
 /// A vault of `victim` and one untouched neighbour, verified clean.
 fn vault_with(level: SecurityLevel, victim: &Drawer) -> (TempDir, VaultStore) {
     let dir = TempDir::new().unwrap();
-    let mut s = VaultStore::open(mgr(dir.path()).create(VAULT, level).unwrap()).unwrap();
+    let vault = mgr(dir.path()).create(VAULT, level).unwrap();
+    // O231's rows are rows of the VERSION-1 regime — every vault the
+    // ROADMAP O406 walk has not reached, and every vault it withholds over
+    // one of these rows. On a walked vault the keyless move fails its tag:
+    // `on_a_walked_vault_the_keyless_move_fails_its_tag`, below.
+    crate::retag_pause::keep_on_v1(vault.dir());
+    let mut s = VaultStore::open(vault).unwrap();
     s.upsert(victim).unwrap();
     s.upsert(&drawer("an untouched neighbour about the harbour", 99))
         .unwrap();
@@ -83,7 +89,12 @@ fn columns(s: &VaultStore, id: &str) -> (String, Vec<u8>, Vec<u8>) {
 /// and the verdict would not be this finding's.
 fn retag_over(s: &VaultStore, id: &str, meta: &str) {
     let (_, content, _) = columns(s, id);
-    let tag = s.vault.tag(&canonical(id, meta.as_bytes(), &content));
+    let tag = s.vault.row_tag(&crate::rows::drawer(
+        s.row_format(),
+        id,
+        meta.as_bytes(),
+        &content,
+    ));
     let now = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap();
@@ -125,7 +136,10 @@ fn assert_an_o231_row(s: &VaultStore, id: &str) {
     let (meta, content, tag) = columns(s, id);
     assert!(
         s.vault
-            .verify_tag(&canonical(id, meta.as_bytes(), &content), &tag)
+            .verify_row_tag(
+                &crate::rows::drawer(s.row_format(), id, meta.as_bytes(), &content),
+                &tag,
+            )
             .is_ok(),
         "premise: the row's HMAC verifies"
     );
@@ -361,4 +375,96 @@ fn o231_a_link_citing_the_row_answers_a_verdict_never_ok() {
         "{:?}",
         r.rotation_blockers()
     );
+}
+
+/// **ROADMAP O406: on a vault its walk has reached, the keyless move FAILS ITS
+/// TAG.** The version-2 drawer canonical length-prefixes the meta and the
+/// content, so bytes moved from one into the other are a different canonical:
+/// the row is named as a record whose HMAC does not verify — a rotation
+/// blocker, where the version-1 row above is not — and every read refuses it.
+/// And before that, the walk itself: a vault holding the version-1 row
+/// WITHHOLDS the walk rather than binding the moved partition, and says so.
+#[test]
+fn on_a_walked_vault_the_keyless_move_fails_its_tag() {
+    for level in [SecurityLevel::HmacOnly, SecurityLevel::Sealed] {
+        let victim = drawer("alpha\u{1f}omega", 0);
+        let dir = TempDir::new().unwrap();
+        let mut s = VaultStore::open(mgr(dir.path()).create(VAULT, level).unwrap()).unwrap();
+        assert_eq!(
+            s.row_format(),
+            undercroft_vault::RowFormat::V2,
+            "premise: a fresh vault is walked at its first open"
+        );
+        s.upsert(&victim).unwrap();
+        // On a sealed vault the content is ciphertext; find a 0x1f in it the
+        // way `move_the_separator` does, or skip a level that holds none.
+        let (_, content, _) = columns(&s, &victim.id);
+        if !content.contains(&0x1f) {
+            continue;
+        }
+        move_the_separator(&s.conn, &victim.id);
+        let r = s.verify().unwrap();
+        assert!(
+            r.bad_records
+                .iter()
+                .any(|b| b.record == victim.id && b.reason == BadReason::TagFailed),
+            "{level:?}: the moved boundary fails its version-2 tag: {r:?}"
+        );
+        assert!(
+            r.rotation_blockers().iter().any(|b| b.contains(&victim.id)),
+            "{level:?}: and blocks a rotation, which would re-tag it into authenticity"
+        );
+        assert!(
+            s.get(&victim.id, Read::Internal(InternalRead::Verification))
+                .is_err(),
+            "{level:?}: every read refuses it"
+        );
+    }
+}
+
+/// **The walk withholds over an O231 row** (ROADMAP O406 item 5: stricter
+/// than a rotation, because it changes the framing and would bind the moved
+/// partition). The version-1 vault holding one stays version 1, writes no
+/// commitment, and says why on `unhealed`; once the row is deleted, the next
+/// writable open walks.
+#[test]
+fn the_walk_withholds_over_a_moved_boundary_and_walks_once_it_is_gone() {
+    let victim = drawer("alpha\u{1f}omega", 0);
+    let (dir, s) = vault_with(SecurityLevel::HmacOnly, &victim);
+    move_the_separator(&s.conn, &victim.id);
+    drop(s);
+    let vdir = dir.path().join("vaults").join(VAULT);
+    crate::retag_pause::release(&vdir);
+    let s = open_at(dir.path());
+    assert_eq!(
+        s.row_format(),
+        undercroft_vault::RowFormat::V1,
+        "the walk is withheld over the moved row"
+    );
+    assert!(
+        s.unhealed()
+            .iter()
+            .any(|n| n.contains("WITHHELD") && n.contains(&victim.id)),
+        "and says why, naming the row: {:?}",
+        s.unhealed()
+    );
+    let commitments: i64 = s
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM audit WHERE record_id = 'migrate/tag-v2'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(commitments, 0, "no commitment was appended");
+    let mut s = s;
+    s.delete_drawer(&victim.id).unwrap();
+    drop(s);
+    let s = open_at(dir.path());
+    assert_eq!(
+        s.row_format(),
+        undercroft_vault::RowFormat::V2,
+        "with the row gone, the next writable open walks"
+    );
+    assert!(s.verify().unwrap().ok());
 }

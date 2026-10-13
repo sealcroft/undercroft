@@ -1,12 +1,23 @@
 //! Record sealing: XChaCha20-Poly1305 AEAD + HMAC-SHA256 integrity tags.
 //!
 //! Encryption gives confidentiality + authenticity of the content blob;
-//! the separate HMAC (independent key) covers the *whole record* — id,
-//! metadata, and at-rest content — so metadata tampering in the database
-//! is detected even for records whose content is stored in plaintext
-//! (`hmac-only` vaults). The AEAD associated data binds vault id and
-//! record id, so a sealed blob cannot be replayed into another vault or
-//! another record slot.
+//! the separate HMAC (independent key) covers a row's id, metadata and
+//! at-rest content, so metadata tampering in the database is detected even
+//! for records whose content is stored in plaintext (`hmac-only` vaults).
+//! The AEAD associated data binds vault id and record id, so a sealed blob
+//! cannot be replayed into another vault or another record slot.
+//!
+//! **A tag proves a run of bytes, and only the encoding decides whether that
+//! run has one reading** (ROADMAP O406). The version-1 row canonicals joined
+//! their fields with a separator byte, no lengths and no table domain, under
+//! one key — so a writer WITHOUT the key could move a field boundary to a
+//! separator inside a field, or carry one table's row and tag onto another
+//! table's row, and the tag still verified. This module said the HMAC
+//! "covers the *whole record*" until O406, which was true of the bytes and
+//! false of the fields. The version-2 row canonical ([`RowEncoder`]) is
+//! unambiguous by construction: a per-table domain first, every required
+//! field length-prefixed, every optional field a numbered TLV, under a key
+//! of its own ([`RowFormat::V2`]).
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
@@ -169,6 +180,146 @@ pub fn chain_next_v2(
     mac.finalize().into_bytes().into()
 }
 
+/// The prefix of every version-2 row canonical's domain; the table's name
+/// follows it (ROADMAP O406 item 1).
+pub const ROW_V2_DOMAIN: &str = "undercroft.row.v2/";
+
+/// Which row-canonical format a tag is computed in — the vault's TAG REGIME
+/// (ROADMAP O406 item 4), decided by one commitment record in the audit
+/// chain and never per row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowFormat {
+    /// The separator-joined canonicals every vault wrote before O406, under
+    /// the `mac` subkey. A vault keeps WRITING this until its walk commits,
+    /// so no vault holds rows of both formats.
+    V1,
+    /// The length-prefixed, table-domained canonical, under the `row`
+    /// subkey. A vault in this regime never accepts a version-1 tag.
+    V2,
+}
+
+impl RowFormat {
+    /// The manifest version a vault holding rows in this format must carry
+    /// (ROADMAP O406 item 7): version 2 is what fences every older binary
+    /// out of a walked vault — 1.6.1 and newer as age, 1.6.0 and older as a
+    /// manifest whose MAC their canonical does not reproduce.
+    pub fn manifest_version(self) -> u32 {
+        match self {
+            RowFormat::V1 => 1,
+            RowFormat::V2 => 2,
+        }
+    }
+}
+
+/// A row's canonical bytes **and the format they were built in** — what
+/// [`crate::Vault::row_tag`] takes, so the key a tag is computed under can
+/// never be chosen apart from the encoding it covers. Built only by the
+/// store's per-table builders (`rows.rs`, one module), never by hand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowCanonical {
+    format: RowFormat,
+    bytes: Vec<u8>,
+}
+
+impl RowCanonical {
+    /// A version-1 canonical, built by the store's one module of version-1
+    /// recipes — byte for byte what every tag before O406 covered.
+    pub fn v1(bytes: Vec<u8>) -> Self {
+        Self {
+            format: RowFormat::V1,
+            bytes,
+        }
+    }
+
+    /// The format these bytes were built in.
+    pub fn format(&self) -> RowFormat {
+        self.format
+    }
+
+    /// The bytes the tag covers.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+/// **The version-2 row canonical** (ROADMAP O406 item 1): one byte string has
+/// exactly one parse.
+///
+/// `lp(domain) ‖ lp(required)* ‖ (u16le(field) ‖ lp(value))*`, where `lp`
+/// prefixes a value with its length as a u64, little-endian, and the domain
+/// is [`ROW_V2_DOMAIN`] followed by the table. Required fields come in a
+/// fixed order, EVERY one length-prefixed — fixed-width ones included, one
+/// rule rather than a rule plus exceptions. Optional fields are TLV: a
+/// field number, strictly ascending and never reused, then a length-prefixed
+/// value; an absent field is OMITTED and a present empty one is written with
+/// length 0, so absent is not empty, and a field added later leaves every
+/// older row's bytes unchanged — the goal the version-1 extension convention
+/// had, reached without the separator-inside-the-branch that made the fact
+/// canonical non-injective.
+///
+/// Misuse — a required field after an optional one, a field number not
+/// strictly above the last — panics: it is a defect in a builder, which the
+/// per-table tests drive, and an ambiguous canonical must never be emitted.
+#[derive(Debug)]
+pub struct RowEncoder {
+    bytes: Vec<u8>,
+    last_field: Option<u16>,
+}
+
+impl RowEncoder {
+    /// Begin a canonical for `table`.
+    pub fn new(table: &str) -> Self {
+        let mut bytes = Vec::with_capacity(64);
+        let domain_len = ROW_V2_DOMAIN.len() + table.len();
+        bytes.extend_from_slice(&(domain_len as u64).to_le_bytes());
+        bytes.extend_from_slice(ROW_V2_DOMAIN.as_bytes());
+        bytes.extend_from_slice(table.as_bytes());
+        Self {
+            bytes,
+            last_field: None,
+        }
+    }
+
+    fn lp(&mut self, v: &[u8]) {
+        self.bytes
+            .extend_from_slice(&(v.len() as u64).to_le_bytes());
+        self.bytes.extend_from_slice(v);
+    }
+
+    /// The next required field.
+    pub fn field(mut self, v: &[u8]) -> Self {
+        assert!(
+            self.last_field.is_none(),
+            "a required field after an optional one makes the canonical ambiguous"
+        );
+        self.lp(v);
+        self
+    }
+
+    /// An optional field: written as `number ‖ lp(value)` when present, and
+    /// not at all when absent.
+    pub fn optional(mut self, number: u16, v: Option<&[u8]>) -> Self {
+        assert!(
+            self.last_field.is_none_or(|last| number > last),
+            "optional field numbers must be strictly ascending"
+        );
+        self.last_field = Some(number);
+        if let Some(v) = v {
+            self.bytes.extend_from_slice(&number.to_le_bytes());
+            self.lp(v);
+        }
+        self
+    }
+
+    /// The finished canonical.
+    pub fn finish(self) -> RowCanonical {
+        RowCanonical {
+            format: RowFormat::V2,
+            bytes: self.bytes,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +441,73 @@ mod tests {
         );
         // Domain-separated from v1 even over the same key and the same tag.
         assert_ne!(&base[..], &chain_next(&key, &genesis, &tag)[..]);
+    }
+
+    /// ROADMAP O406 P15g, the encoder half: every byte value in every field,
+    /// a boundary moved by any amount, absent against empty, and the table
+    /// domain each give a different canonical — the properties the
+    /// version-1 separator join lacked. The per-table builders are driven in
+    /// the store's `rows.rs`.
+    #[test]
+    fn the_v2_row_encoder_has_one_parse() {
+        let enc = |t: &str, a: &[u8], b: &[u8], o: Option<&[u8]>| {
+            RowEncoder::new(t)
+                .field(a)
+                .field(b)
+                .optional(1, o)
+                .finish()
+                .bytes()
+                .to_vec()
+        };
+        // A boundary moved by one byte, for every byte value — including the
+        // separators the version-1 canonicals used (0x1b–0x1f).
+        for byte in 0u8..=255 {
+            let whole = [b'a', byte, b'b'];
+            for cut in 0..=whole.len() {
+                for other in 0..=whole.len() {
+                    if cut == other {
+                        continue;
+                    }
+                    assert_ne!(
+                        enc("t", &whole[..cut], &whole[cut..], None),
+                        enc("t", &whole[..other], &whole[other..], None),
+                        "a moved boundary over byte {byte:#04x} keeps the canonical"
+                    );
+                }
+            }
+        }
+        // Absent is not empty, and an optional is not a required field.
+        assert_ne!(enc("t", b"a", b"b", None), enc("t", b"a", b"b", Some(b"")));
+        assert_ne!(enc("t", b"a", b"", Some(b"b")), enc("t", b"a", b"b", None));
+        // The table domain separates two tables over identical fields.
+        assert_ne!(
+            enc("drawer", b"a", b"b", None),
+            enc("fact", b"a", b"b", None)
+        );
+        // A field number moves the bytes even over the same value.
+        assert_ne!(
+            RowEncoder::new("t").optional(1, Some(b"x")).finish(),
+            RowEncoder::new("t").optional(2, Some(b"x")).finish()
+        );
+        // A field added later leaves an older row's bytes as they were.
+        assert_eq!(
+            RowEncoder::new("t").field(b"a").finish(),
+            RowEncoder::new("t").field(b"a").optional(9, None).finish()
+        );
+        assert_eq!(enc("t", b"a", b"b", None)[..8], 19u64.to_le_bytes());
+    }
+
+    #[test]
+    #[should_panic(expected = "strictly ascending")]
+    fn a_v2_field_number_out_of_order_is_refused() {
+        let _ = RowEncoder::new("t")
+            .optional(2, None)
+            .optional(2, Some(b"x"));
+    }
+
+    #[test]
+    #[should_panic(expected = "required field after an optional")]
+    fn a_v2_required_field_after_an_optional_is_refused() {
+        let _ = RowEncoder::new("t").optional(1, None).field(b"x");
     }
 }

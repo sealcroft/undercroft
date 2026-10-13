@@ -197,7 +197,7 @@ semantic-versioning convention.
   re-keying it means re-indexing the whole corpus, which is why searchable
   encryption separates the index key's lifecycle from the data key's in the
   first place. So: no HKDF-derived vault key (`Vault::tag`, the enc key,
-  any of the five) may appear in an id recipe or a blind-index recipe.
+  any of the six) may appear in an id recipe or a blind-index recipe.
   Where confidentiality demands keying — an unkeyed digest over content is
   a confirmation oracle — use a per-vault secret **stored sealed in
   `meta`**, which rotation RE-SEALS and never regenerates.
@@ -336,7 +336,12 @@ semantic-versioning convention.
   clean walk, and report what is still pending on `VaultStats.unhealed`**
   (which is therefore no longer empty on a writable open — two comments said it
   was). Any future at-rest migration owes the same shape, plus the VACUUM and
-  the byte-reading gate.
+  the byte-reading gate. **PROPOSED with O406, for the maintainer's approval
+  in its PR**: the VACUUM and the byte-reading gate when it removes
+  confidential bytes from the file — O406's ruling refuted the unscoped
+  clause for its row-tag walk, which removes none, and gave that walk a gate
+  on what it moves instead (ids and labels byte-identical, every row tag
+  changed).
 - **A guard runs BEFORE any step that rewrites the field it guards, and a
   guard that cannot name the field it refused is half a guard.** Both halves
   are O30 (2026-08-13). The first: `validate_name` sat at the write choke
